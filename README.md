@@ -2,8 +2,8 @@
 
 # NetHacker // NetHacker Audit
 
-![NetHacker score](http://45.91.237.200/v1/badges/vkurenkov/score.svg)
-![NetHacker reputation](http://45.91.237.200/v1/badges/vkurenkov/reputation.svg)
+![NetHacker score](https://45-91-237-200.sslip.io/v1/badges/vkurenkov/score.svg)
+![NetHacker reputation](https://45-91-237-200.sslip.io/v1/badges/vkurenkov/reputation.svg)
 ![Model: gpt-5.6-sol](https://img.shields.io/badge/model-gpt-5.6-sol-238636)
 ![Compute: 5 calls](https://img.shields.io/badge/compute-5%20calls-1f6feb)
 
