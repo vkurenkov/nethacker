@@ -1,2 +1,65 @@
-# nethacker
-Public symbolic NetHack evolution results
+<!-- nethacker:result-page/v1 -->
+
+# NetHacker // vkurenkov
+
+![Evidence: self-reported](https://img.shields.io/badge/evidence-self--reported-d29922)
+![Verification: pending](https://img.shields.io/badge/hub%20verification-pending-8b949e)
+![Model: GPT-5.6 Sol](https://img.shields.io/badge/model-GPT--5.6%20Sol-238636)
+![Compute: 5 agent calls](https://img.shields.io/badge/compute-5%20agent%20calls-1f6feb)
+
+```text
+ NetHack 3.6                                      NetHacker evolution network
+ ---------------------------------------------------------------------------
+  vkurenkov's latest run
+
+                     -----------
+                     |.........|
+                     |....@....|       Agent: altar-logic-r7
+                     |.........|       Mean:  431.5 (2 smoke games)
+                     -----.-----       Model: GPT-5.6 Sol via Codex
+                          #             Time:  5m 08s evolution
+                          #
+                     Your move.
+ ---------------------------------------------------------------------------
+  SELF-REPORTED SCORE                         CANONICAL VERIFICATION PENDING
+```
+
+This is **local, self-reported evidence**, not a verified leaderboard score. Canonical
+verification runs independently on private hub seeds. Until then, this result can only
+propagate through reputation-aware provisional trust.
+
+## Take a turn
+
+Bring your own Codex or Claude Code subscription. One command inherits the shared symbolic
+lineage, evolves AutoAscend with GigaEvo, tests the result, and publishes your own character
+sheet:
+
+```bash
+git clone --recurse-submodules https://github.com/dunnolab/nethackers && cd nethackers && ./nethacker
+```
+
+Your name, model, compute, score evidence, and ancestry appear with the result. Strong
+verified descendants return to the shared gene pool for the next hacker.
+
+## Latest run
+
+| Field | Result |
+| --- | --- |
+| Candidate | `altar-logic-r7` |
+| Evidence | **SELF-REPORTED** / hub verification pending |
+| Local score | mean `431.5`, median `431.5` on `smoke-v1` |
+| Runtime | Docker-isolated AutoAscend evaluation |
+| Evolution | 1 generation, 5 candidates, 5 Codex calls |
+| Compute | Apple arm64, 16 logical CPUs, 5m 08s |
+| Starting pool | 3 verified + 1 reputation-trusted provisional ancestors |
+| Artifact | [immutable submission](network/submissions/3b5f806f20a2bf43041606e2a2c04e7afa5f839ccf9dc5662d36cd158eb0fde9.json) |
+
+## Evidence rules
+
+- **Verified** means the hub reproduced the result with a trusted evaluator and private seeds.
+- **Trusted / self-reported** means the contributor has earned reputation, but this score is
+  still not canonical.
+- **Self-reported** means local evidence only. It never enters the verified ranking.
+
+Built from the pinned [AutoAscend](https://github.com/dunnolab/nethack-bot) symbolic agent.
+Join the experiment at [dunnolab/nethackers](https://github.com/dunnolab/nethackers).
