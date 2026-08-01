@@ -35,7 +35,7 @@ lineage, evolves AutoAscend with GigaEvo, tests the result, and publishes your o
 sheet:
 
 ```bash
-git clone --recurse-submodules https://github.com/dunnolab/nethackers && cd nethackers && ./nethacker
+gh repo clone dunnolab/nethackers && cd nethackers && ./nethacker
 ```
 
 Your name, model, compute, score evidence, and ancestry appear with the result. Strong
