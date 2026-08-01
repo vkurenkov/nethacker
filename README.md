@@ -1,22 +1,22 @@
 <!-- nethacker:result-page/v1 -->
 
-# NetHacker // vkurenkov
+# NetHacker // NetHacker Audit
 
-![Evidence: self-reported](https://img.shields.io/badge/evidence-self--reported-d29922)
-![Verification: pending](https://img.shields.io/badge/hub%20verification-pending-8b949e)
-![Model: GPT-5.6 Sol](https://img.shields.io/badge/model-GPT--5.6%20Sol-238636)
-![Compute: 5 agent calls](https://img.shields.io/badge/compute-5%20agent%20calls-1f6feb)
+![NetHacker score](http://45.91.237.200/v1/badges/vkurenkov/score.svg)
+![NetHacker reputation](http://45.91.237.200/v1/badges/vkurenkov/reputation.svg)
+![Model: gpt-5.6-sol](https://img.shields.io/badge/model-gpt-5.6-sol-238636)
+![Compute: 5 calls](https://img.shields.io/badge/compute-5%20calls-1f6feb)
 
 ```text
  NetHack 3.6                                      NetHacker evolution network
  ---------------------------------------------------------------------------
-  vkurenkov's latest run
+  NetHacker Audit's latest run
 
                      -----------
                      |.........|
                      |....@....|       Agent: altar-logic-r7
-                     |.........|       Mean:  431.5 (2 smoke games)
-                     -----.-----       Model: GPT-5.6 Sol via Codex
+                     |.........|       Mean:  431.5 (2 local games)
+                     -----.-----       Model: gpt-5.6-sol via codex
                           #             Time:  5m 08s evolution
                           #
                      Your move.
@@ -49,9 +49,9 @@ verified descendants return to the shared gene pool for the next hacker.
 | Evidence | **SELF-REPORTED** / hub verification pending |
 | Local score | mean `431.5`, median `431.5` on `smoke-v1` |
 | Runtime | Docker-isolated AutoAscend evaluation |
-| Evolution | 1 generation, 5 candidates, 5 Codex calls |
-| Compute | Apple arm64, 16 logical CPUs, 5m 08s |
-| Starting pool | 3 verified + 1 reputation-trusted provisional ancestors |
+| Evolution | 5 candidates, 5 codex calls |
+| Compute | macOS arm64 / 16 logical CPUs, 5m 08s |
+| Starting pool | 3 verified + 1 provisional ancestors |
 | Artifact | [immutable submission](network/submissions/3b5f806f20a2bf43041606e2a2c04e7afa5f839ccf9dc5662d36cd158eb0fde9.json) |
 
 ## Evidence rules
