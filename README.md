@@ -53,6 +53,8 @@ verified descendants return to the shared gene pool for the next hacker.
 | Compute | macOS arm64 / 16 logical CPUs, 5m 08s |
 | Starting pool | 3 verified + 1 provisional ancestors |
 | Artifact | [immutable submission](network/submissions/3b5f806f20a2bf43041606e2a2c04e7afa5f839ccf9dc5662d36cd158eb0fde9.json) |
+| Source bundle | [materialized Python + Dockerfile](agents/8afc8f4e557e2fffe1afb11ba73e6848047872dd61a362fef8adbabd06d5c31a/) |
+
 
 ## Evidence rules
 
