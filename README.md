@@ -1,12 +1,12 @@
 <!-- nethacker:result-page/v2 -->
-<!-- nethacker:candidate sha256:4c7218c4c6a0ff51716b118a3669d75e439380d16e0efb1715b60c4c815b8a90 -->
+<!-- nethacker:candidate sha256:2de238b2eef86058aa24f2a2c53f4e1d3b895e92d3a77e3ef2cf09e207a1c713 -->
 
 # @vkurenkov is helping solve NetHack
 
-![NetHacker score](https://45-91-237-200.sslip.io/v1/badges/vkurenkov/sha256%3A4c7218c4c6a0ff51716b118a3669d75e439380d16e0efb1715b60c4c815b8a90/score.svg)
+![NetHacker score](https://45-91-237-200.sslip.io/v1/badges/vkurenkov/sha256%3A2de238b2eef86058aa24f2a2c53f4e1d3b895e92d3a77e3ef2cf09e207a1c713/score.svg)
 ![NetHacker reputation](https://45-91-237-200.sslip.io/v1/badges/vkurenkov/reputation.svg)
 ![Model: gpt-5.6-sol](https://img.shields.io/badge/model-gpt--5.6--sol-238636)
-![Compute: 5 calls](https://img.shields.io/badge/compute-5%20calls-1f6feb)
+![Compute: 7 calls](https://img.shields.io/badge/compute-7%20calls-1f6feb)
 
 ```text
  NetHack 3.6                                      NetHacker evolution network
@@ -15,10 +15,10 @@
 
                      -----------
                      |.........|
-                     |....@....|       Agent: autoascend-baseline
-                     |.........|       Mean:  375 (2 local games)
+                     |....@....|       Agent: adaptive-first-descent
+                     |.........|       Mean:  894 (2 local games)
                      -----.-----       Model: gpt-5.6-sol via codex
-                          #             Time:  5m 08s evolution
+                          #             Time:  13m 59s evolution
                           #
                      Your move.
  ---------------------------------------------------------------------------
@@ -49,13 +49,13 @@ return to the shared evolution pool.
 
 | Field | Result |
 | --- | --- |
-| Candidate | `autoascend-baseline` |
+| Candidate | `adaptive-first-descent` |
 | Evidence | **SELF-REPORTED** / hub verification pending |
-| Local score | mean `375`, median `375` on `smoke-forced-identity-v2` |
+| Local score | mean `894`, median `894` on `smoke-forced-identity-v2` |
 | Runtime | Docker-isolated AutoAscend evaluation |
-| Evolution | 5 candidates, 5 codex calls |
-| Experiments | 0 improved, 0 regressed, 0 failed |
-| Compute | macOS arm64 / 16 logical CPUs, 5m 08s |
+| Evolution | 3 candidates, 7 codex calls |
+| Experiments | 2 improved, -- regressed, -- failed |
+| Compute | macOS arm64 / 16 logical CPUs, 13m 59s |
 | Starting pool | 0 verified + 0 provisional ancestors |
 | Verification | **NOT REQUESTED** |
 | Artifact | [immutable submission](result.json) |

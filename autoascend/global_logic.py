@@ -514,7 +514,12 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                condition = lambda: self.agent.blstats.experience_level >= 8
+                condition = lambda: (
+                    self.agent.blstats.hitpoints >= 0.75 * self.agent.blstats.max_hitpoints and
+                    self.agent.blstats.hunger_state < Hunger.WEAK and
+                    (self.agent.blstats.experience_level >= 2 or
+                     self.agent.blstats.hunger_state >= Hunger.HUNGRY)
+                )
                 # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
                 #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
                 level = (Level.DUNGEONS_OF_DOOM, 1)

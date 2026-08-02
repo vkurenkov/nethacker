@@ -22,8 +22,8 @@ COPY --from=build /opt/venv /opt/venv
 COPY run.py /opt/nethacker/run.py
 COPY autoascend /opt/autoascend
 
-LABEL org.opencontainers.image.title="NetHacker agent autoascend-baseline" \
-      org.opencontainers.image.revision="sha256:4c7218c4c6a0ff51716b118a3669d75e439380d16e0efb1715b60c4c815b8a90" \
+LABEL org.opencontainers.image.title="NetHacker agent adaptive-first-descent" \
+      org.opencontainers.image.revision="sha256:2de238b2eef86058aa24f2a2c53f4e1d3b895e92d3a77e3ef2cf09e207a1c713" \
       org.opencontainers.image.source="autoascend" \
       org.opencontainers.image.base.name="AutoAscend@fe3c9a21679d79c1a696987d90c4a6fe87f7c124"
 
