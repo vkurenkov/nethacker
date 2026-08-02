@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -16,7 +17,122 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from nethacker.constants import AUTOASCEND_STEP_TIMEOUT_SECONDS
+AUTOASCEND_STEP_TIMEOUT_SECONDS = 5.0
+
+_VALID_ROLE_VARIANTS: dict[str, frozenset[tuple[str, str]]] = {
+    "arc": frozenset({("hum", "law"), ("hum", "neu"), ("dwa", "law"), ("gno", "neu")}),
+    "bar": frozenset({("hum", "neu"), ("hum", "cha"), ("orc", "cha")}),
+    "cav": frozenset({("hum", "law"), ("hum", "neu"), ("dwa", "law"), ("gno", "neu")}),
+    "hea": frozenset({("hum", "neu"), ("gno", "neu")}),
+    "kni": frozenset({("hum", "law")}),
+    "mon": frozenset({("hum", "law"), ("hum", "neu"), ("hum", "cha")}),
+    "pri": frozenset({("hum", "law"), ("hum", "neu"), ("hum", "cha"), ("elf", "cha")}),
+    "ran": frozenset(
+        {("hum", "neu"), ("hum", "cha"), ("elf", "cha"), ("gno", "neu"), ("orc", "cha")}
+    ),
+    "rog": frozenset({("hum", "cha"), ("orc", "cha")}),
+    "sam": frozenset({("hum", "law")}),
+    "tou": frozenset({("hum", "neu")}),
+    "val": frozenset({("hum", "law"), ("hum", "neu"), ("dwa", "law")}),
+    "wiz": frozenset(
+        {("hum", "neu"), ("hum", "cha"), ("elf", "cha"), ("gno", "neu"), ("orc", "cha")}
+    ),
+}
+_ROLE_ALIASES = {
+    "archeologist": "arc",
+    "barbarian": "bar",
+    "caveman": "cav",
+    "cavewoman": "cav",
+    "healer": "hea",
+    "knight": "kni",
+    "monk": "mon",
+    "priest": "pri",
+    "priestess": "pri",
+    "ranger": "ran",
+    "rogue": "rog",
+    "samurai": "sam",
+    "tourist": "tou",
+    "valkyrie": "val",
+    "wizard": "wiz",
+}
+_RACE_ALIASES = {
+    "human": "hum",
+    "elf": "elf",
+    "elven": "elf",
+    "dwarf": "dwa",
+    "dwarven": "dwa",
+    "gnome": "gno",
+    "gnomish": "gno",
+    "orc": "orc",
+    "orcish": "orc",
+}
+_ALIGNMENT_ALIASES = {
+    "law": "law",
+    "lawful": "law",
+    "neu": "neu",
+    "neutral": "neu",
+    "cha": "cha",
+    "chaotic": "cha",
+}
+_GENDER_ALIASES = {"mal": "mal", "male": "mal", "fem": "fem", "female": "fem"}
+_WELCOME_PATTERN = re.compile(
+    r"\bYou are an? (?P<alignment>lawful|neutral|chaotic) "
+    r"(?P<gender>male|female) (?P<race>human|elven|dwarven|gnomish|orcish) "
+    r"(?P<role>[A-Za-z]+)\."
+)
+
+
+def _normalize_character(character: str) -> str:
+    if character.strip() == "@":
+        return "@"
+    parts = tuple(character.strip().lower().split("-"))
+    if len(parts) != 4:
+        raise ValueError(f"invalid NetHack character identity: {character}")
+    role, race, alignment, gender = parts
+    valid_gender = gender in ({"fem"} if role == "val" else {"mal", "fem"})
+    if (race, alignment) not in _VALID_ROLE_VARIANTS.get(role, ()) or not valid_gender:
+        raise ValueError(f"invalid NetHack character identity: {character}")
+    return "-".join(parts)
+
+
+def _character_from_xlog(fields: dict[str, str]) -> str | None:
+    try:
+        alignment = fields["align"] if "align" in fields else fields["alignment"]
+        return _normalize_character(
+            "-".join(
+                (
+                    _ROLE_ALIASES.get(fields["role"].lower(), fields["role"][:3].lower()),
+                    _RACE_ALIASES[fields["race"].lower()],
+                    _ALIGNMENT_ALIASES[alignment.lower()],
+                    _GENDER_ALIASES[fields["gender"].lower()],
+                )
+            )
+        )
+    except (KeyError, ValueError):
+        return None
+
+
+def _character_from_observation(observation: dict[str, Any]) -> str | None:
+    raw_message = observation.get("message")
+    if raw_message is None:
+        return None
+    message = bytes(raw_message).split(b"\0", 1)[0].decode("utf-8", errors="replace")
+    match = _WELCOME_PATTERN.search(message)
+    if match is None:
+        return None
+    try:
+        return _normalize_character(
+            "-".join(
+                (
+                    _ROLE_ALIASES[match.group("role").lower()],
+                    _RACE_ALIASES[match.group("race").lower()],
+                    _ALIGNMENT_ALIASES[match.group("alignment")],
+                    _GENDER_ALIASES[match.group("gender")],
+                )
+            )
+        )
+    except (KeyError, ValueError):
+        return None
 
 
 class AgentStepTimeout(KeyboardInterrupt):
@@ -119,17 +235,20 @@ def run_episode(
     seed: int,
     max_steps: int,
     *,
+    character: str = "mon-hum-neu-mal",
+    fix_time_effects: bool = True,
     trace_output: Path | None = None,
 ) -> dict[str, Any]:
+    character = _normalize_character(character)
     started = time.monotonic()
     trace_path = trace_output.resolve() if trace_output is not None else None
-    heur_path = baseline.resolve() / "heur"
-    if not (heur_path / "agent.py").is_file():
-        raise RuntimeError(f"nethack-bot baseline is missing at {baseline}")
+    autoascend_path = baseline.resolve()
+    if not (autoascend_path / "agent.py").is_file():
+        raise RuntimeError(f"AutoAscend root is missing at {baseline}")
 
-    sys.path.insert(0, str(heur_path))
+    sys.path.insert(0, str(autoascend_path))
     original_cwd = Path.cwd()
-    os.chdir(heur_path)
+    os.chdir(autoascend_path)
     env = None
     wrapper = None
     agent = None
@@ -153,8 +272,10 @@ def run_episode(
                 self.last_info: dict[str, Any] = {}
                 self.last_observation: dict[str, Any] | None = None
                 self.max_depth = 1
+                self.max_turns = 0
                 self.levels_seen: set[tuple[int, int]] = set()
                 self.branches_seen: set[int] = set()
+                self.resolved_character: str | None = None
 
             @staticmethod
             def _normalize(observation: dict[str, Any]) -> dict[str, Any]:
@@ -168,6 +289,7 @@ def run_episode(
                 self.step_count = -1
                 self.last_info = info
                 self.last_observation = observation
+                self.resolved_character = _character_from_observation(observation)
                 self._track(observation)
                 return observation
 
@@ -176,11 +298,13 @@ def run_episode(
                 dungeon_index = getattr(nh, "NLE_BL_DNUM", 23)
                 level_index = getattr(nh, "NLE_BL_DLEVEL", 24)
                 score_index = getattr(nh, "NLE_BL_SCORE", 9)
+                time_index = getattr(nh, "NLE_BL_TIME", 20)
                 blstats = observation.get("blstats")
                 if blstats is None:
                     return
                 self.max_depth = max(self.max_depth, _safe_int(blstats[depth_index], 1))
                 self.score = _safe_int(blstats[score_index], self.score)
+                self.max_turns = max(self.max_turns, _safe_int(blstats[time_index], 0))
                 dungeon = _safe_int(blstats[dungeon_index], 0)
                 level = _safe_int(blstats[level_index], 1)
                 self.levels_seen.add((dungeon, level))
@@ -213,6 +337,8 @@ def run_episode(
                 no_progress_timeout=1_000,
                 save_ttyrec_every=1,
                 savedir=savedir,
+                character=character,
+                fix_moon_phase=fix_time_effects,
             )
             nethack_instance = env.unwrapped.nethack
             type(nethack_instance).set_initial_seeds(
@@ -248,7 +374,7 @@ def run_episode(
                 env.close()
         os.chdir(original_cwd)
         with contextlib.suppress(ValueError):
-            sys.path.remove(str(heur_path))
+            sys.path.remove(str(autoascend_path))
 
     score = _safe_int(xlog.get("points"), getattr(wrapper, "score", 0))
     death = xlog.get("death", "")
@@ -258,9 +384,12 @@ def run_episode(
     levels_visited = len(getattr(wrapper, "levels_seen", ()))
     branches_visited = len(getattr(wrapper, "branches_seen", ()))
     panic_count = len(getattr(agent, "all_panics", [])) if agent is not None else 0
-    last_observation = getattr(wrapper, "last_observation", None) or {}
-    blstats = last_observation.get("blstats")
-    turns = _safe_int(blstats[20], 0) if blstats is not None else 0
+    turns = getattr(wrapper, "max_turns", 0)
+    resolved_code = _character_from_xlog(xlog)
+    if resolved_code is None:
+        resolved_code = getattr(wrapper, "resolved_character", None)
+    if resolved_code is None and character != "@":
+        resolved_code = character
     progress = _progress_score(
         ascended=ascended,
         max_depth=max_depth,
@@ -271,6 +400,10 @@ def run_episode(
 
     return {
         "seed": seed,
+        "character": resolved_code or character,
+        "requested_character": character,
+        "resolved_character": resolved_code,
+        "time_effects_fixed": fix_time_effects,
         "status": status,
         "score": score,
         "progress": progress,
@@ -280,6 +413,7 @@ def run_episode(
         "branches_visited": branches_visited,
         "milestone": branches_visited,
         "turns": turns,
+        "turn_fraction": min(max(turns / max_steps, 0.0), 1.0),
         "panic_count": panic_count,
         "crashed": error is not None,
         "error": error,
@@ -287,11 +421,19 @@ def run_episode(
     }
 
 
-def replay_episode(actions_path: Path, seed: int, max_steps: int) -> dict[str, Any]:
+def replay_episode(
+    actions_path: Path,
+    seed: int,
+    max_steps: int,
+    *,
+    character: str = "mon-hum-neu-mal",
+    fix_time_effects: bool = True,
+) -> dict[str, Any]:
     """Derive authoritative metrics without importing candidate-controlled modules."""
     started = time.monotonic()
     if max_steps < 1:
         raise RuntimeError("episode step limit must be positive")
+    character = _normalize_character(character)
     actions = actions_path.read_bytes()
     trace_digest = f"sha256:{hashlib.sha256(actions).hexdigest()}"
     if len(actions) > max_steps:
@@ -307,20 +449,24 @@ def replay_episode(actions_path: Path, seed: int, max_steps: int) -> dict[str, A
     last_observation: dict[str, Any] | None = None
     last_info: dict[str, Any] = {}
     max_depth = 1
+    max_turns = 0
     levels_seen: set[tuple[int, int]] = set()
     branches_seen: set[int] = set()
     finished = False
     steps_replayed = 0
+    resolved_character: str | None = None
 
     def track(observation: dict[str, Any]) -> None:
-        nonlocal max_depth
+        nonlocal max_depth, max_turns
         blstats = observation.get("blstats")
         if blstats is None:
             return
         depth = _safe_int(blstats[getattr(nh, "NLE_BL_DEPTH", 12)], 1)
         dungeon = _safe_int(blstats[getattr(nh, "NLE_BL_DNUM", 23)], 0)
         level = _safe_int(blstats[getattr(nh, "NLE_BL_DLEVEL", 24)], 1)
+        turns = _safe_int(blstats[getattr(nh, "NLE_BL_TIME", 20)], 0)
         max_depth = max(max_depth, depth)
+        max_turns = max(max_turns, turns)
         levels_seen.add((dungeon, level))
         branches_seen.add(dungeon)
 
@@ -332,6 +478,8 @@ def replay_episode(actions_path: Path, seed: int, max_steps: int) -> dict[str, A
                 no_progress_timeout=1_000,
                 save_ttyrec_every=1,
                 savedir=savedir,
+                character=character,
+                fix_moon_phase=fix_time_effects,
             )
             nethack_instance = env.unwrapped.nethack
             type(nethack_instance).set_initial_seeds(
@@ -342,6 +490,7 @@ def replay_episode(actions_path: Path, seed: int, max_steps: int) -> dict[str, A
                 None,
             )
             last_observation, last_info = env.reset()
+            resolved_character = _character_from_observation(last_observation)
             track(last_observation)
             for action in actions:
                 last_observation, _reward, terminated, truncated, last_info = env.step(action)
@@ -368,15 +517,21 @@ def replay_episode(actions_path: Path, seed: int, max_steps: int) -> dict[str, A
     ascended = death.lower() == "ascended"
     levels_visited = len(levels_seen)
     branches_visited = len(branches_seen)
-    turns = _safe_int(
-        blstats[getattr(nh, "NLE_BL_TIME", 20)] if blstats is not None else 0,
-        0,
-    )
+    turns = max_turns
+    resolved_code = _character_from_xlog(xlog)
+    if resolved_code is None:
+        resolved_code = resolved_character
+    if resolved_code is None and character != "@":
+        resolved_code = character
     status = death or (
         str(last_info.get("end_status", "unknown")) if finished else "trace_exhausted"
     )
     return {
         "seed": seed,
+        "character": resolved_code or character,
+        "requested_character": character,
+        "resolved_character": resolved_code,
+        "time_effects_fixed": fix_time_effects,
         "status": status,
         "score": score,
         "progress": _progress_score(
@@ -392,6 +547,7 @@ def replay_episode(actions_path: Path, seed: int, max_steps: int) -> dict[str, A
         "branches_visited": branches_visited,
         "milestone": branches_visited,
         "turns": turns,
+        "turn_fraction": min(max(turns / max_steps, 0.0), 1.0),
         "panic_count": 0,
         "crashed": not finished,
         "error": None if finished else "candidate action trace ended before the episode",
@@ -409,17 +565,31 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--replay-actions", type=Path)
     parser.add_argument("--trace-output", type=Path)
     parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--character", default="mon-hum-neu-mal")
+    parser.add_argument(
+        "--fix-time-effects",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument("--max-steps", type=int, required=True)
     args = parser.parse_args(argv)
     if args.replay_actions is not None:
         if args.trace_output is not None:
             parser.error("--trace-output is valid only with --baseline")
-        result = replay_episode(args.replay_actions, args.seed, args.max_steps)
+        result = replay_episode(
+            args.replay_actions,
+            args.seed,
+            args.max_steps,
+            character=args.character,
+            fix_time_effects=args.fix_time_effects,
+        )
     else:
         result = run_episode(
             args.baseline,
             args.seed,
             args.max_steps,
+            character=args.character,
+            fix_time_effects=args.fix_time_effects,
             trace_output=args.trace_output,
         )
     print(json.dumps(result, sort_keys=True))

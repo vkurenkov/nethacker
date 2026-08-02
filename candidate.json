@@ -1,0 +1,11 @@
+{
+  "baseline": {
+    "commit": "fe3c9a21679d79c1a696987d90c4a6fe87f7c124",
+    "repository": "autoascend"
+  },
+  "description": "Unmodified bundled AutoAscend symbolic root",
+  "name": "autoascend-baseline",
+  "parents": [],
+  "patch": "",
+  "schema_version": "nethacker.candidate/v2"
+}
