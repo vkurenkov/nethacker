@@ -6,7 +6,7 @@ COPY --from=uv /uv /usr/local/bin/uv
 COPY requirements.txt /tmp/requirements.txt
 RUN uv venv /opt/venv && \
     uv pip install --python /opt/venv/bin/python --no-cache --requirement /tmp/requirements.txt
-RUN uv pip install --python /opt/venv/bin/python --no-cache "nethackers==0.7.0"
+RUN uv pip install --python /opt/venv/bin/python --no-cache "nethackers==0.7.1"
 
 FROM python:3.12.7-slim-bookworm@sha256:60d9996b6a8a3689d36db740b49f4327be3be09a21122bd02fb8895abb38b50d
 
