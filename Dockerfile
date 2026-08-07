@@ -6,6 +6,7 @@ COPY --from=uv /uv /usr/local/bin/uv
 COPY requirements.txt /tmp/requirements.txt
 RUN uv venv /opt/venv && \
     uv pip install --python /opt/venv/bin/python --no-cache --requirement /tmp/requirements.txt
+RUN uv pip install --python /opt/venv/bin/python --no-cache "nethackers==0.7.0"
 
 FROM python:3.12.7-slim-bookworm@sha256:60d9996b6a8a3689d36db740b49f4327be3be09a21122bd02fb8895abb38b50d
 
@@ -19,8 +20,7 @@ ENV HOME=/tmp \
     TMPDIR=/tmp
 
 COPY --from=build /opt/venv /opt/venv
-COPY run.py /opt/nethacker/run.py
-COPY autoascend /opt/autoascend
+COPY solution /opt/solution
 
 LABEL org.opencontainers.image.title="NetHackers agent adaptive-first-descent" \
       org.opencontainers.image.revision="sha256:2de238b2eef86058aa24f2a2c53f4e1d3b895e92d3a77e3ef2cf09e207a1c713" \
@@ -28,5 +28,5 @@ LABEL org.opencontainers.image.title="NetHackers agent adaptive-first-descent" \
       org.opencontainers.image.base.name="AutoAscend@fe3c9a21679d79c1a696987d90c4a6fe87f7c124"
 
 USER 65532:65532
-ENTRYPOINT ["/opt/venv/bin/python", "/opt/nethacker/run.py", "--baseline", "/opt/autoascend"]
+ENTRYPOINT ["/opt/venv/bin/python", "-m", "nethackers.eval.runner", "--baseline", "/opt/solution"]
 CMD ["--seed", "1168650410", "--max-steps", "5000"]
