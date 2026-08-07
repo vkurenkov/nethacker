@@ -3,8 +3,8 @@
 
 # @vkurenkov is helping solve NetHack
 
-![NetHackers score](https://nethackers.dunnolab.ai/v1/badges/vkurenkov/sha256%3A2de238b2eef86058aa24f2a2c53f4e1d3b895e92d3a77e3ef2cf09e207a1c713/score.svg)
-![NetHackers reputation](https://nethackers.dunnolab.ai/v1/badges/vkurenkov/reputation.svg)
+![Evidence: self-reported](https://img.shields.io/badge/evidence-self--reported-d29922)
+![Hub: not registered](https://img.shields.io/badge/hub-not%20registered-555)
 ![Model: gpt-5.6-sol](https://img.shields.io/badge/model-gpt--5.6--sol-238636)
 ![Compute: 7 calls](https://img.shields.io/badge/compute-7%20calls-1f6feb)
 
@@ -22,13 +22,13 @@
                           #
                      Your move.
  ---------------------------------------------------------------------------
-  SELF-REPORTED SCORE                         CANONICAL VERIFICATION NOT REQUESTED
+  SELF-REPORTED SCORE                         CANONICAL VERIFICATION NOT REGISTERED
 ```
 
 NetHack is one of the hardest games ever made. This repository is my current NetHack-solving
 program, improved with my own compute as part of a shared attempt to solve it.
 
-The local score below is **self-reported evidence**. The dynamic score badge above reports whether this exact current candidate has since passed canonical verification on private hub seeds. Until then, this result can only propagate through reputation-aware provisional trust.
+The local score below is **self-reported evidence**. This checkpoint is private and is not registered with the evolution hub. Private evolution works normally; hub sharing and verification begin only after the repository owner explicitly makes the repository public.
 
 ## Continue from my agent
 
@@ -51,14 +51,14 @@ return to the shared evolution pool.
 | Harness | `Evolution` |
 | Objective | `Natural random` (`random`) |
 | Checkpoint | generation `--`, `completed` |
-| Evidence | **SELF-REPORTED** / hub verification pending |
+| Evidence | **SELF-REPORTED** / private checkpoint, not registered |
 | Local score | mean `894`, median `894` on `smoke-forced-identity-v2` |
 | Runtime | Docker-isolated AutoAscend evaluation |
 | Search | 3 candidates, 7 codex calls |
 | Experiments | 2 improved, -- regressed, -- failed |
 | Compute | macOS arm64 / 16 logical CPUs, 13m 59s |
 | Starting pool | 0 verified + 0 provisional ancestors |
-| Verification | **NOT REQUESTED** |
+| Verification | **NOT REGISTERED** |
 | Artifact | [immutable submission](result.json) |
 | Source | [materialized AutoAscend root](autoascend/) + [Dockerfile](Dockerfile) |
 
