@@ -17,7 +17,8 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-AUTOASCEND_STEP_TIMEOUT_SECONDS = 5.0
+DEFAULT_ACTION_STALL_TIMEOUT_SECONDS = 60.0
+NLE_CHALLENGE_NO_PROGRESS_STEPS = 10_000
 
 _VALID_ROLE_VARIANTS: dict[str, frozenset[tuple[str, str]]] = {
     "arc": frozenset({("hum", "law"), ("hum", "neu"), ("dwa", "law"), ("gno", "neu")}),
@@ -143,7 +144,7 @@ def _run_with_step_watchdog(
     agent: Any,
     wrapper: Any,
     *,
-    stall_seconds: float = AUTOASCEND_STEP_TIMEOUT_SECONDS,
+    stall_seconds: float = DEFAULT_ACTION_STALL_TIMEOUT_SECONDS,
 ) -> None:
     if stall_seconds <= 0:
         raise ValueError("stall_seconds must be positive")
@@ -212,6 +213,26 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _episode_stop(
+    *,
+    end_status: Any,
+    steps: int,
+    max_steps: int,
+    raw_terminated: bool,
+    raw_truncated: bool,
+) -> tuple[bool, bool, bool, str]:
+    """Translate NLE's forced quit into explicit completion/censoring evidence."""
+    aborted = _safe_int(end_status, 0) == -1
+    if aborted:
+        reason = "step_limit" if steps >= max_steps else "no_progress"
+        return False, True, True, reason
+    if raw_truncated:
+        return False, True, True, "environment_truncated"
+    if raw_terminated:
+        return True, False, False, "game_over"
+    return False, False, False, "incomplete"
+
+
 def _progress_score(
     *, ascended: bool, max_depth: int, levels_visited: int, branches_visited: int, score: int
 ) -> float:
@@ -237,8 +258,21 @@ def run_episode(
     *,
     character: str = "mon-hum-neu-mal",
     fix_time_effects: bool = True,
+    no_progress_timeout: int = NLE_CHALLENGE_NO_PROGRESS_STEPS,
+    action_stall_timeout: float = DEFAULT_ACTION_STALL_TIMEOUT_SECONDS,
     trace_output: Path | None = None,
 ) -> dict[str, Any]:
+    if max_steps < 1:
+        raise RuntimeError("episode step limit must be positive")
+    if no_progress_timeout < 1:
+        raise RuntimeError("no-progress timeout must be positive")
+    if (
+        isinstance(action_stall_timeout, bool)
+        or not isinstance(action_stall_timeout, (int, float))
+        or not math.isfinite(float(action_stall_timeout))
+        or action_stall_timeout <= 0
+    ):
+        raise RuntimeError("action stall timeout must be positive")
     character = _normalize_character(character)
     started = time.monotonic()
     trace_path = trace_output.resolve() if trace_output is not None else None
@@ -253,13 +287,14 @@ def run_episode(
     wrapper = None
     agent = None
     error: str | None = None
+    action_stalled = False
     trace_stream = None
 
     try:
-        import gymnasium as gym
         import numpy as np
         from agent import Agent
         from nle import nethack as nh
+        from nle.env.tasks import NetHackChallenge
 
         class BotEnvironment:
             def __init__(self, raw_env: Any, action_trace: Any):
@@ -271,6 +306,8 @@ def run_episode(
                 self.agent: Any = None
                 self.last_info: dict[str, Any] = {}
                 self.last_observation: dict[str, Any] | None = None
+                self.raw_terminated = False
+                self.raw_truncated = False
                 self.max_depth = 1
                 self.max_turns = 0
                 self.levels_seen: set[tuple[int, int]] = set()
@@ -289,6 +326,8 @@ def run_episode(
                 self.step_count = -1
                 self.last_info = info
                 self.last_observation = observation
+                self.raw_terminated = False
+                self.raw_truncated = False
                 self.resolved_character = _character_from_observation(observation)
                 self._track(observation)
                 return observation
@@ -319,6 +358,8 @@ def run_episode(
                 self.step_count += 1
                 self.last_info = info
                 self.last_observation = observation
+                self.raw_terminated = bool(terminated)
+                self.raw_truncated = bool(truncated)
                 self._track(observation)
                 return observation, reward, bool(terminated or truncated), info
 
@@ -331,10 +372,9 @@ def run_episode(
         with tempfile.TemporaryDirectory(prefix="nethacker-episode-") as savedir:
             if trace_path is not None:
                 trace_stream = trace_path.open("wb")
-            env = gym.make(
-                "NetHackChallenge-v0",
+            env = NetHackChallenge(
                 max_episode_steps=max_steps,
-                no_progress_timeout=1_000,
+                no_progress_timeout=no_progress_timeout,
                 save_ttyrec_every=1,
                 savedir=savedir,
                 character=character,
@@ -353,9 +393,14 @@ def run_episode(
             wrapper.reset()
             agent = Agent(wrapper, seed=0, panic_on_errors=True)
             wrapper.agent = agent
-            _run_with_step_watchdog(agent, wrapper)
+            _run_with_step_watchdog(
+                agent,
+                wrapper,
+                stall_seconds=action_stall_timeout,
+            )
             xlog = _parse_xlog(str(Path(savedir) / "nle.*.xlogfile"))
     except BaseException as exc:
+        action_stalled = isinstance(exc, AgentStepTimeout)
         error = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[-4_000:]
         panics = getattr(agent, "all_panics", []) if agent is not None else []
         if "Cyclic Panic" in str(exc) and panics:
@@ -379,7 +424,28 @@ def run_episode(
     score = _safe_int(xlog.get("points"), getattr(wrapper, "score", 0))
     death = xlog.get("death", "")
     ascended = death.lower() == "ascended"
-    status = death or str(getattr(wrapper, "last_info", {}).get("end_status", "unknown"))
+    last_info = getattr(wrapper, "last_info", {})
+    end_status = last_info.get("end_status")
+    steps = max(_safe_int(getattr(wrapper, "step_count", -1), -1) + 1, 0)
+    terminated, truncated, censored, stop_reason = _episode_stop(
+        end_status=end_status,
+        steps=steps,
+        max_steps=max_steps,
+        raw_terminated=bool(getattr(wrapper, "raw_terminated", False)),
+        raw_truncated=bool(getattr(wrapper, "raw_truncated", False)),
+    )
+    if error is not None and not censored:
+        terminated = False
+        stop_reason = "runner_error"
+    if action_stalled:
+        terminated = False
+        truncated = True
+        censored = True
+        stop_reason = "action_stall"
+    if censored or error is not None:
+        status = stop_reason
+    else:
+        status = death or str(end_status if end_status is not None else stop_reason)
     max_depth = getattr(wrapper, "max_depth", 1)
     levels_visited = len(getattr(wrapper, "levels_seen", ()))
     branches_visited = len(getattr(wrapper, "branches_seen", ()))
@@ -413,7 +479,12 @@ def run_episode(
         "branches_visited": branches_visited,
         "milestone": branches_visited,
         "turns": turns,
-        "turn_fraction": min(max(turns / max_steps, 0.0), 1.0),
+        "steps": steps,
+        "step_fraction": min(steps / max_steps, 1.0),
+        "terminated": terminated,
+        "truncated": truncated,
+        "censored": censored,
+        "stop_reason": stop_reason,
         "panic_count": panic_count,
         "crashed": error is not None,
         "error": error,
@@ -428,19 +499,22 @@ def replay_episode(
     *,
     character: str = "mon-hum-neu-mal",
     fix_time_effects: bool = True,
+    no_progress_timeout: int = NLE_CHALLENGE_NO_PROGRESS_STEPS,
 ) -> dict[str, Any]:
     """Derive authoritative metrics without importing candidate-controlled modules."""
     started = time.monotonic()
     if max_steps < 1:
         raise RuntimeError("episode step limit must be positive")
+    if no_progress_timeout < 1:
+        raise RuntimeError("no-progress timeout must be positive")
     character = _normalize_character(character)
     actions = actions_path.read_bytes()
     trace_digest = f"sha256:{hashlib.sha256(actions).hexdigest()}"
     if len(actions) > max_steps:
         raise RuntimeError("action trace exceeds the episode step limit")
 
-    import gymnasium as gym
     from nle import nethack as nh
+    from nle.env.tasks import NetHackChallenge
 
     if any(action >= len(nh.actions.ACTIONS) for action in actions):
         raise RuntimeError("action trace contains an invalid NetHack action")
@@ -453,6 +527,8 @@ def replay_episode(
     levels_seen: set[tuple[int, int]] = set()
     branches_seen: set[int] = set()
     finished = False
+    raw_terminated = False
+    raw_truncated = False
     steps_replayed = 0
     resolved_character: str | None = None
 
@@ -472,10 +548,9 @@ def replay_episode(
 
     try:
         with tempfile.TemporaryDirectory(prefix="nethacker-replay-") as savedir:
-            env = gym.make(
-                "NetHackChallenge-v0",
+            env = NetHackChallenge(
                 max_episode_steps=max_steps,
-                no_progress_timeout=1_000,
+                no_progress_timeout=no_progress_timeout,
                 save_ttyrec_every=1,
                 savedir=savedir,
                 character=character,
@@ -497,6 +572,8 @@ def replay_episode(
                 steps_replayed += 1
                 track(last_observation)
                 if terminated or truncated:
+                    raw_terminated = bool(terminated)
+                    raw_truncated = bool(truncated)
                     finished = True
                     break
             if finished and steps_replayed != len(actions):
@@ -523,9 +600,22 @@ def replay_episode(
         resolved_code = resolved_character
     if resolved_code is None and character != "@":
         resolved_code = character
-    status = death or (
-        str(last_info.get("end_status", "unknown")) if finished else "trace_exhausted"
+    end_status = last_info.get("end_status")
+    terminated, truncated, censored, stop_reason = _episode_stop(
+        end_status=end_status,
+        steps=steps_replayed,
+        max_steps=max_steps,
+        raw_terminated=raw_terminated,
+        raw_truncated=raw_truncated,
     )
+    if not finished:
+        stop_reason = "trace_exhausted"
+    if censored:
+        status = stop_reason
+    elif finished:
+        status = death or str(end_status if end_status is not None else stop_reason)
+    else:
+        status = "trace_exhausted"
     return {
         "seed": seed,
         "character": resolved_code or character,
@@ -547,7 +637,12 @@ def replay_episode(
         "branches_visited": branches_visited,
         "milestone": branches_visited,
         "turns": turns,
-        "turn_fraction": min(max(turns / max_steps, 0.0), 1.0),
+        "steps": steps_replayed,
+        "step_fraction": min(steps_replayed / max_steps, 1.0),
+        "terminated": terminated,
+        "truncated": truncated,
+        "censored": censored,
+        "stop_reason": stop_reason,
         "panic_count": 0,
         "crashed": not finished,
         "error": None if finished else "candidate action trace ended before the episode",
@@ -572,6 +667,16 @@ def main(argv: list[str] | None = None) -> int:
         default=True,
     )
     parser.add_argument("--max-steps", type=int, required=True)
+    parser.add_argument(
+        "--no-progress-timeout",
+        type=int,
+        default=NLE_CHALLENGE_NO_PROGRESS_STEPS,
+    )
+    parser.add_argument(
+        "--action-stall-timeout",
+        type=float,
+        default=DEFAULT_ACTION_STALL_TIMEOUT_SECONDS,
+    )
     args = parser.parse_args(argv)
     if args.replay_actions is not None:
         if args.trace_output is not None:
@@ -582,6 +687,7 @@ def main(argv: list[str] | None = None) -> int:
             args.max_steps,
             character=args.character,
             fix_time_effects=args.fix_time_effects,
+            no_progress_timeout=args.no_progress_timeout,
         )
     else:
         result = run_episode(
@@ -590,6 +696,8 @@ def main(argv: list[str] | None = None) -> int:
             args.max_steps,
             character=args.character,
             fix_time_effects=args.fix_time_effects,
+            no_progress_timeout=args.no_progress_timeout,
+            action_stall_timeout=args.action_stall_timeout,
             trace_output=args.trace_output,
         )
     print(json.dumps(result, sort_keys=True))
