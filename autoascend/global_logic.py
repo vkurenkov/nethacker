@@ -279,8 +279,11 @@ class GlobalLogic:
                     if not utils.isin(self.agent.current_level().objects, G.TRAPS).any():
                         return
 
-                else:
+                elif sokomap.sokomap[y, x] == soko_solver.BOULDER:
                     sokomap.move(y, x, dy, dx)
+                else:
+                    # hypothesis: abandon a desynced Sokoban route instead of crashing the agent thread.
+                    break
 
                 if (~soko_boulder_mask | mask).all():
                     if self.agent.bfs()[ty, tx] != -1 and \
