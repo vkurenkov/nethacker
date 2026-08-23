@@ -529,8 +529,9 @@ class GlobalLogic:
                 level = (Level.SOKOBAN, 4)
 
             elif self.milestone == Milestone.FIND_GNOMISH_MINES:
-                condition = lambda: self.agent.current_level().dungeon_number == Level.GNOMISH_MINES
-                level = (Level.GNOMISH_MINES, 1)
+                # hypothesis: after safe XL6 farming, direct Doom descent raises BALROG depth faster than side branches.
+                condition = lambda: False
+                level = (Level.DUNGEONS_OF_DOOM, 100)
 
             # elif self.milestone == Milestone.FIND_LIGHT_GNOMISH_MINES:
             #     condition = lambda: self.agent.current_level().dungeon_number == Level.GNOMISH_MINES \
