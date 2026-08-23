@@ -584,14 +584,12 @@ class GlobalLogic:
                 return (
                     exploration_strategy(None)
                     .preempt(self.agent, [
+                        # hypothesis: lawful altar farming should remain opportunistic, not block known-stair descent.
                         self.agent.exploration.go_to_strategy(y, x).preempt(self.agent, [
                             self.agent.inventory.gather_items(),
                             self.identify_items_on_altar(),
                             self.dip_for_excalibur().condition(lambda: self.agent.blstats.experience_level >= 7),
                         ])
-                        .condition(lambda: self._got_artifact or
-                                           not any([alignment == self.agent.character.alignment
-                                                    for _, alignment in self.agent.current_level().altars.items()]))
                     ])
                     .until(self.agent, lambda: (self.agent.blstats.y, self.agent.blstats.x) == (y, x))
                 )
