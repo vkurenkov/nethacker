@@ -513,13 +513,11 @@ class GlobalLogic:
     def current_strategy(self):
         yield True
         while 1:
-            # hypothesis: at XP 10 the Monk is strong enough to prioritize main-dungeon descent, converting side-branch grinding into deeper progression milestones.
-            if self.agent.blstats.experience_level >= 10 and self.milestone < Milestone.GO_DOWN:
-                self.milestone = Milestone.GO_DOWN
-
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                condition = lambda: self.agent.blstats.experience_level >= 8
+                # hypothesis: one extra experience level on the relatively safe first floor gives the
+                # monk enough HP to survive the sharp difficulty increase at the Mines entrance.
+                condition = lambda: self.agent.blstats.experience_level >= 9
                 # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
                 #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
                 level = (Level.DUNGEONS_OF_DOOM, 1)
