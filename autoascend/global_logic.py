@@ -279,11 +279,8 @@ class GlobalLogic:
                     if not utils.isin(self.agent.current_level().objects, G.TRAPS).any():
                         return
 
-                elif sokomap.sokomap[y, x] == soko_solver.BOULDER:
-                    sokomap.move(y, x, dy, dx)
                 else:
-                    # hypothesis: abandon a desynced Sokoban route instead of crashing the agent thread.
-                    break
+                    sokomap.move(y, x, dy, dx)
 
                 if (~soko_boulder_mask | mask).all():
                     if self.agent.bfs()[ty, tx] != -1 and \
@@ -516,10 +513,13 @@ class GlobalLogic:
     def current_strategy(self):
         yield True
         while 1:
+            # hypothesis: at XP 10 the Monk is strong enough to prioritize main-dungeon descent, converting side-branch grinding into deeper progression milestones.
+            if self.agent.blstats.experience_level >= 10 and self.milestone < Milestone.GO_DOWN:
+                self.milestone = Milestone.GO_DOWN
+
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                # hypothesis: XL6 leaves sparse Dlvl 1 sooner without sacrificing Valkyrie farming safety.
-                condition = lambda: self.agent.blstats.experience_level >= 6
+                condition = lambda: self.agent.blstats.experience_level >= 8
                 # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
                 #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
                 level = (Level.DUNGEONS_OF_DOOM, 1)
@@ -529,9 +529,8 @@ class GlobalLogic:
                 level = (Level.SOKOBAN, 4)
 
             elif self.milestone == Milestone.FIND_GNOMISH_MINES:
-                # hypothesis: after safe XL6 farming, direct Doom descent raises BALROG depth faster than side branches.
-                condition = lambda: False
-                level = (Level.DUNGEONS_OF_DOOM, 100)
+                condition = lambda: self.agent.current_level().dungeon_number == Level.GNOMISH_MINES
+                level = (Level.GNOMISH_MINES, 1)
 
             # elif self.milestone == Milestone.FIND_LIGHT_GNOMISH_MINES:
             #     condition = lambda: self.agent.current_level().dungeon_number == Level.GNOMISH_MINES \
@@ -584,12 +583,14 @@ class GlobalLogic:
                 return (
                     exploration_strategy(None)
                     .preempt(self.agent, [
-                        # hypothesis: lawful altar farming should remain opportunistic, not block known-stair descent.
                         self.agent.exploration.go_to_strategy(y, x).preempt(self.agent, [
                             self.agent.inventory.gather_items(),
                             self.identify_items_on_altar(),
                             self.dip_for_excalibur().condition(lambda: self.agent.blstats.experience_level >= 7),
                         ])
+                        .condition(lambda: self._got_artifact or
+                                           not any([alignment == self.agent.character.alignment
+                                                    for _, alignment in self.agent.current_level().altars.items()]))
                     ])
                     .until(self.agent, lambda: (self.agent.blstats.y, self.agent.blstats.x) == (y, x))
                 )
