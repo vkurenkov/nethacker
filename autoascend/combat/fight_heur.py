@@ -141,6 +141,11 @@ def _simulate_wand_path(agent, wand, monsters, y, x, dy, dx, range_left, hit_tar
             monster = 'pet'
             # For each monster hit, range decreases by 2.
             range_left -= 2
+        # hypothesis: treating peaceful monsters as forbidden wand targets prevents
+        # accidental ray hits from angering lethal shopkeepers on otherwise strong runs.
+        elif inside(agent, y, x) and agent.monster_tracker.peaceful_monster_mask[y, x]:
+            monster = 'peaceful'
+            range_left -= 2
         elif agent.blstats.y == y and agent.blstats.x == x:
             monster = 'self'
             range_left -= 2
@@ -178,6 +183,8 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
             # print(y, x, monster, p)
             if monster == 'pet':
                 priority -= p * 20
+            elif monster == 'peaceful':
+                priority -= p * 1000
             elif monster == 'self':
                 priority -= p * 30
             elif monster is not None:
