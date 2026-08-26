@@ -1414,11 +1414,8 @@ class Agent:
         #     self.cast('healing', direction=(0, 0))
         #     return
 
-        items = sorted((item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
-                        item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']),
-                       # hypothesis: when several identified healing potions are available, use the
-                       # strongest one first so an emergency action is more likely to end the danger.
-                       key=lambda item: ['healing', 'extra healing', 'full healing'].index(item.object.name), reverse=True)
+        items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
+                 item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']]
         if (
                 (self.blstats.hitpoints < 1 / 3 * self.blstats.max_hitpoints
                  or self.blstats.hitpoints < 8) and items
