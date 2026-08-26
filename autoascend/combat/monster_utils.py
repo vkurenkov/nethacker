@@ -15,10 +15,9 @@ def is_monster_faster(agent, monster):
 
 
 def imminent_death_on_melee(agent, monster):
-    # hypothesis: retreating from ordinary monsters at 13 HP gives early characters one extra turn to heal or escape.
     if is_dangerous_monster(monster):
         return agent.blstats.hitpoints <= 16
-    return agent.blstats.hitpoints <= 13
+    return agent.blstats.hitpoints <= 8
 
 
 def is_dangerous_monster(monster):
