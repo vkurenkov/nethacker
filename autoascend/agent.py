@@ -1302,8 +1302,8 @@ class Agent:
         if permonst.mflags2 & race_flag:
             return False
 
-        # hypothesis: rejecting delayed corpses after 30 turns prevents lethal rot poisoning while retaining fresh kills and reliably preserved lichen/lizard corpses for nutrition.
-        if self.blstats.time - age_turn >= 30 and \
+        # corpse aging
+        if self.blstats.time - age_turn >= 50 and \
                 monster_id not in [MON.id_from_name('lizard'), MON.id_from_name('lichen')]:
             return False
 

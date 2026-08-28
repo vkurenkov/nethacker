@@ -160,7 +160,6 @@ class GlobalLogic:
 
         self.oracle_level = None
         self.minetown_level = None
-        self._magic_mapped_levels = set()
 
         self._got_artifact = False
 
@@ -280,8 +279,11 @@ class GlobalLogic:
                     if not utils.isin(self.agent.current_level().objects, G.TRAPS).any():
                         return
 
-                else:
+                elif sokomap.sokomap[y, x] == soko_solver.BOULDER:
                     sokomap.move(y, x, dy, dx)
+                else:
+                    # hypothesis: abandon a desynced Sokoban route instead of crashing the agent thread.
+                    break
 
                 if (~soko_boulder_mask | mask).all():
                     if self.agent.bfs()[ty, tx] != -1 and \
@@ -332,29 +334,6 @@ class GlobalLogic:
 
         if not yielded:
             yield False
-
-    @utils.debug_log('read_magic_mapping')
-    @Strategy.wrap
-    def read_magic_mapping(self):
-        level_key = self.agent.current_level().key()
-        if level_key == (Level.DUNGEONS_OF_DOOM, 1) or level_key in self._magic_mapped_levels or \
-                self.agent.character.prop.confusion or \
-                self.agent.character.prop.blind:
-            yield False
-
-        scroll = next((item for item in self.agent.inventory.items
-                       if item.is_unambiguous() and item.category == nh.SCROLL_CLASS and
-                       item.object == O.from_name('magic mapping', nh.SCROLL_CLASS) and
-                       item.status in [Item.UNCURSED, Item.BLESSED]), None)
-        if scroll is None:
-            yield False
-
-        # hypothesis: saving known magic-mapping scrolls until after level-one farming lets fragile tourists spend them where faster exploration can unlock deeper progression milestones.
-        yield True
-        self._magic_mapped_levels.add(level_key)
-        with self.agent.atom_operation():
-            scroll = self.agent.inventory.move_to_inventory(scroll)
-            self.agent.step(A.Command.READ, iter(self.agent.inventory.items.get_letter(scroll)))
 
     @utils.debug_log('identify_items_on_altar')
     @Strategy.wrap
@@ -429,6 +408,9 @@ class GlobalLogic:
             return False
 
         mname = MON.permonst(item.monster_id + nh.GLYPH_MON_OFF).mname
+        # hypothesis: refusing cockatrice-family sacrifice cargo prevents bare-handed pickup petrification without weakening ordinary altar farming.
+        if ord(MON.permonst(item.monster_id + nh.GLYPH_MON_OFF).mlet) == MON.S_COCKATRICE:
+            return False
         if (mname == 'pony' and self.agent.character.role in [Character.KNIGHT, Character.BARBARIAN]) or \
                 (mname == 'kitten' and self.agent.character.role == [Character.BARBARIAN, Character.WIZARD]) or \
                 (mname == 'little dog' and item.naming):  # little dogs are always named
@@ -539,12 +521,8 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                # hypothesis: a hungry, foodless Valkyrie is durable enough to trade an otherwise-certain level-one starvation for productive dungeon descent.
-                condition = lambda: self.agent.blstats.experience_level >= 8 or (
-                    self.agent.character.role == Character.VALKYRIE and
-                    self.agent.inventory.items.total_nutrition() == 0 and
-                    self.agent.blstats.hunger_state >= Hunger.HUNGRY
-                )
+                # hypothesis: XL6 leaves sparse Dlvl 1 sooner without sacrificing Valkyrie farming safety.
+                condition = lambda: self.agent.blstats.experience_level >= 6
                 # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
                 #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
                 level = (Level.DUNGEONS_OF_DOOM, 1)
@@ -554,8 +532,9 @@ class GlobalLogic:
                 level = (Level.SOKOBAN, 4)
 
             elif self.milestone == Milestone.FIND_GNOMISH_MINES:
-                condition = lambda: self.agent.current_level().dungeon_number == Level.GNOMISH_MINES
-                level = (Level.GNOMISH_MINES, 1)
+                # hypothesis: after safe XL6 farming, direct Doom descent raises BALROG depth faster than side branches.
+                condition = lambda: False
+                level = (Level.DUNGEONS_OF_DOOM, 100)
 
             # elif self.milestone == Milestone.FIND_LIGHT_GNOMISH_MINES:
             #     condition = lambda: self.agent.current_level().dungeon_number == Level.GNOMISH_MINES \
@@ -649,9 +628,6 @@ class GlobalLogic:
             ])
             .preempt(self.agent, [
                 self.wait_out_unexpected_state_strategy(),
-            ])
-            .preempt(self.agent, [
-                self.read_magic_mapping(),
             ])
             .preempt(self.agent, [
                 self.agent.cure_disease().every(5),
