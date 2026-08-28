@@ -223,9 +223,6 @@ def elbereth_action(agent, monsters):
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
         priority = -15 + 20 * adj_monsters_count * (1 - player_hp_ratio)
-        # hypothesis: below one-third health, engraving against an adjacent threat prevents the next melee exchange from becoming fatal.
-        if 3 * agent.blstats.hitpoints <= agent.blstats.max_hitpoints:
-            priority = max(priority, 20)
         return [(priority, ('elbereth',))]
     return []
 
