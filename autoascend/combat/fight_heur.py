@@ -94,9 +94,6 @@ def ranged_priority(agent, dy, dx, monsters):
                 ret -= 6
                 if mon.mname == 'gas spore':  # only gas spore ?
                     ret -= 100
-                # hypothesis: when melee is already judged potentially fatal, waiving the point-blank ranged penalties keeps fragile characters using their stronger projectiles instead of forcing a desperate melee hit.
-                elif imminent_death_on_melee(agent, monster[0]):
-                    ret += 22
             return ret, y, x, monster[0]
 
 
