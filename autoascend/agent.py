@@ -1302,8 +1302,8 @@ class Agent:
         if permonst.mflags2 & race_flag:
             return False
 
-        # corpse aging
-        if self.blstats.time - age_turn >= 50 and \
+        # hypothesis: rejecting delayed corpses after 30 turns prevents lethal rot poisoning while retaining fresh kills and reliably preserved lichen/lizard corpses for nutrition.
+        if self.blstats.time - age_turn >= 30 and \
                 monster_id not in [MON.id_from_name('lizard'), MON.id_from_name('lichen')]:
             return False
 
@@ -1416,9 +1416,14 @@ class Agent:
 
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']]
+        # hypothesis: spending a known healing potion once an injured Tourist falls to 12 HP builds early durability before its fragile start becomes an emergency.
+        tourist_early_heal = self.character.role == Character.TOURIST and \
+                             self.blstats.hitpoints < self.blstats.max_hitpoints and \
+                             self.blstats.hitpoints <= 12
         if (
                 (self.blstats.hitpoints < 1 / 3 * self.blstats.max_hitpoints
-                 or self.blstats.hitpoints < 8) and items
+                 or self.blstats.hitpoints < 8
+                 or tourist_early_heal) and items
         ):
             yield True
             self.inventory.quaff(items[0])

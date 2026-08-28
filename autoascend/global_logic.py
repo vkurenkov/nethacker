@@ -515,13 +515,14 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                # hypothesis: letting foodless tourists end level-one farming prevents their common
-                # starvation stall while stronger roles retain the safer XL8 farming threshold.
+                # hypothesis: a hungry, foodless Valkyrie is durable enough to trade an otherwise-certain level-one starvation for productive dungeon descent.
                 condition = lambda: self.agent.blstats.experience_level >= 8 or (
-                    self.agent.character.role == Character.TOURIST and
+                    self.agent.character.role == Character.VALKYRIE and
                     self.agent.inventory.items.total_nutrition() == 0 and
-                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
+                    self.agent.blstats.hunger_state >= Hunger.HUNGRY
                 )
+                # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
+                #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
                 level = (Level.DUNGEONS_OF_DOOM, 1)
 
             elif self.milestone == Milestone.FIND_SOKOBAN:
