@@ -1416,14 +1416,10 @@ class Agent:
 
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']]
-        # hypothesis: spending a known healing potion once an injured Tourist falls to 12 HP builds early durability before its fragile start becomes an emergency.
-        tourist_early_heal = self.character.role == Character.TOURIST and \
-                             self.blstats.hitpoints < self.blstats.max_hitpoints and \
-                             self.blstats.hitpoints <= 12
+        # hypothesis: drinking known healing below half health prevents common midgame attacks from killing the bot before the old one-third-health emergency threshold can fire.
         if (
-                (self.blstats.hitpoints < 1 / 3 * self.blstats.max_hitpoints
-                 or self.blstats.hitpoints < 8
-                 or tourist_early_heal) and items
+                (self.blstats.hitpoints < 1 / 2 * self.blstats.max_hitpoints
+                 or self.blstats.hitpoints < 8) and items
         ):
             yield True
             self.inventory.quaff(items[0])
