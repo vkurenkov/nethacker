@@ -15,9 +15,6 @@ def is_monster_faster(agent, monster):
 
 
 def imminent_death_on_melee(agent, monster):
-    # hypothesis: treating werecreature melee as dangerous from first contact lets projectile-equipped characters avoid both repeated hits and the permanent lycanthropy risk.
-    if 'were' in monster[3].mname:
-        return True
     if is_dangerous_monster(monster):
         return agent.blstats.hitpoints <= 16
     # hypothesis: a 12-HP melee safety floor lets fragile characters kite with ranged weapons before one more hit becomes fatal.

@@ -138,11 +138,6 @@ def _simulate_wand_path(agent, wand, monsters, y, x, dy, dx, range_left, hit_tar
             monster = monster[0]
             # For each monster hit, range decreases by 2.
             range_left -= 2
-        # hypothesis: accounting for peacefuls in ray paths prevents offensive wands from angering shopkeepers
-        # through collateral or reflected fire, avoiding an otherwise unwinnable fight with town services.
-        elif inside(agent, y, x) and agent.monster_tracker.peaceful_monster_mask[y, x]:
-            monster = 'peaceful'
-            range_left -= 2
         elif inside(agent, y, x) and agent.glyphs[y, x] in G.PETS:
             monster = 'pet'
             # For each monster hit, range decreases by 2.
@@ -182,9 +177,7 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
         # print('--------------', dy, dx)
         for y, x, monster, p in simulate_wand_path(agent, item, monsters, dy, dx):
             # print(y, x, monster, p)
-            if monster == 'peaceful':
-                priority -= p * 100
-            elif monster == 'pet':
+            if monster == 'pet':
                 priority -= p * 20
             elif monster == 'self':
                 priority -= p * 30
@@ -271,14 +264,8 @@ def get_available_actions(agent, monsters):
             actions.extend(get_potential_wand_usages(agent, monsters, dy, dx))
 
     to_pickup = decide_what_to_pickup(agent)
-    # hypothesis: demoting projectile recovery beside a combat-capable enemy prevents fragile ranged characters from giving it a free attack while retaining pickup as a fallback action.
-    adjacent_threat = any(
-        adjacent((y, x), (agent.blstats.y, agent.blstats.x)) and
-        mon.mname not in WEAK_MONSTERS + ONLY_RANGED_SLOW_MONSTERS
-        for _, y, x, mon, _ in monsters
-    )
     if to_pickup:
-        actions.append((0 if adjacent_threat else 15, ('pickup', to_pickup)))
+        actions.append((15, ('pickup', to_pickup)))
 
     actions.extend(elbereth_action(agent, monsters))
     actions.extend(wait_action(agent, monsters))

@@ -762,11 +762,9 @@ class Inventory:
             wielded_melee_weapon = None
             if not allow_wielded_melee:
                 wielded_melee_weapon = self.items.main_hand
-            # hypothesis: allowing stacked best-melee missiles preserves a melee fallback while letting tourists use their starting dart stack at range.
             valid_combinations.extend([(None, i) for i in items
                                        if i.is_thrown_projectile()
-                                       and (i.count > 1 or
-                                            (i != best_melee_weapon and i != wielded_melee_weapon))])
+                                       and i != best_melee_weapon and i != wielded_melee_weapon])
 
         return valid_combinations
 
@@ -1165,7 +1163,8 @@ class Inventory:
     def wear_best_stuff(self):
         yielded = False
         while 1:
-            best_armorset = self.get_best_armorset()
+            # hypothesis: wearing unambiguous unknown-BUC armor gives armorless fragile characters immediate AC gains that outweigh the ordinary curse risk while they farm before finding an altar.
+            best_armorset = self.get_best_armorset(allow_unknown_status=True)
 
             # TODO: twoweapon
             for slot, name in [(O.ARM_SHIELD, 'off_hand'), (O.ARM_HELM, 'helm'), (O.ARM_GLOVES, 'gloves'),
