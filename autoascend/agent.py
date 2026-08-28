@@ -71,6 +71,7 @@ class Agent:
         self._is_reading_message_or_popup = False
         self._last_terrain_check = None
         self._forbidden_engrave_position = (-1, -1)
+        self._last_camera_turn = -float('inf')
 
         # when (number of turn) there was last decision about allowing these actions (e.g. agent is somewhat stuck)
         self._allow_walking_through_traps_turn = -float('inf')
@@ -1186,6 +1187,16 @@ class Agent:
                 fired = self.fire(ammo, dir)
                 assert fired, (ammo, dir)
                 return wait_counter
+
+        elif best_action[0] == 'camera':
+            _, dy, dx, camera = best_action
+            with self.atom_operation():
+                self.step(A.Command.APPLY)
+                self.type_text(self.inventory.items.get_letter(camera))
+                self.direction(self.calc_direction(self.blstats.y, self.blstats.x,
+                                                   self.blstats.y + dy, self.blstats.x + dx))
+            self._last_camera_turn = self._last_turn
+            return wait_counter
 
         elif best_action[0] == 'elbereth':
             assert self.inventory.engraving_below_me.lower() != 'elbereth'
