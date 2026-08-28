@@ -7,7 +7,8 @@ from scipy import signal
 from ..glyph import G
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
-    ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
+    imminent_death_on_melee, ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, \
+    consider_melee_only_ranged_if_hp_full
 from .movement_priority import draw_monster_priority_positive, draw_monster_priority_negative
 from .utils import wielding_ranged_weapon, line_dis_from, inside
 
@@ -15,7 +16,7 @@ from .utils import wielding_ranged_weapon, line_dis_from, inside
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
     ret = 1
-    if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
+    if not imminent_death_on_melee(agent, monster) or is_monster_faster(agent, monster):
         ret += 15
     if wielding_ranged_weapon(agent) and not is_monster_faster(agent, monster):
         ret -= 6
@@ -263,8 +264,14 @@ def get_available_actions(agent, monsters):
             actions.extend(get_potential_wand_usages(agent, monsters, dy, dx))
 
     to_pickup = decide_what_to_pickup(agent)
+    # hypothesis: demoting projectile recovery beside a combat-capable enemy prevents fragile ranged characters from giving it a free attack while retaining pickup as a fallback action.
+    adjacent_threat = any(
+        adjacent((y, x), (agent.blstats.y, agent.blstats.x)) and
+        mon.mname not in WEAK_MONSTERS + ONLY_RANGED_SLOW_MONSTERS
+        for _, y, x, mon, _ in monsters
+    )
     if to_pickup:
-        actions.append((15, ('pickup', to_pickup)))
+        actions.append((0 if adjacent_threat else 15, ('pickup', to_pickup)))
 
     actions.extend(elbereth_action(agent, monsters))
     actions.extend(wait_action(agent, monsters))
