@@ -1163,8 +1163,7 @@ class Inventory:
     def wear_best_stuff(self):
         yielded = False
         while 1:
-            # hypothesis: wearing unambiguous unknown-BUC armor gives armorless fragile characters immediate AC gains that outweigh the ordinary curse risk while they farm before finding an altar.
-            best_armorset = self.get_best_armorset(allow_unknown_status=True)
+            best_armorset = self.get_best_armorset()
 
             # TODO: twoweapon
             for slot, name in [(O.ARM_SHIELD, 'off_hand'), (O.ARM_HELM, 'helm'), (O.ARM_GLOVES, 'gloves'),
