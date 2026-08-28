@@ -515,25 +515,11 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                def has_edible_inventory_food():
-                    return any(
-                        item.category == nh.FOOD_CLASS and
-                        item.objs[0].name != 'sprig of wolfsbane' and
-                        (not item.is_corpse() or
-                         item.monster_id in [MON.from_name(n) - nh.GLYPH_MON_OFF
-                                             for n in ['lizard', 'lichen']])
-                        for item in flatten_items(self.agent.inventory.items)
-                    )
-
-                # hypothesis: a hungry character with no actually edible food is safer descending for supplies at XL6 for Samurai and XL7 for fragile Tourists than farming level one while reserved or unsafe food blocks the old gate.
+                # hypothesis: foodless, hungry samurai and tourists should join Valkyries in abandoning level-one farming before otherwise-certain starvation.
                 condition = lambda: self.agent.blstats.experience_level >= 8 or (
-                    not has_edible_inventory_food() and
-                    self.agent.blstats.hunger_state >= Hunger.HUNGRY and
-                    (self.agent.character.role == Character.VALKYRIE or
-                     (self.agent.character.role == Character.SAMURAI and
-                      self.agent.blstats.experience_level >= 6) or
-                     (self.agent.character.role == Character.TOURIST and
-                      self.agent.blstats.experience_level >= 7))
+                    self.agent.character.role in [Character.SAMURAI, Character.TOURIST, Character.VALKYRIE] and
+                    self.agent.inventory.items.total_nutrition() == 0 and
+                    self.agent.blstats.hunger_state >= Hunger.HUNGRY
                 )
                 # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
                 #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY

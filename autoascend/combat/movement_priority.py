@@ -125,7 +125,9 @@ def draw_monster_priority_negative(agent, monster, priority, walkable):
         # ignore
         pass
     elif 'unicorn' in mon.mname:
-        pass
+        # hypothesis: strongly repelling hostile unicorn melee range prevents fragile characters from chasing a fast, hard-hitting target while still allowing ranged attacks.
+        _draw_around(priority, y, x, -25, radius=1)
+        _draw_around(priority, y, x, -5, radius=2)
     else:
         if mon.mname not in WEAK_MONSTERS:
             # engage, but ensure striking first if possible
