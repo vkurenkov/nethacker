@@ -264,14 +264,8 @@ def get_available_actions(agent, monsters):
             actions.extend(get_potential_wand_usages(agent, monsters, dy, dx))
 
     to_pickup = decide_what_to_pickup(agent)
-    # hypothesis: demoting projectile recovery beside a combat-capable enemy prevents fragile ranged characters from giving it a free attack while retaining pickup as a fallback action.
-    adjacent_threat = any(
-        adjacent((y, x), (agent.blstats.y, agent.blstats.x)) and
-        mon.mname not in WEAK_MONSTERS + ONLY_RANGED_SLOW_MONSTERS
-        for _, y, x, mon, _ in monsters
-    )
     if to_pickup:
-        actions.append((0 if adjacent_threat else 15, ('pickup', to_pickup)))
+        actions.append((15, ('pickup', to_pickup)))
 
     actions.extend(elbereth_action(agent, monsters))
     actions.extend(wait_action(agent, monsters))
