@@ -4,7 +4,7 @@ from itertools import product
 import numpy as np
 from scipy import signal
 
-from ..glyph import G, MON
+from ..glyph import G
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
     imminent_death_on_melee, ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, \
@@ -94,6 +94,9 @@ def ranged_priority(agent, dy, dx, monsters):
                 ret -= 6
                 if mon.mname == 'gas spore':  # only gas spore ?
                     ret -= 100
+                # hypothesis: when melee is already judged potentially fatal, waiving the point-blank ranged penalties keeps fragile characters using their stronger projectiles instead of forcing a desperate melee hit.
+                elif imminent_death_on_melee(agent, monster[0]):
+                    ret += 22
             return ret, y, x, monster[0]
 
 
@@ -237,21 +240,6 @@ def wait_action(agent, monsters):
 
 def get_available_actions(agent, monsters):
     actions = []
-
-    # hypothesis: at 6 HP or less, a point-blank camera flash gives a fragile tourist a safer escape than another attack.
-    cameras = [item for item in agent.inventory.items
-               if item.is_unambiguous() and item.object.name == 'expensive camera'
-               and item.uses != 'no charge'
-               and (item.uses is None or int(item.uses.split(':')[-1]) > 0)]
-    if cameras and not agent.character.prop.polymorph and agent._last_turn - agent._last_camera_turn >= 5:
-        for monster in monsters:
-            _, y, x, mon, _ = monster
-            if adjacent((y, x), (agent.blstats.y, agent.blstats.x)) \
-                    and not mon.mflags1 & MON.M1_NOEYES \
-                    and mon.mname not in ONLY_RANGED_SLOW_MONSTERS \
-                    and imminent_death_on_melee(agent, monster) \
-                    and agent.blstats.hitpoints <= 6:
-                actions.append((30, ('camera', y - agent.blstats.y, x - agent.blstats.x, cameras[0])))
 
     # melee attack actions
     for monster in monsters:
