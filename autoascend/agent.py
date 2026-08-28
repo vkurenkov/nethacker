@@ -1187,6 +1187,18 @@ class Agent:
                 assert fired, (ammo, dir)
                 return wait_counter
 
+        elif best_action[0] == 'camera':
+            _, dy, dx, camera = best_action
+            camera = self.inventory.move_to_inventory(camera)
+            direction = self.calc_direction(self.blstats.y, self.blstats.x,
+                                            self.blstats.y + dy, self.blstats.x + dx)
+            with self.atom_operation():
+                self.step(A.Command.APPLY)
+                self.type_text(self.inventory.items.get_letter(camera))
+                self.direction(direction)
+            self._last_camera_turn = self.blstats.time
+            return wait_counter
+
         elif best_action[0] == 'elbereth':
             assert self.inventory.engraving_below_me.lower() != 'elbereth'
             self.engrave("Elbereth")
