@@ -80,7 +80,9 @@ class MonsterTracker:
                         self.peaceful_monster_mask[y, x] = 1
             else:
                 self.peaceful_monster_mask = new_peaceful_mons
-        # TODO: on hallu no monsters are peaceful
+        else:
+            # hypothesis: while hallucinating, treating monsters on already mapped shop tiles as non-combat prevents the bot from mistaking a shopkeeper's distorted glyph for a hostile monster.
+            self.peaceful_monster_mask = new_monster_mask & self.agent.current_level().shop
 
         assert (~self.peaceful_monster_mask | self.monster_mask).all()
         self._last_glyphs = self.agent.glyphs.copy()
