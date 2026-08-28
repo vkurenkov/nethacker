@@ -762,11 +762,9 @@ class Inventory:
             wielded_melee_weapon = None
             if not allow_wielded_melee:
                 wielded_melee_weapon = self.items.main_hand
-            # hypothesis: allowing stacked best-melee missiles preserves a melee fallback while letting tourists use their starting dart stack at range.
             valid_combinations.extend([(None, i) for i in items
                                        if i.is_thrown_projectile()
-                                       and (i.count > 1 or
-                                            (i != best_melee_weapon and i != wielded_melee_weapon))])
+                                       and i != best_melee_weapon and i != wielded_melee_weapon])
 
         return valid_combinations
 
