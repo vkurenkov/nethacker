@@ -515,8 +515,11 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                # hypothesis: leaving the first floor at XP 6 avoids lethal over-farming and gives fragile builds time to reach descent milestones.
-                condition = lambda: self.agent.blstats.experience_level >= 6
+                # hypothesis: any hungry character with no carried nutrition should trade an otherwise-certain level-one starvation for a chance to find food while descending.
+                condition = lambda: self.agent.blstats.experience_level >= 8 or (
+                    self.agent.inventory.items.total_nutrition() == 0 and
+                    self.agent.blstats.hunger_state >= Hunger.HUNGRY
+                )
                 # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
                 #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
                 level = (Level.DUNGEONS_OF_DOOM, 1)
