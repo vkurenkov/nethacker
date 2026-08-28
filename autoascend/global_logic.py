@@ -515,12 +515,7 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                # hypothesis: a hungry, foodless Valkyrie is durable enough to trade an otherwise-certain level-one starvation for productive dungeon descent.
-                condition = lambda: self.agent.blstats.experience_level >= 8 or (
-                    self.agent.character.role == Character.VALKYRIE and
-                    self.agent.inventory.items.total_nutrition() == 0 and
-                    self.agent.blstats.hunger_state >= Hunger.HUNGRY
-                )
+                condition = lambda: self.agent.blstats.experience_level >= 8
                 # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
                 #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
                 level = (Level.DUNGEONS_OF_DOOM, 1)
@@ -575,9 +570,8 @@ class GlobalLogic:
                         self.identify_items_on_altar().condition(
                             lambda: self.agent.current_level().objects[self.agent.blstats.y,
                                                                        self.agent.blstats.x] in G.ALTAR),
-                        # hypothesis: seeking Excalibur from XL5 lets lawful characters turn an early fountain into a survival-grade weapon before the common XL5-6 combat deaths.
                         self.dip_for_excalibur().condition(
-                            lambda: self.agent.blstats.experience_level >= 5).every(10),
+                            lambda: self.agent.blstats.experience_level >= 7).every(10),
                     ])
                 )
 
@@ -588,7 +582,7 @@ class GlobalLogic:
                         self.agent.exploration.go_to_strategy(y, x).preempt(self.agent, [
                             self.agent.inventory.gather_items(),
                             self.identify_items_on_altar(),
-                            self.dip_for_excalibur().condition(lambda: self.agent.blstats.experience_level >= 5),
+                            self.dip_for_excalibur().condition(lambda: self.agent.blstats.experience_level >= 7),
                         ])
                         .condition(lambda: self._got_artifact or
                                            not any([alignment == self.agent.character.alignment
