@@ -515,15 +515,8 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                # hypothesis: a hungry, foodless Valkyrie is durable enough to trade an otherwise-certain level-one starvation for productive dungeon descent.
-                # hypothesis: keeping fragile Tourists in the opening-level farm through XP 9 builds enough HP to survive the branch threats that currently kill them at XP 8.
-                condition = lambda: self.agent.blstats.experience_level >= (
-                    9 if self.agent.character.role == Character.TOURIST else 8
-                ) or (
-                    self.agent.character.role == Character.VALKYRIE and
-                    self.agent.inventory.items.total_nutrition() == 0 and
-                    self.agent.blstats.hunger_state >= Hunger.HUNGRY
-                )
+                # hypothesis: leaving the first floor at XP 6 avoids lethal over-farming and gives fragile builds time to reach descent milestones.
+                condition = lambda: self.agent.blstats.experience_level >= 6
                 # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
                 #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
                 level = (Level.DUNGEONS_OF_DOOM, 1)
