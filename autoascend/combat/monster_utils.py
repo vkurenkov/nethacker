@@ -17,8 +17,7 @@ def is_monster_faster(agent, monster):
 def imminent_death_on_melee(agent, monster):
     if is_dangerous_monster(monster):
         return agent.blstats.hitpoints <= 16
-    # hypothesis: a 12-HP melee safety floor lets fragile characters kite with ranged weapons before one more hit becomes fatal.
-    return agent.blstats.hitpoints <= 12
+    return agent.blstats.hitpoints <= 8
 
 
 def is_dangerous_monster(monster):
