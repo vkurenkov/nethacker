@@ -1417,29 +1417,6 @@ class Agent:
     @Strategy.wrap
     def emergency_strategy(self):
 
-        # hypothesis: curing delayed stoning as soon as its warning appears converts otherwise-certain cockatrice deaths into survivable resource use before the five-turn timer expires.
-        if any(warning in self.message for warning in
-               ('You are slowing down', 'Your limbs are stiffening', 'Your limbs have turned to stone')):
-            lizard_corpses = [item for item in flatten_items(self.inventory.items)
-                              if item.is_corpse() and item.monster_id == MON.id_from_name('lizard')]
-            if lizard_corpses:
-                yield True
-                self.inventory.eat(lizard_corpses[0])
-                return
-
-            acid = [item for item in flatten_items(self.inventory.items)
-                    if item.is_unambiguous() and item.category == nh.POTION_CLASS and
-                    item.object.name == 'acid']
-            if acid:
-                yield True
-                self.inventory.quaff(acid[0])
-                return
-
-            if self.is_safe_to_pray():
-                yield True
-                self.pray()
-                return
-
         # hypothesis: turning one of the Tourist's two extra-healing potions into at least 2 maximum HP at the initial 10/10 health improves fragile early survival while preserving the other potion for emergencies.
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name == 'extra healing' and
