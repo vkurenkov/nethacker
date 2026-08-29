@@ -93,9 +93,6 @@ def ranged_priority(agent, dy, dx, monsters):
                 ret -= 6
                 if mon.mname == 'gas spore':  # only gas spore ?
                     ret -= 100
-                # hypothesis: a Tourist held by a stationary mimic survives more often by continuing to throw trained darts instead of switching to weak melee.
-                if agent.character.role == agent.character.TOURIST and 'mimic' in mon.mname:
-                    ret += 30
             return ret, y, x, monster[0]
 
 

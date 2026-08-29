@@ -162,6 +162,7 @@ class GlobalLogic:
         self.minetown_level = None
 
         self._got_artifact = False
+        self._magic_mapped_levels = set()
 
     def update(self):
         if not self.agent.character.prop.hallu:
@@ -177,6 +178,29 @@ class GlobalLogic:
                     self.minetown_level = self.agent.current_level().key()
                 else:
                     assert self.minetown_level == self.agent.current_level().key()
+
+    @utils.debug_log('read_magic_mapping')
+    @Strategy.wrap
+    def read_magic_mapping(self):
+        level = self.agent.current_level()
+        level_key = level.key()
+        scrolls = [item for item in flatten_items(self.agent.inventory.items)
+                   if item.is_unambiguous() and item.category == nh.SCROLL_CLASS and
+                   item.object == O.from_name('magic mapping', nh.SCROLL_CLASS)]
+
+        # hypothesis: spending a Tourist's known mapping scroll only when a new Doom level's down stair is unknown reduces lethal exploration enough to reach depth milestones.
+        if self.agent.character.role != Character.TOURIST or not scrolls or \
+                level.dungeon_number != Level.DUNGEONS_OF_DOOM or level.level_number <= 1 or \
+                level_key in self._magic_mapped_levels or level.get_stairs(down=True):
+            yield False
+
+        yield True
+        scroll = self.agent.inventory.move_to_inventory(scrolls[0])
+        with self.agent.atom_operation():
+            self.agent.step(A.Command.READ)
+            assert 'What do you want to read?' in self.agent.message, self.agent.message
+            self.agent.type_text(self.agent.inventory.items.get_letter(scroll))
+        self._magic_mapped_levels.add(level_key)
 
     @utils.debug_log('solving sokoban')
     @Strategy.wrap
@@ -574,6 +598,7 @@ class GlobalLogic:
                     Strategy(lambda: self.agent.exploration.explore1(level, trap_search_offset=1,
                         kick_doors=self.agent.current_level().dungeon_number != Level.GNOMISH_MINES, **kwargs).strategy())
                     .preempt(self.agent, [
+                        self.read_magic_mapping(),
                         self.identify_items_on_altar().every(100),
                         self.identify_items_on_altar().condition(
                             lambda: self.agent.current_level().objects[self.agent.blstats.y,

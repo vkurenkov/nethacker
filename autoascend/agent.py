@@ -1404,6 +1404,15 @@ class Agent:
     @Strategy.wrap
     def emergency_strategy(self):
 
+        extra_healing = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
+                         item.category == nh.POTION_CLASS and item.object.name == 'extra healing']
+        # hypothesis: converting one of a Tourist's two starting extra-healing potions into permanent max HP at full health improves fragile early survival while retaining one emergency heal.
+        if self.character.role == Character.TOURIST and self.blstats.hitpoints == self.blstats.max_hitpoints and \
+                sum(item.count for item in extra_healing) >= 2:
+            yield True
+            self.inventory.quaff(extra_healing[0])
+            return
+
         # if self.should_cast_extra_heal():
         #     yield True
         #     self.cast('extra healing', direction=(0, 0))
