@@ -762,13 +762,9 @@ class Inventory:
             wielded_melee_weapon = None
             if not allow_wielded_melee:
                 wielded_melee_weapon = self.items.main_hand
-            # hypothesis: below the 8-HP emergency floor, throwing one projectile from a stacked fallback weapon is safer than conserving the whole stack while a fragile character is being chased.
             valid_combinations.extend([(None, i) for i in items
                                        if i.is_thrown_projectile()
-                                       and (i != best_melee_weapon or
-                                            (i.count > 1 and self.agent.blstats.hitpoints <= 8))
-                                       and (i != wielded_melee_weapon or
-                                            (i.count > 1 and self.agent.blstats.hitpoints <= 8))])
+                                       and i != best_melee_weapon and i != wielded_melee_weapon])
 
         return valid_combinations
 
@@ -1167,7 +1163,9 @@ class Inventory:
     def wear_best_stuff(self):
         yielded = False
         while 1:
-            best_armorset = self.get_best_armorset()
+            # hypothesis: a fragile Tourist benefits more from immediately wearing found armor than from waiting for rare BUC identification, since even a cursed suit usually supplies the AC needed to survive level-one farming.
+            best_armorset = self.get_best_armorset(
+                allow_unknown_status=self.agent.character.role == Character.TOURIST)
 
             # TODO: twoweapon
             for slot, name in [(O.ARM_SHIELD, 'off_hand'), (O.ARM_HELM, 'helm'), (O.ARM_GLOVES, 'gloves'),
