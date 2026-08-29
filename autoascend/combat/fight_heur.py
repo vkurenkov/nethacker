@@ -22,9 +22,6 @@ def melee_monster_priority(agent, monsters, monster):
         ret -= 6
     if mon.mname in EXPLODING_MONSTERS:
         ret -= 17
-    # hypothesis: preserving distance from contact-petrifying monsters whenever ammunition is available avoids otherwise needless cockatrice deaths without disabling melee as a last resort.
-    if mon.mname in ('cockatrice', 'chickatrice') and agent.inventory.get_ranged_combinations():
-        ret -= 100
     if 'were' in mon.mname:
         ret += 1
     # if not wielding_melee_weapon(agent):
