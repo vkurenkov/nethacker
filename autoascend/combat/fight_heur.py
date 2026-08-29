@@ -7,8 +7,7 @@ from scipy import signal
 from ..glyph import G
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
-    imminent_death_on_melee, ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, INSECTS, WEAK_MONSTERS, \
-    consider_melee_only_ranged_if_hp_full
+    ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
 from .movement_priority import draw_monster_priority_positive, draw_monster_priority_negative
 from .utils import wielding_ranged_weapon, line_dis_from, inside
 
@@ -16,7 +15,7 @@ from .utils import wielding_ranged_weapon, line_dis_from, inside
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
     ret = 1
-    if not imminent_death_on_melee(agent, monster) or is_monster_faster(agent, monster):
+    if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
         ret += 15
     if wielding_ranged_weapon(agent) and not is_monster_faster(agent, monster):
         ret -= 6
@@ -24,11 +23,6 @@ def melee_monster_priority(agent, monsters, monster):
         ret -= 17
     if 'were' in mon.mname:
         ret += 1
-    # hypothesis: when multiple fast insects are already adjacent, attacking the swarm prevents futile retreat moves from granting every bee or ant another attack.
-    if mon.mname in INSECTS and sum(
-            adjacent((agent.blstats.y, agent.blstats.x), (my, mx)) and other.mname in INSECTS
-            for _, my, mx, other, _ in monsters) >= 2:
-        ret += 8
     # if not wielding_melee_weapon(agent):
     #     ret -= 5
     if mon.mname in ONLY_RANGED_SLOW_MONSTERS:
