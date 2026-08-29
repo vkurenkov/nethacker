@@ -722,7 +722,9 @@ class Inventory:
         best_item = None
         best_dps = utils.calc_dps(*self.agent.character.get_melee_bonus(None, large_monster=False))
         for item in flatten_items(items):
+            # hypothesis: keeping pure missiles out of the melee slot lets fragile Tourists retain their trained +2 darts for ranged kiting.
             if item.is_weapon() and \
+                    item.objs[0].sub >= 0 and \
                     (item.status in [Item.UNCURSED, Item.BLESSED] or
                      (allow_unknown_status and item.status == Item.UNKNOWN)):
                 to_hit, dmg = self.agent.character.get_melee_bonus(item, large_monster=False)
