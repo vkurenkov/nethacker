@@ -1022,7 +1022,9 @@ class Inventory:
             yield False  # TODO: only for handless monsters (which cannot write)
 
         self.skip_engrave_counter -= 1
-        if self.agent.character.prop.blind or self.skip_engrave_counter > 0:
+        # hypothesis: deferring unknown-wand engraving below 21 HP prevents cursed-wand backfires from one-shotting fragile starters while preserving identification after they recover.
+        if self.agent.character.prop.blind or self.skip_engrave_counter > 0 or \
+                self.agent.blstats.hitpoints <= 20:
             yield False
             return
         yielded = False
@@ -1168,6 +1170,18 @@ class Inventory:
         yielded = False
         while 1:
             best_armorset = self.get_best_armorset()
+
+            # hypothesis: filling empty armor slots with unambiguous mundane armor is worth the small curse risk because fragile starters otherwise leave useful protection unworn indefinitely.
+            unknown_armorset = self.get_best_armorset(allow_unknown_status=True)
+            for slot, name in [(O.ARM_SHIELD, 'off_hand'), (O.ARM_HELM, 'helm'), (O.ARM_GLOVES, 'gloves'),
+                               (O.ARM_BOOTS, 'boots'), (O.ARM_SHIRT, 'shirt'), (O.ARM_SUIT, 'suit'),
+                               (O.ARM_CLOAK, 'cloak')]:
+                candidate = unknown_armorset[slot]
+                if best_armorset[slot] is None and getattr(self.items, name) is None and \
+                        candidate is not None and candidate.status == Item.UNKNOWN and \
+                        candidate.object.mgc == 0 and not \
+                        (slot == O.ARM_SHIELD and self.agent.character.role == Character.SAMURAI):
+                    best_armorset[slot] = candidate
 
             # TODO: twoweapon
             for slot, name in [(O.ARM_SHIELD, 'off_hand'), (O.ARM_HELM, 'helm'), (O.ARM_GLOVES, 'gloves'),
