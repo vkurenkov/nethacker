@@ -1417,6 +1417,18 @@ class Agent:
     @Strategy.wrap
     def emergency_strategy(self):
 
+        # hypothesis: curing the visible Stone condition with a lizard corpse or timely prayer preserves progressed games that otherwise end in delayed cockatrice petrification.
+        if self.character.prop.stoning:
+            lizard_corpses = [item for item in flatten_items(self.inventory.items) + self.inventory.items_below_me
+                              if item.is_corpse() and item.monster_id == MON.id_from_name('lizard')]
+            if lizard_corpses or self.is_safe_to_pray():
+                yield True
+                if lizard_corpses:
+                    self.inventory.eat(lizard_corpses[0])
+                else:
+                    self.pray()
+                return
+
         # hypothesis: turning one of the Tourist's two extra-healing potions into at least 2 maximum HP at the initial 10/10 health improves fragile early survival while preserving the other potion for emergencies.
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name == 'extra healing' and

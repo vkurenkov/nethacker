@@ -1163,9 +1163,7 @@ class Inventory:
     def wear_best_stuff(self):
         yielded = False
         while 1:
-            # hypothesis: a fragile Tourist benefits more from immediately wearing found armor than from waiting for rare BUC identification, since even a cursed suit usually supplies the AC needed to survive level-one farming.
-            best_armorset = self.get_best_armorset(
-                allow_unknown_status=self.agent.character.role == Character.TOURIST)
+            best_armorset = self.get_best_armorset()
 
             # TODO: twoweapon
             for slot, name in [(O.ARM_SHIELD, 'off_hand'), (O.ARM_HELM, 'helm'), (O.ARM_GLOVES, 'gloves'),
