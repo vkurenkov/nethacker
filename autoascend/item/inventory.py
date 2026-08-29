@@ -762,13 +762,9 @@ class Inventory:
             wielded_melee_weapon = None
             if not allow_wielded_melee:
                 wielded_melee_weapon = self.items.main_hand
-            # hypothesis: below the 8-HP emergency floor, throwing one projectile from a stacked fallback weapon is safer than conserving the whole stack while a fragile character is being chased.
             valid_combinations.extend([(None, i) for i in items
                                        if i.is_thrown_projectile()
-                                       and (i != best_melee_weapon or
-                                            (i.count > 1 and self.agent.blstats.hitpoints <= 8))
-                                       and (i != wielded_melee_weapon or
-                                            (i.count > 1 and self.agent.blstats.hitpoints <= 8))])
+                                       and i != best_melee_weapon and i != wielded_melee_weapon])
 
         return valid_combinations
 
@@ -1022,9 +1018,7 @@ class Inventory:
             yield False  # TODO: only for handless monsters (which cannot write)
 
         self.skip_engrave_counter -= 1
-        # hypothesis: deferring unknown-wand engraving below 21 HP prevents cursed-wand backfires from one-shotting fragile starters while preserving identification after they recover.
-        if self.agent.character.prop.blind or self.skip_engrave_counter > 0 or \
-                self.agent.blstats.hitpoints <= 20:
+        if self.agent.character.prop.blind or self.skip_engrave_counter > 0:
             yield False
             return
         yielded = False
@@ -1170,18 +1164,6 @@ class Inventory:
         yielded = False
         while 1:
             best_armorset = self.get_best_armorset()
-
-            # hypothesis: filling empty armor slots with unambiguous mundane armor is worth the small curse risk because fragile starters otherwise leave useful protection unworn indefinitely.
-            unknown_armorset = self.get_best_armorset(allow_unknown_status=True)
-            for slot, name in [(O.ARM_SHIELD, 'off_hand'), (O.ARM_HELM, 'helm'), (O.ARM_GLOVES, 'gloves'),
-                               (O.ARM_BOOTS, 'boots'), (O.ARM_SHIRT, 'shirt'), (O.ARM_SUIT, 'suit'),
-                               (O.ARM_CLOAK, 'cloak')]:
-                candidate = unknown_armorset[slot]
-                if best_armorset[slot] is None and getattr(self.items, name) is None and \
-                        candidate is not None and candidate.status == Item.UNKNOWN and \
-                        candidate.object.mgc == 0 and not \
-                        (slot == O.ARM_SHIELD and self.agent.character.role == Character.SAMURAI):
-                    best_armorset[slot] = candidate
 
             # TODO: twoweapon
             for slot, name in [(O.ARM_SHIELD, 'off_hand'), (O.ARM_HELM, 'helm'), (O.ARM_GLOVES, 'gloves'),
