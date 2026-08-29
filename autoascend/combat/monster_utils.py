@@ -9,8 +9,7 @@ WEIRD_MONSTERS = ['leprechaun', 'nymph']
 def is_monster_faster(agent, monster):
     _, y, x, mon, _ = monster
     # TOOD: implement properly
-    # hypothesis: recognizing hostile unicorns as both fast and dangerous makes the bot use emergency defenses instead of approaching them healthy and futilely kiting them when hurt.
-    return 'unicorn' in mon.mname or 'bat' in mon.mname or 'dog' in mon.mname or 'cat' in mon.mname \
+    return 'bat' in mon.mname or 'dog' in mon.mname or 'cat' in mon.mname \
            or 'kitten' in mon.mname or 'pony' in mon.mname or 'horse' in mon.mname \
            or 'bee' in mon.mname or 'fox' in mon.mname
 
@@ -18,8 +17,7 @@ def is_monster_faster(agent, monster):
 def imminent_death_on_melee(agent, monster):
     if is_dangerous_monster(monster):
         return agent.blstats.hitpoints <= 16
-    # hypothesis: a 12-HP melee safety floor lets fragile characters kite with ranged weapons before one more hit becomes fatal.
-    return agent.blstats.hitpoints <= 12
+    return agent.blstats.hitpoints <= 8
 
 
 def is_dangerous_monster(monster):
@@ -29,8 +27,11 @@ def is_dangerous_monster(monster):
     # 'mumak' in mon.mname or 'orc' in mon.mname or 'rothe' in mon.mname \
     # or 'were' in mon.mname or 'unicorn' in mon.mname or 'elf' in mon.mname or 'leocrotta' in mon.mname \
     # or 'mimic' in mon.mname
-    return is_pet or 'unicorn' in mon.mname or mon.mname in INSECTS
+    return is_pet or mon.mname in INSECTS
 
 
 def consider_melee_only_ranged_if_hp_full(agent, monster):
-    return monster[3].mname in ('brown mold', 'blue jelly') and agent.blstats.hitpoints == agent.blstats.max_hitpoints
+    # hypothesis: keeping fragile ranged starters out of brown-mold melee avoids lethal cold retaliation during level-one farming.
+    ranged_starter = agent.character.role in (agent.character.SAMURAI, agent.character.TOURIST)
+    return agent.blstats.hitpoints == agent.blstats.max_hitpoints and \
+        (monster[3].mname == 'blue jelly' or (monster[3].mname == 'brown mold' and not ranged_starter))
