@@ -1400,25 +1400,6 @@ class Agent:
         low_hp = hp_ratio < 0.5 and (self.blstats.max_hitpoints - self.blstats.hitpoints > 25)
         return self.blstats.energy >= 15 and low_hp
 
-    @utils.debug_log('recover_health')
-    @Strategy.wrap
-    def recover_health(self):
-        # hypothesis: after leaving dungeon level one, recovering moderate injuries only to two-thirds health adds reserve for stronger encounters without disrupting food-intensive first-level farming.
-        badly_hurt = self.blstats.hitpoints * 2 < self.blstats.max_hitpoints
-        moderately_hurt = (
-                self.blstats.depth > 1 and
-                self.inventory.items.total_nutrition() > 0 and
-                self.blstats.hitpoints * 3 < self.blstats.max_hitpoints * 2)
-        if not (badly_hurt or moderately_hurt) or \
-                self.blstats.hunger_state >= Hunger.HUNGRY or self.get_visible_monsters():
-            yield False
-
-        yield True
-        target_health_ratio = 0.8 if badly_hurt else 2 / 3
-        while self.blstats.hitpoints < target_health_ratio * self.blstats.max_hitpoints and \
-                self.blstats.hunger_state < Hunger.HUNGRY and not self.get_visible_monsters():
-            self.direction('.')
-
     @utils.debug_log('emergency_strategy')
     @Strategy.wrap
     def emergency_strategy(self):
@@ -1489,7 +1470,11 @@ class Agent:
     def eat_from_inventory(self):
         if self.blstats.hunger_state < Hunger.HUNGRY:
             yield False
-        for item in flatten_items(self.inventory.items):
+        foods = list(flatten_items(self.inventory.items))
+        # hypothesis: trying ordinary food before an unknown tin avoids needless cockatrice or rotten meat risk without withholding a tin when it is the only nutrition available.
+        foods.sort(key=lambda item: item.objs[0].name == 'tin' and
+                    item.monster_id is None and 'spinach' not in (item.text or ''))
+        for item in foods:
             if item.category == nh.FOOD_CLASS and \
                     item.objs[0].name != 'sprig of wolfsbane' and \
                     (not item.is_corpse() or
