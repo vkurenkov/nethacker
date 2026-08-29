@@ -762,9 +762,13 @@ class Inventory:
             wielded_melee_weapon = None
             if not allow_wielded_melee:
                 wielded_melee_weapon = self.items.main_hand
+            # hypothesis: below the 8-HP emergency floor, throwing one projectile from a stacked fallback weapon is safer than conserving the whole stack while a fragile character is being chased.
             valid_combinations.extend([(None, i) for i in items
                                        if i.is_thrown_projectile()
-                                       and i != best_melee_weapon and i != wielded_melee_weapon])
+                                       and (i != best_melee_weapon or
+                                            (i.count > 1 and self.agent.blstats.hitpoints <= 8))
+                                       and (i != wielded_melee_weapon or
+                                            (i.count > 1 and self.agent.blstats.hitpoints <= 8))])
 
         return valid_combinations
 
@@ -1164,11 +1168,18 @@ class Inventory:
         yielded = False
         while 1:
             best_armorset = self.get_best_armorset()
+            unknown_armorset = self.get_best_armorset(allow_unknown_status=True)
 
             # TODO: twoweapon
             for slot, name in [(O.ARM_SHIELD, 'off_hand'), (O.ARM_HELM, 'helm'), (O.ARM_GLOVES, 'gloves'),
                                (O.ARM_BOOTS, 'boots'), (O.ARM_SHIRT, 'shirt'), (O.ARM_SUIT, 'suit'),
                                (O.ARM_CLOAK, 'cloak')]:
+                # hypothesis: filling an empty armor slot with identity-known mundane armor gains immediate AC, while limiting unknown BUC risk by never replacing trusted equipment.
+                unknown_shield_blocks_launcher = slot == O.ARM_SHIELD and any(
+                    item.is_launcher() for item in flatten_items(self.items))
+                if best_armorset[slot] is None and getattr(self.items, name) is None and \
+                        not unknown_shield_blocks_launcher:
+                    best_armorset[slot] = unknown_armorset[slot]
                 if best_armorset[slot] == getattr(self.items, name) or \
                         (getattr(self.items, name) is not None and getattr(self.items, name).status == Item.CURSED):
                     continue

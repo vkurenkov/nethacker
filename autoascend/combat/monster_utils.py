@@ -15,9 +15,6 @@ def is_monster_faster(agent, monster):
 
 
 def imminent_death_on_melee(agent, monster):
-    # hypothesis: treating chickatrice and cockatrice contact as potentially fatal makes the existing combat heuristic kite these slow threats while retaining melee as a trapped fallback.
-    if monster[3].mname in ('chickatrice', 'cockatrice'):
-        return True
     if is_dangerous_monster(monster):
         return agent.blstats.hitpoints <= 16
     # hypothesis: a 12-HP melee safety floor lets fragile characters kite with ranged weapons before one more hit becomes fatal.
