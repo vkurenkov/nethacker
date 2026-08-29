@@ -575,8 +575,9 @@ class GlobalLogic:
                         self.identify_items_on_altar().condition(
                             lambda: self.agent.current_level().objects[self.agent.blstats.y,
                                                                        self.agent.blstats.x] in G.ALTAR),
+                        # hypothesis: allowing lawful long-sword users to seek Excalibur at its real XL5 threshold gives fragile XL5-6 Valkyries the artifact before their common early deaths instead of withholding it until XL7.
                         self.dip_for_excalibur().condition(
-                            lambda: self.agent.blstats.experience_level >= 7).every(10),
+                            lambda: self.agent.blstats.experience_level >= 5).every(10),
                     ])
                 )
 
@@ -587,7 +588,7 @@ class GlobalLogic:
                         self.agent.exploration.go_to_strategy(y, x).preempt(self.agent, [
                             self.agent.inventory.gather_items(),
                             self.identify_items_on_altar(),
-                            self.dip_for_excalibur().condition(lambda: self.agent.blstats.experience_level >= 7),
+                            self.dip_for_excalibur().condition(lambda: self.agent.blstats.experience_level >= 5),
                         ])
                         .condition(lambda: self._got_artifact or
                                            not any([alignment == self.agent.character.alignment
@@ -639,6 +640,9 @@ class GlobalLogic:
             ])
             .preempt(self.agent, [
                 self.agent.fight2(),
+            ])
+            .preempt(self.agent, [
+                self.agent.recover_health(),
             ])
             .preempt(self.agent, [
                 self.agent.engulfed_fight(),
