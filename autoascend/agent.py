@@ -1400,6 +1400,19 @@ class Agent:
         low_hp = hp_ratio < 0.5 and (self.blstats.max_hitpoints - self.blstats.hitpoints > 25)
         return self.blstats.energy >= 15 and low_hp
 
+    @utils.debug_log('recover_health')
+    @Strategy.wrap
+    def recover_health(self):
+        # hypothesis: resting below two-thirds health while well-fed and no hostile is visible prevents fragile characters from carrying combat damage into the next room without worsening hunger emergencies.
+        if self.blstats.hitpoints * 3 >= self.blstats.max_hitpoints * 2 or \
+                self.blstats.hunger_state >= Hunger.HUNGRY or self.get_visible_monsters():
+            yield False
+
+        yield True
+        while self.blstats.hitpoints < 0.8 * self.blstats.max_hitpoints and \
+                self.blstats.hunger_state < Hunger.HUNGRY and not self.get_visible_monsters():
+            self.direction('.')
+
     @utils.debug_log('emergency_strategy')
     @Strategy.wrap
     def emergency_strategy(self):
@@ -1470,11 +1483,7 @@ class Agent:
     def eat_from_inventory(self):
         if self.blstats.hunger_state < Hunger.HUNGRY:
             yield False
-        foods = list(flatten_items(self.inventory.items))
-        # hypothesis: trying ordinary food before an unknown tin avoids needless cockatrice or rotten meat risk without withholding a tin when it is the only nutrition available.
-        foods.sort(key=lambda item: item.objs[0].name == 'tin' and
-                    item.monster_id is None and 'spinach' not in (item.text or ''))
-        for item in foods:
+        for item in flatten_items(self.inventory.items):
             if item.category == nh.FOOD_CLASS and \
                     item.objs[0].name != 'sprig of wolfsbane' and \
                     (not item.is_corpse() or

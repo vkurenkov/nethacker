@@ -762,13 +762,9 @@ class Inventory:
             wielded_melee_weapon = None
             if not allow_wielded_melee:
                 wielded_melee_weapon = self.items.main_hand
-            # hypothesis: below the 8-HP emergency floor, throwing one projectile from a stacked fallback weapon is safer than conserving the whole stack while a fragile character is being chased.
             valid_combinations.extend([(None, i) for i in items
                                        if i.is_thrown_projectile()
-                                       and (i != best_melee_weapon or
-                                            (i.count > 1 and self.agent.blstats.hitpoints <= 8))
-                                       and (i != wielded_melee_weapon or
-                                            (i.count > 1 and self.agent.blstats.hitpoints <= 8))])
+                                       and i != best_melee_weapon and i != wielded_melee_weapon])
 
         return valid_combinations
 
