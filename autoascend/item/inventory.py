@@ -1164,14 +1164,6 @@ class Inventory:
         yielded = False
         while 1:
             best_armorset = self.get_best_armorset()
-            unknown_armorset = self.get_best_armorset(allow_unknown_status=True)
-
-            # hypothesis: filling empty accessory armor slots with unambiguous unknown-BUC armor gives fragile starters early AC without risking their body armor or ranged-compatible hands.
-            for slot, name in [(O.ARM_HELM, 'helm'), (O.ARM_GLOVES, 'gloves'),
-                               (O.ARM_BOOTS, 'boots'), (O.ARM_CLOAK, 'cloak')]:
-                equipped = getattr(self.items, name)
-                if best_armorset[slot] is None and (equipped is None or equipped.status == Item.UNKNOWN):
-                    best_armorset[slot] = unknown_armorset[slot]
 
             # TODO: twoweapon
             for slot, name in [(O.ARM_SHIELD, 'off_hand'), (O.ARM_HELM, 'helm'), (O.ARM_GLOVES, 'gloves'),
