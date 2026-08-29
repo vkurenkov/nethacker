@@ -9,10 +9,9 @@ WEIRD_MONSTERS = ['leprechaun', 'nymph']
 def is_monster_faster(agent, monster):
     _, y, x, mon, _ = monster
     # TOOD: implement properly
-    # hypothesis: recognizing ants as fast lets fragile characters use fast-threat escape behavior instead of trying to kite soldier ants that can immediately close the gap.
     return 'bat' in mon.mname or 'dog' in mon.mname or 'cat' in mon.mname \
            or 'kitten' in mon.mname or 'pony' in mon.mname or 'horse' in mon.mname \
-           or 'bee' in mon.mname or 'ant' in mon.mname or 'fox' in mon.mname
+           or 'bee' in mon.mname or 'fox' in mon.mname
 
 
 def imminent_death_on_melee(agent, monster):
