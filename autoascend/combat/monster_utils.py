@@ -8,15 +8,16 @@ WEIRD_MONSTERS = ['leprechaun', 'nymph']
 
 def is_monster_faster(agent, monster):
     _, y, x, mon, _ = monster
-    # hypothesis: using monster movement rate instead of a name whitelist makes fragile characters stand and defend against fast ants and quasits that would otherwise catch a retreat and receive free attacks.
-    return mon.mmove > 12
+    # TOOD: implement properly
+    return 'bat' in mon.mname or 'dog' in mon.mname or 'cat' in mon.mname \
+           or 'kitten' in mon.mname or 'pony' in mon.mname or 'horse' in mon.mname \
+           or 'bee' in mon.mname or 'fox' in mon.mname
 
 
 def imminent_death_on_melee(agent, monster):
     if is_dangerous_monster(monster):
         return agent.blstats.hitpoints <= 16
-    # hypothesis: a 12-HP melee safety floor lets fragile characters kite with ranged weapons before one more hit becomes fatal.
-    return agent.blstats.hitpoints <= 12
+    return agent.blstats.hitpoints <= 8
 
 
 def is_dangerous_monster(monster):
@@ -24,11 +25,13 @@ def is_dangerous_monster(monster):
     is_pet = 'dog' in mon.mname or 'cat' in mon.mname or 'kitten' in mon.mname or 'pony' in mon.mname \
              or 'horse' in mon.mname
     # 'mumak' in mon.mname or 'orc' in mon.mname or 'rothe' in mon.mname \
-    # or 'were' in mon.mname or 'elf' in mon.mname or 'leocrotta' in mon.mname \
+    # or 'were' in mon.mname or 'unicorn' in mon.mname or 'elf' in mon.mname or 'leocrotta' in mon.mname \
     # or 'mimic' in mon.mname
-    # hypothesis: classifying unicorns as dangerous makes fragile characters preserve distance and use escape resources before their fast, high-damage attacks become fatal.
-    return is_pet or mon.mname in INSECTS or 'unicorn' in mon.mname
+    return is_pet or mon.mname in INSECTS
 
 
 def consider_melee_only_ranged_if_hp_full(agent, monster):
-    return monster[3].mname in ('brown mold', 'blue jelly') and agent.blstats.hitpoints == agent.blstats.max_hitpoints
+    # hypothesis: keeping fragile ranged starters out of brown-mold melee avoids lethal cold retaliation during level-one farming.
+    ranged_starter = agent.character.role in (agent.character.SAMURAI, agent.character.TOURIST)
+    return agent.blstats.hitpoints == agent.blstats.max_hitpoints and \
+        (monster[3].mname == 'blue jelly' or (monster[3].mname == 'brown mold' and not ranged_starter))
