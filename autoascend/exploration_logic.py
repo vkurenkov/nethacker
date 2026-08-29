@@ -198,6 +198,9 @@ class ExplorationLogic:
 
     @Strategy.wrap
     def search_neighbors_for_traps(self, offset=0):
+        # hypothesis: one extra trap search for XL1 Tourists reduces lethal early dart and trapdoor surprises while avoiding the hunger cost once they have gained a level.
+        if self.agent.character.role == Character.TOURIST and self.agent.blstats.experience_level == 1:
+            offset += 1
         search_count = 0
         level = self.agent.current_level()
         for y, x in self.agent.neighbors(self.agent.blstats.y, self.agent.blstats.x, shuffle=False):
