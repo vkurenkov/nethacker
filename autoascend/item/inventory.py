@@ -762,13 +762,9 @@ class Inventory:
             wielded_melee_weapon = None
             if not allow_wielded_melee:
                 wielded_melee_weapon = self.items.main_hand
-            # hypothesis: below the 8-HP emergency floor, throwing one projectile from a stacked fallback weapon is safer than conserving the whole stack while a fragile character is being chased.
             valid_combinations.extend([(None, i) for i in items
                                        if i.is_thrown_projectile()
-                                       and (i != best_melee_weapon or
-                                            (i.count > 1 and self.agent.blstats.hitpoints <= 8))
-                                       and (i != wielded_melee_weapon or
-                                            (i.count > 1 and self.agent.blstats.hitpoints <= 8))])
+                                       and i != best_melee_weapon and i != wielded_melee_weapon])
 
         return valid_combinations
 
@@ -1168,6 +1164,14 @@ class Inventory:
         yielded = False
         while 1:
             best_armorset = self.get_best_armorset()
+            unknown_armorset = self.get_best_armorset(allow_unknown_status=True)
+
+            # hypothesis: filling empty accessory armor slots with unambiguous unknown-BUC armor gives fragile starters early AC without risking their body armor or ranged-compatible hands.
+            for slot, name in [(O.ARM_HELM, 'helm'), (O.ARM_GLOVES, 'gloves'),
+                               (O.ARM_BOOTS, 'boots'), (O.ARM_CLOAK, 'cloak')]:
+                equipped = getattr(self.items, name)
+                if best_armorset[slot] is None and (equipped is None or equipped.status == Item.UNKNOWN):
+                    best_armorset[slot] = unknown_armorset[slot]
 
             # TODO: twoweapon
             for slot, name in [(O.ARM_SHIELD, 'off_hand'), (O.ARM_HELM, 'helm'), (O.ARM_GLOVES, 'gloves'),
