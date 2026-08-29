@@ -1164,9 +1164,6 @@ class Inventory:
         yielded = False
         while 1:
             best_armorset = self.get_best_armorset()
-            # hypothesis: wear-testing an unknown body suit when the slot is empty gives unarmored Tourists substantial early AC without risking hazardous unknown boots, helms, or replacement of known armor.
-            if self.items.suit is None:
-                best_armorset[O.ARM_SUIT] = self.get_best_armorset(allow_unknown_status=True)[O.ARM_SUIT]
 
             # TODO: twoweapon
             for slot, name in [(O.ARM_SHIELD, 'off_hand'), (O.ARM_HELM, 'helm'), (O.ARM_GLOVES, 'gloves'),
