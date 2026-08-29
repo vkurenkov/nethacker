@@ -8,8 +8,10 @@ WEIRD_MONSTERS = ['leprechaun', 'nymph']
 
 def is_monster_faster(agent, monster):
     _, y, x, mon, _ = monster
-    # hypothesis: using monster movement rate instead of a partial name list prevents futile retreats that give omitted fast monsters free attacks.
-    return mon.mmove > 12
+    # TOOD: implement properly
+    return 'bat' in mon.mname or 'dog' in mon.mname or 'cat' in mon.mname \
+           or 'kitten' in mon.mname or 'pony' in mon.mname or 'horse' in mon.mname \
+           or 'bee' in mon.mname or 'fox' in mon.mname
 
 
 def imminent_death_on_melee(agent, monster):
