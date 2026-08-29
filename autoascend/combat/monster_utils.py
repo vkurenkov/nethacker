@@ -8,10 +8,8 @@ WEIRD_MONSTERS = ['leprechaun', 'nymph']
 
 def is_monster_faster(agent, monster):
     _, y, x, mon, _ = monster
-    # TOOD: implement properly
-    return 'bat' in mon.mname or 'dog' in mon.mname or 'cat' in mon.mname \
-           or 'kitten' in mon.mname or 'pony' in mon.mname or 'horse' in mon.mname \
-           or 'bee' in mon.mname or 'fox' in mon.mname
+    # hypothesis: using monster movement rate instead of a name whitelist makes fragile characters stand and defend against fast ants and quasits that would otherwise catch a retreat and receive free attacks.
+    return mon.mmove > 12
 
 
 def imminent_death_on_melee(agent, monster):
