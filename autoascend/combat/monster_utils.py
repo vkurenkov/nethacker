@@ -15,10 +15,12 @@ def is_monster_faster(agent, monster):
 
 
 def imminent_death_on_melee(agent, monster):
+    _, _, _, mon, _ = monster
+    # hypothesis: scaling the retreat threshold with monster difficulty makes fragile characters kite high-damage multiattack threats without wasting turns fleeing trivial enemies.
+    danger_threshold = max(8, min(20, 2 * getattr(mon, 'difficulty', 0) + 4))
     if is_dangerous_monster(monster):
-        return agent.blstats.hitpoints <= 16
-    # hypothesis: a 12-HP melee safety floor lets fragile characters kite with ranged weapons before one more hit becomes fatal.
-    return agent.blstats.hitpoints <= 12
+        danger_threshold = max(danger_threshold, 16)
+    return agent.blstats.hitpoints <= danger_threshold
 
 
 def is_dangerous_monster(monster):
@@ -32,4 +34,7 @@ def is_dangerous_monster(monster):
 
 
 def consider_melee_only_ranged_if_hp_full(agent, monster):
-    return monster[3].mname in ('brown mold', 'blue jelly') and agent.blstats.hitpoints == agent.blstats.max_hitpoints
+    # hypothesis: keeping fragile ranged starters out of brown-mold melee avoids lethal cold retaliation during level-one farming.
+    ranged_starter = agent.character.role in (agent.character.SAMURAI, agent.character.TOURIST)
+    return agent.blstats.hitpoints == agent.blstats.max_hitpoints and \
+        (monster[3].mname == 'blue jelly' or (monster[3].mname == 'brown mold' and not ranged_starter))
