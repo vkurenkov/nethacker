@@ -1208,6 +1208,8 @@ class Inventory:
     @Strategy.wrap
     def check_items(self):
         mask = utils.isin(self.agent.glyphs, G.OBJECTS, G.BODIES, G.STATUES)
+        # hypothesis: excluding shop merchandise from the inspection pass avoids deliberately awakening mimics in stores the bot cannot buy from, while preserving all collectible dungeon loot.
+        mask &= ~self.agent.current_level().shop_interior
         if not mask.any():
             yield False
 
