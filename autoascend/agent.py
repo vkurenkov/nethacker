@@ -1417,12 +1417,6 @@ class Agent:
     @Strategy.wrap
     def emergency_strategy(self):
 
-        # hypothesis: praying on the first delayed-stoning warning cures cockatrice petrification before the remaining countdown expires, without spending prayer timeout in ordinary combat.
-        if 'You are slowing down.' in self.message and self.is_safe_to_pray():
-            yield True
-            self.pray()
-            return
-
         # hypothesis: turning one of the Tourist's two extra-healing potions into at least 2 maximum HP at the initial 10/10 health improves fragile early survival while preserving the other potion for emergencies.
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name == 'extra healing' and
