@@ -1302,8 +1302,8 @@ class Agent:
         if permonst.mflags2 & race_flag:
             return False
 
-        # corpse aging
-        if self.blstats.time - age_turn >= 50 and \
+        # hypothesis: rejecting delayed corpses after 30 turns prevents lethal rot poisoning while retaining fresh kills and reliably preserved lichen/lizard corpses for nutrition.
+        if self.blstats.time - age_turn >= 30 and \
                 monster_id not in [MON.id_from_name('lizard'), MON.id_from_name('lichen')]:
             return False
 
@@ -1400,9 +1400,40 @@ class Agent:
         low_hp = hp_ratio < 0.5 and (self.blstats.max_hitpoints - self.blstats.hitpoints > 25)
         return self.blstats.energy >= 15 and low_hp
 
+    @utils.debug_log('recover_health')
+    @Strategy.wrap
+    def recover_health(self):
+        # hypothesis: after leaving dungeon level one, recovering moderate injuries only to two-thirds health adds reserve for stronger encounters without disrupting food-intensive first-level farming.
+        badly_hurt = self.blstats.hitpoints * 2 < self.blstats.max_hitpoints
+        moderately_hurt = (
+                self.blstats.depth > 1 and
+                self.inventory.items.total_nutrition() > 0 and
+                self.blstats.hitpoints * 3 < self.blstats.max_hitpoints * 2)
+        if not (badly_hurt or moderately_hurt) or \
+                self.blstats.hunger_state >= Hunger.HUNGRY or self.get_visible_monsters():
+            yield False
+
+        yield True
+        target_health_ratio = 0.8 if badly_hurt else 2 / 3
+        while self.blstats.hitpoints < target_health_ratio * self.blstats.max_hitpoints and \
+                self.blstats.hunger_state < Hunger.HUNGRY and not self.get_visible_monsters():
+            self.direction('.')
+
     @utils.debug_log('emergency_strategy')
     @Strategy.wrap
     def emergency_strategy(self):
+
+        # hypothesis: turning one of the Tourist's two extra-healing potions into at least 2 maximum HP at the initial 10/10 health improves fragile early survival while preserving the other potion for emergencies.
+        items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
+                 item.category == nh.POTION_CLASS and item.object.name == 'extra healing' and
+                 item.status in [Item.UNCURSED, Item.BLESSED]]
+        if self.character.role == Character.TOURIST and \
+                self.blstats.hitpoints == self.blstats.max_hitpoints and \
+                self.blstats.max_hitpoints == 10 and items:
+            yield True
+            item = next((item for item in items if item.status == Item.BLESSED), items[0])
+            self.inventory.quaff(item)
+            return
 
         # if self.should_cast_extra_heal():
         #     yield True

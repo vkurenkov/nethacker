@@ -267,10 +267,8 @@ class ExplorationLogic:
             # TODO: polymorphed into a handless creature, too heavy load to kick, using lockpicks
 
             yielded = False
-            # hypothesis: respecting a "Closed for inventory" shop sign prevents an unwinnable shopkeeper fight while preserving ordinary locked-door exploration.
-            can_kick = kick_doors and 'closed for inventory' not in self.agent.inventory.engraving_below_me.lower()
             for py, px in self.agent.neighbors(self.agent.blstats.y, self.agent.blstats.x, diagonal=False):
-                if (self.agent.current_level().door_open_count[py, px] < door_open_count or can_kick) and \
+                if (self.agent.current_level().door_open_count[py, px] < door_open_count or kick_doors) and \
                         self.agent.glyphs[py, px] in G.DOOR_CLOSED:
                     if not yielded:
                         yielded = True
@@ -282,11 +280,11 @@ class ExplorationLogic:
                                     if self.agent.open_door(py, px):
                                         break
                                 else:
-                                    if can_kick:
+                                    if kick_doors:
                                         while self.agent.glyphs[py, px] in G.DOOR_CLOSED:
                                             self.agent.kick(py, px)
                             else:
-                                if can_kick:
+                                if kick_doors:
                                     while self.agent.glyphs[py, px] in G.DOOR_CLOSED:
                                         self.agent.kick(py, px)
                     break
