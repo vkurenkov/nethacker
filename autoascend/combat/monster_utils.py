@@ -1,5 +1,6 @@
 # heuristic monster types lists
-ONLY_RANGED_SLOW_MONSTERS = ['floating eye', 'blue jelly', 'brown mold', 'gas spore', 'acid blob']
+# hypothesis: giving spotted-jelly melee a five-HP recovery buffer prevents cumulative passive acid damage without creating an unkillable blocker.
+ONLY_RANGED_SLOW_MONSTERS = ['floating eye', 'blue jelly', 'brown mold', 'spotted jelly', 'gas spore', 'acid blob']
 EXPLODING_MONSTERS = ['yellow light', 'gas spore', 'flaming sphere', 'freezing sphere', 'shocking sphere']
 INSECTS = ['giant ant', 'killer bee', 'soldier ant', 'fire ant', 'giant beetle', 'queen bee']
 WEAK_MONSTERS = ['lichen', 'newt', 'shrieker', 'grid bug']
@@ -33,4 +34,6 @@ def is_dangerous_monster(monster):
 
 
 def consider_melee_only_ranged_if_hp_full(agent, monster):
+    if monster[3].mname == 'spotted jelly':
+        return agent.blstats.hitpoints >= agent.blstats.max_hitpoints - 5
     return monster[3].mname in ('brown mold', 'blue jelly') and agent.blstats.hitpoints == agent.blstats.max_hitpoints
