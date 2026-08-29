@@ -1208,9 +1208,6 @@ class Inventory:
     @Strategy.wrap
     def check_items(self):
         mask = utils.isin(self.agent.glyphs, G.OBJECTS, G.BODIES, G.STATUES)
-        # hypothesis: fragile Tourists gain more from avoiding no-loot shop mimic exposure than from inspecting merchandise they will not buy.
-        if self.agent.character.role == Character.TOURIST:
-            mask &= ~self.agent.current_level().shop_interior
         if not mask.any():
             yield False
 
@@ -1236,8 +1233,6 @@ class Inventory:
     @Strategy.wrap
     def go_to_unchecked_containers(self):
         mask = self.agent.current_level().item_count != 0
-        if self.agent.character.role == Character.TOURIST:
-            mask &= ~self.agent.current_level().shop_interior
         if not mask.any():
             yield False
 
