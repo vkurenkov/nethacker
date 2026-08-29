@@ -7,7 +7,8 @@ from scipy import signal
 from ..glyph import G
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
-    ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
+    imminent_death_on_melee, ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, INSECTS, WEAK_MONSTERS, \
+    consider_melee_only_ranged_if_hp_full
 from .movement_priority import draw_monster_priority_positive, draw_monster_priority_negative
 from .utils import wielding_ranged_weapon, line_dis_from, inside
 
@@ -15,7 +16,7 @@ from .utils import wielding_ranged_weapon, line_dis_from, inside
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
     ret = 1
-    if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
+    if not imminent_death_on_melee(agent, monster) or is_monster_faster(agent, monster):
         ret += 15
     if wielding_ranged_weapon(agent) and not is_monster_faster(agent, monster):
         ret -= 6
@@ -23,6 +24,11 @@ def melee_monster_priority(agent, monsters, monster):
         ret -= 17
     if 'were' in mon.mname:
         ret += 1
+    # hypothesis: when multiple fast insects are already adjacent, attacking the swarm prevents futile retreat moves from granting every bee or ant another attack.
+    if mon.mname in INSECTS and sum(
+            adjacent((agent.blstats.y, agent.blstats.x), (my, mx)) and other.mname in INSECTS
+            for _, my, mx, other, _ in monsters) >= 2:
+        ret += 8
     # if not wielding_melee_weapon(agent):
     #     ret -= 5
     if mon.mname in ONLY_RANGED_SLOW_MONSTERS:
@@ -192,6 +198,12 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
         if targeted_monsters:
             # priority = priority * (1 - player_hp_ratio) - 10
             priority = priority - 15
+            # hypothesis: spending an identified offensive wand on an adjacent combat-capable threat at critical HP prevents a single saved charge from becoming a lethal unused resource.
+            if (agent.blstats.hitpoints <= 12 or player_hp_ratio <= 0.3) and any(
+                    adjacent((agent.blstats.y, agent.blstats.x), (my, mx)) and
+                    monster[3].mname not in WEAK_MONSTERS + ONLY_RANGED_SLOW_MONSTERS
+                    for my, mx, monster in targeted_monsters):
+                priority += 25
             if agent.inventory.engraving_below_me.lower() == 'elbereth':
                 priority -= 100
             ret.append((priority, ('zap', dy, dx, item, targeted_monsters)))

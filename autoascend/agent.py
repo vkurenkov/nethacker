@@ -1302,8 +1302,8 @@ class Agent:
         if permonst.mflags2 & race_flag:
             return False
 
-        # corpse aging
-        if self.blstats.time - age_turn >= 50 and \
+        # hypothesis: rejecting delayed corpses after 30 turns prevents lethal rot poisoning while retaining fresh kills and reliably preserved lichen/lizard corpses for nutrition.
+        if self.blstats.time - age_turn >= 30 and \
                 monster_id not in [MON.id_from_name('lizard'), MON.id_from_name('lichen')]:
             return False
 
@@ -1404,6 +1404,18 @@ class Agent:
     @Strategy.wrap
     def emergency_strategy(self):
 
+        # hypothesis: turning one of the Tourist's two extra-healing potions into at least 2 maximum HP at the initial 10/10 health improves fragile early survival while preserving the other potion for emergencies.
+        items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
+                 item.category == nh.POTION_CLASS and item.object.name == 'extra healing' and
+                 item.status in [Item.UNCURSED, Item.BLESSED]]
+        if self.character.role == Character.TOURIST and \
+                self.blstats.hitpoints == self.blstats.max_hitpoints and \
+                self.blstats.max_hitpoints == 10 and items:
+            yield True
+            item = next((item for item in items if item.status == Item.BLESSED), items[0])
+            self.inventory.quaff(item)
+            return
+
         # if self.should_cast_extra_heal():
         #     yield True
         #     self.cast('extra healing', direction=(0, 0))
@@ -1458,7 +1470,11 @@ class Agent:
     def eat_from_inventory(self):
         if self.blstats.hunger_state < Hunger.HUNGRY:
             yield False
-        for item in flatten_items(self.inventory.items):
+        foods = list(flatten_items(self.inventory.items))
+        # hypothesis: trying ordinary food before an unknown tin avoids needless cockatrice or rotten meat risk without withholding a tin when it is the only nutrition available.
+        foods.sort(key=lambda item: item.objs[0].name == 'tin' and
+                    item.monster_id is None and 'spinach' not in (item.text or ''))
+        for item in foods:
             if item.category == nh.FOOD_CLASS and \
                     item.objs[0].name != 'sprig of wolfsbane' and \
                     (not item.is_corpse() or

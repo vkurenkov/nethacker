@@ -16,7 +16,6 @@ class MonsterTracker:
 
     def on_panic(self):
         self._last_glyphs = None
-        self._last_level_key = None
         self.peaceful_monster_mask = np.zeros((C.SIZE_Y, C.SIZE_X), bool)
         self.monster_mask = np.zeros((C.SIZE_Y, C.SIZE_X), bool)
 
@@ -54,12 +53,6 @@ class MonsterTracker:
         return new_monster_mask, pet_mask
 
     def update(self):
-        level_key = (self.agent.blstats.dungeon_number, self.agent.blstats.level_number)
-        # hypothesis: reclassifying monsters after a level transition prevents peaceful shopkeepers and aligned monsters from being attacked based on movement inferred from the previous level.
-        if level_key != self._last_level_key:
-            self._last_glyphs = None
-            self._last_level_key = level_key
-
         new_monster_mask, _ = self._get_current_masks()
 
         if self._last_glyphs is None:
