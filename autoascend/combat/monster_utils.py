@@ -25,8 +25,10 @@ def is_dangerous_monster(monster):
     _, y, x, mon, _ = monster
     is_pet = 'dog' in mon.mname or 'cat' in mon.mname or 'kitten' in mon.mname or 'pony' in mon.mname \
              or 'horse' in mon.mname
-    # hypothesis: treating NetHack difficulty-4 monsters as dangerous lets fragile builds spend escape resources on rabid rats, wererats, naga hatchlings, and stronger threats before those fights end an otherwise productive run.
-    return is_pet or mon.mname in INSECTS or getattr(mon, 'difficulty', 0) >= 4
+    # 'mumak' in mon.mname or 'orc' in mon.mname or 'rothe' in mon.mname \
+    # or 'were' in mon.mname or 'unicorn' in mon.mname or 'elf' in mon.mname or 'leocrotta' in mon.mname \
+    # or 'mimic' in mon.mname
+    return is_pet or mon.mname in INSECTS
 
 
 def consider_melee_only_ranged_if_hp_full(agent, monster):

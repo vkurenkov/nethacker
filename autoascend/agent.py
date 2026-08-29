@@ -1404,6 +1404,18 @@ class Agent:
     @Strategy.wrap
     def emergency_strategy(self):
 
+        # hypothesis: turning one of the Tourist's two extra-healing potions into at least 2 maximum HP at the initial 10/10 health improves fragile early survival while preserving the other potion for emergencies.
+        items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
+                 item.category == nh.POTION_CLASS and item.object.name == 'extra healing' and
+                 item.status in [Item.UNCURSED, Item.BLESSED]]
+        if self.character.role == Character.TOURIST and \
+                self.blstats.hitpoints == self.blstats.max_hitpoints and \
+                self.blstats.max_hitpoints == 10 and items:
+            yield True
+            item = next((item for item in items if item.status == Item.BLESSED), items[0])
+            self.inventory.quaff(item)
+            return
+
         # if self.should_cast_extra_heal():
         #     yield True
         #     self.cast('extra healing', direction=(0, 0))
@@ -1416,9 +1428,16 @@ class Agent:
 
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']]
+        # hypothesis: healing at the 12-HP melee danger floor when a nontrivial enemy is adjacent lets fragile starters survive the hit that otherwise lands before the old 8-HP emergency threshold.
+        adjacent_threat = self.blstats.hitpoints <= 12 and any(
+            utils.adjacent((self.blstats.y, self.blstats.x), (y, x)) and
+            mon.mname not in combat.monster_utils.WEAK_MONSTERS +
+            combat.monster_utils.ONLY_RANGED_SLOW_MONSTERS
+            for _, y, x, mon, _ in self.get_visible_monsters()
+        )
         if (
                 (self.blstats.hitpoints < 1 / 3 * self.blstats.max_hitpoints
-                 or self.blstats.hitpoints < 8) and items
+                 or self.blstats.hitpoints < 8 or adjacent_threat) and items
         ):
             yield True
             self.inventory.quaff(items[0])
