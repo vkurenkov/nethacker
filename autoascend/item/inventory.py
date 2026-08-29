@@ -762,12 +762,9 @@ class Inventory:
             wielded_melee_weapon = None
             if not allow_wielded_melee:
                 wielded_melee_weapon = self.items.main_hand
-            # hypothesis: allowing a multi-item best-melee stack to be thrown lets fragile Tourists use their
-            # starting darts without sacrificing their last melee weapon.
             valid_combinations.extend([(None, i) for i in items
                                        if i.is_thrown_projectile()
-                                       and (i != best_melee_weapon or i.count > 1)
-                                       and (i != wielded_melee_weapon or i.count > 1)])
+                                       and i != best_melee_weapon and i != wielded_melee_weapon])
 
         return valid_combinations
 
