@@ -7,7 +7,8 @@ from scipy import signal
 from ..glyph import G
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
-    ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
+    imminent_death_on_melee, ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, \
+    consider_melee_only_ranged_if_hp_full
 from .movement_priority import draw_monster_priority_positive, draw_monster_priority_negative
 from .utils import wielding_ranged_weapon, line_dis_from, inside
 
@@ -15,7 +16,7 @@ from .utils import wielding_ranged_weapon, line_dis_from, inside
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
     ret = 1
-    if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
+    if not imminent_death_on_melee(agent, monster) or is_monster_faster(agent, monster):
         ret += 15
     if wielding_ranged_weapon(agent) and not is_monster_faster(agent, monster):
         ret -= 6
@@ -203,12 +204,6 @@ def elbereth_action(agent, monsters):
         return []
     if not agent.can_engrave():
         return []
-    # hypothesis: engraving Elbereth as soon as an adjacent mimic is revealed lets fragile Tourists scare it off before its sticky point-blank fight drains their HP.
-    if agent.character.role == agent.character.TOURIST and \
-            any('mimic' in monster[3].mname and
-                adjacent((monster[1], monster[2]), (agent.blstats.y, agent.blstats.x))
-                for monster in monsters):
-        return [(40, ('elbereth',))]
     adj_monsters_count = 0
     for monster in monsters:
         _, my, mx, mon, _ = monster
