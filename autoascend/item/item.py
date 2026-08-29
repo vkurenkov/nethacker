@@ -215,8 +215,8 @@ class Item:
             return False
         if not self.is_ray_wand():
             return False
-        if self.uses == 'no charges':
-            # TODO: is it right ?
+        # hypothesis: recognizing the inventory's actual zero-charge notation prevents emergency combat from repeatedly zapping an empty wand instead of attacking or retreating.
+        if self.uses == 'no charge' or (self.uses is not None and self.uses.endswith(':0')):
             return False
         if self.objs[0] == O.from_name('sleep', nh.WAND_CLASS):
             return False

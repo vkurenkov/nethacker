@@ -81,10 +81,6 @@ class Property:
         return 'Blind' in bytes(self.agent.last_observation['tty_chars'][-1]).decode()
 
     @property
-    def stoning(self):
-        return bool(self.agent.blstats.prop_mask & nh.BL_MASK_STONE)
-
-    @property
     def polymorph(self):
         if not nh.glyph_is_monster(self.agent.glyphs[self.agent.blstats.y, self.agent.blstats.x]):
             return False
