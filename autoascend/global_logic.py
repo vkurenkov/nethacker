@@ -515,17 +515,8 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                # hypothesis: a fed Tourist with at least eight max HP per level and AC 1 can safely bank XL9 against level-one monsters, while hunger or weaker defenses should keep the original XL8 descent timing.
                 # hypothesis: a hungry, foodless Valkyrie is durable enough to trade an otherwise-certain level-one starvation for productive dungeon descent.
-                condition = lambda: (
-                    self.agent.blstats.experience_level >= 8 and (
-                        self.agent.character.role != Character.TOURIST or
-                        self.agent.blstats.experience_level >= 9 or
-                        self.agent.blstats.max_hitpoints < 8 * self.agent.blstats.experience_level or
-                        self.agent.blstats.armor_class > 1 or
-                        self.agent.blstats.hunger_state >= Hunger.HUNGRY
-                    )
-                ) or (
+                condition = lambda: self.agent.blstats.experience_level >= 8 or (
                     self.agent.character.role == Character.VALKYRIE and
                     self.agent.inventory.items.total_nutrition() == 0 and
                     self.agent.blstats.hunger_state >= Hunger.HUNGRY
@@ -584,8 +575,9 @@ class GlobalLogic:
                         self.identify_items_on_altar().condition(
                             lambda: self.agent.current_level().objects[self.agent.blstats.y,
                                                                        self.agent.blstats.x] in G.ALTAR),
+                        # hypothesis: attempting Excalibur as soon as its XL5 requirement is met gives weak lawful Valkyries its survival bonuses before the dangerous XL5-7 farming window.
                         self.dip_for_excalibur().condition(
-                            lambda: self.agent.blstats.experience_level >= 7).every(10),
+                            lambda: self.agent.blstats.experience_level >= 5).every(10),
                     ])
                 )
 
@@ -596,7 +588,7 @@ class GlobalLogic:
                         self.agent.exploration.go_to_strategy(y, x).preempt(self.agent, [
                             self.agent.inventory.gather_items(),
                             self.identify_items_on_altar(),
-                            self.dip_for_excalibur().condition(lambda: self.agent.blstats.experience_level >= 7),
+                            self.dip_for_excalibur().condition(lambda: self.agent.blstats.experience_level >= 5),
                         ])
                         .condition(lambda: self._got_artifact or
                                            not any([alignment == self.agent.character.alignment
