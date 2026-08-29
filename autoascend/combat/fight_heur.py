@@ -7,8 +7,8 @@ from scipy import signal
 from ..glyph import G
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
-    imminent_death_on_melee, ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, \
-    consider_melee_only_ranged_if_hp_full, INSECTS
+    imminent_death_on_melee, ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, INSECTS, WEAK_MONSTERS, \
+    consider_melee_only_ranged_if_hp_full
 from .movement_priority import draw_monster_priority_positive, draw_monster_priority_negative
 from .utils import wielding_ranged_weapon, line_dis_from, inside
 
@@ -24,6 +24,11 @@ def melee_monster_priority(agent, monsters, monster):
         ret -= 17
     if 'were' in mon.mname:
         ret += 1
+    # hypothesis: when multiple fast insects are already adjacent, attacking the swarm prevents futile retreat moves from granting every bee or ant another attack.
+    if mon.mname in INSECTS and sum(
+            adjacent((agent.blstats.y, agent.blstats.x), (my, mx)) and other.mname in INSECTS
+            for _, my, mx, other, _ in monsters) >= 2:
+        ret += 8
     # if not wielding_melee_weapon(agent):
     #     ret -= 5
     if mon.mname in ONLY_RANGED_SLOW_MONSTERS:
@@ -325,10 +330,7 @@ def get_priorities(agent):
         draw_monster_priority_negative(agent, m, priority, walkable)
     priority[~walkable] = float('nan')
 
-    # hypothesis: preferring corridor tiles as soon as a pack insect is visible prevents weak characters from being surrounded before adjacency makes retreat ineffective.
-    if any(monster[3].mname in INSECTS for monster in monsters):
-        priority += 4 * get_corridors_priority_map(walkable)
-    # TODO: figure out how to use corridors priority for other monster groups
+    # TODO: figure out how to use corridors priority so that it improves the score
     # if len([m for m in monsters if m[3].mname not in chain(ONLY_RANGED_SLOW_MONSTERS, WEAK_MONSTERS)]) >= 4:
     #     priority += get_corridors_priority_map(walkable)
     # for _, _, _, mon, _ in monsters:
