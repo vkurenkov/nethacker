@@ -1416,9 +1416,14 @@ class Agent:
 
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']]
+        # hypothesis: quaffing a known healing potion at 12 HP while a hostile is within two steps prevents fragile characters from dying before the old sub-8-HP emergency threshold, without wasting healing during safe recovery.
+        nearby_hostile = any(max(abs(monster[1] - self.blstats.y), abs(monster[2] - self.blstats.x)) <= 2
+                             for monster in self.get_visible_monsters())
         if (
                 (self.blstats.hitpoints < 1 / 3 * self.blstats.max_hitpoints
-                 or self.blstats.hitpoints < 8) and items
+                 or self.blstats.hitpoints < 8
+                 or (nearby_hostile and self.blstats.hitpoints <= 12 and
+                     self.blstats.hitpoints < self.blstats.max_hitpoints)) and items
         ):
             yield True
             self.inventory.quaff(items[0])
