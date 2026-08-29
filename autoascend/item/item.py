@@ -211,13 +211,16 @@ class Item:
         assert item.is_wand()
 
     def is_offensive_usable_wand(self):
+        if len(self.objs) != 1:
+            return False
         if not self.is_ray_wand():
             return False
         if self.uses == 'no charges':
             # TODO: is it right ?
             return False
-        # hypothesis: using a wand known to be death-or-sleep gives fragile characters a safe answer to dangerous monsters without waiting for exact identification.
-        if O.from_name('digging', nh.WAND_CLASS) in self.objs:
+        if self.objs[0] == O.from_name('sleep', nh.WAND_CLASS):
+            return False
+        if self.objs[0] == O.from_name('digging', nh.WAND_CLASS):
             return False
         return True
 
