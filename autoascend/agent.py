@@ -1417,6 +1417,12 @@ class Agent:
     @Strategy.wrap
     def emergency_strategy(self):
 
+        # hypothesis: attempting prayer immediately during the fatal stoning countdown is worthwhile even inside the conservative prayer cooldown, while leaving ordinary combat unchanged.
+        if self.blstats.prop_mask & nh.BL_MASK_STONE:
+            yield True
+            self.pray()
+            return
+
         # hypothesis: turning one of the Tourist's two extra-healing potions into at least 2 maximum HP at the initial 10/10 health improves fragile early survival while preserving the other potion for emergencies.
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name == 'extra healing' and
