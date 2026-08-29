@@ -764,10 +764,7 @@ class Inventory:
                 wielded_melee_weapon = self.items.main_hand
             valid_combinations.extend([(None, i) for i in items
                                        if i.is_thrown_projectile()
-                                       # hypothesis: reserving only the last copy of a melee-worthy projectile lets
-                                       # stack-wielding Tourists keep using their trained darts at range.
-                                       and (i != best_melee_weapon or i.count > 1)
-                                       and (i != wielded_melee_weapon or i.count > 1)])
+                                       and i != best_melee_weapon and i != wielded_melee_weapon])
 
         return valid_combinations
 
