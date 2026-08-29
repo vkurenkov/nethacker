@@ -1302,8 +1302,8 @@ class Agent:
         if permonst.mflags2 & race_flag:
             return False
 
-        # corpse aging
-        if self.blstats.time - age_turn >= 50 and \
+        # hypothesis: rejecting delayed corpses after 30 turns prevents lethal rot poisoning while retaining fresh kills and reliably preserved lichen/lizard corpses for nutrition.
+        if self.blstats.time - age_turn >= 30 and \
                 monster_id not in [MON.id_from_name('lizard'), MON.id_from_name('lichen')]:
             return False
 
@@ -1404,15 +1404,6 @@ class Agent:
     @Strategy.wrap
     def emergency_strategy(self):
 
-        extra_healing = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
-                         item.category == nh.POTION_CLASS and item.object.name == 'extra healing']
-        # hypothesis: converting one of a Tourist's two starting extra-healing potions into permanent max HP at full health improves fragile early survival while retaining one emergency heal.
-        if self.character.role == Character.TOURIST and self.blstats.hitpoints == self.blstats.max_hitpoints and \
-                sum(item.count for item in extra_healing) >= 2:
-            yield True
-            self.inventory.quaff(extra_healing[0])
-            return
-
         # if self.should_cast_extra_heal():
         #     yield True
         #     self.cast('extra healing', direction=(0, 0))
@@ -1425,9 +1416,15 @@ class Agent:
 
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']]
+        # hypothesis: an injured Tourist facing a visible threat should spend a starting healing potion by 12 HP, before a common early projectile or melee hit can skip the existing 8-HP trigger.
+        early_tourist_danger = (
+                self.character.role == Character.TOURIST and
+                self.blstats.hitpoints < self.blstats.max_hitpoints and
+                self.blstats.hitpoints <= 12 and
+                bool(self.get_visible_monsters()))
         if (
                 (self.blstats.hitpoints < 1 / 3 * self.blstats.max_hitpoints
-                 or self.blstats.hitpoints < 8) and items
+                 or self.blstats.hitpoints < 8 or early_tourist_danger) and items
         ):
             yield True
             self.inventory.quaff(items[0])
