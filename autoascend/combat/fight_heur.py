@@ -273,13 +273,11 @@ def get_available_actions(agent, monsters):
 
 
 def decide_what_to_pickup(agent):
-    # hypothesis: skipping shop-owned projectiles during combat prevents accidental theft and shopkeeper deaths.
     projectiles_below_me = [i for i in agent.inventory.items_below_me
-                            if i.shop_status == i.NOT_SHOP and
-                            (i.is_thrown_projectile() or i.is_fired_projectile())]
+                            if i.is_thrown_projectile() or i.is_fired_projectile()]
     my_launcher, ammo = agent.inventory.get_best_ranged_set(additional_ammo=[i for i in projectiles_below_me])
     to_pickup = []
-    for item in projectiles_below_me:
+    for item in agent.inventory.items_below_me:
         if item.is_thrown_projectile() or (my_launcher is not None and item.is_fired_projectile(launcher=my_launcher)):
             to_pickup.append(item)
     return to_pickup

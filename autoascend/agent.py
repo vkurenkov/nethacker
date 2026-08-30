@@ -1409,6 +1409,11 @@ class Agent:
         #     self.cast('extra healing', direction=(0, 0))
         #     return
 
+        # if self.should_cast_heal():
+        #     yield True
+        #     self.cast('healing', direction=(0, 0))
+        #     return
+
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']]
         if (
@@ -1417,12 +1422,6 @@ class Agent:
         ):
             yield True
             self.inventory.quaff(items[0])
-            return
-
-        # hypothesis: spell healing after potion depletion extends weak healers without paying its hunger cost early.
-        if not items and self.should_cast_heal():
-            yield True
-            self.cast('healing', direction=(0, 0))
             return
 
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
@@ -1436,7 +1435,14 @@ class Agent:
                 (self.is_safe_to_pray(500) and
                  (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
                   * self.blstats.max_hitpoints or self.blstats.hitpoints < 6))
-                or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.FAINTING)
+                or (self.is_safe_to_pray(400) and (
+                    self.blstats.hunger_state >= Hunger.FAINTING
+                    # hypothesis: fragile human healers can spend prayer on weak hunger before fainting removes
+                    # control, because their starting healing potions preserve emergency recovery for combat.
+                    or (self.character.role == self.character.HEALER
+                        and self.character.race == self.character.HUMAN
+                        and self.blstats.hunger_state >= Hunger.WEAK)
+                ))
         ):
             yield True
             self.pray()
@@ -1520,7 +1526,7 @@ class Agent:
                         ((Level.PLANE, 1), (None, None))  # TODO: check level num
                     self.character.parse()
                     self.character.parse_enhance_view()
-                    self.character.parse_spellcast_view()
+                    # self.character.parse_spellcast_view()
                     self.step(A.Command.AUTOPICKUP)
                     if 'Autopickup: ON' in self.message:
                         self.step(A.Command.AUTOPICKUP)
