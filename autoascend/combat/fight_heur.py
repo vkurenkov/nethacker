@@ -172,6 +172,18 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
         targeted_monsters = set()
         if not item.is_offensive_usable_wand():
             continue
+        if item.object.name == 'sleep':
+            if agent.character.role != agent.character.HEALER:
+                continue
+            critical_hp = (agent.blstats.hitpoints < agent.blstats.max_hitpoints / 3 or
+                           agent.blstats.hitpoints < 8)
+            empty = item.uses in ('no charge', 'no charges') or \
+                    (item.uses is not None and item.uses.endswith(':0'))
+            # hypothesis: A charged, cooldown-limited sleep ray at critical HP gives
+            # weak Healers one last escape without wasting turns or charges.
+            if agent.character.prop.polymorph or not critical_hp or empty or \
+                    agent._last_turn - agent._last_sleep_wand_turn < 4:
+                continue
         priority = 0
         # print('--------------', dy, dx)
         for y, x, monster, p in simulate_wand_path(agent, item, monsters, dy, dx):
@@ -192,6 +204,8 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
         if targeted_monsters:
             # priority = priority * (1 - player_hp_ratio) - 10
             priority = priority - 15
+            if item.object.name == 'sleep':
+                priority += 30
             if agent.inventory.engraving_below_me.lower() == 'elbereth':
                 priority -= 100
             ret.append((priority, ('zap', dy, dx, item, targeted_monsters)))
@@ -222,11 +236,7 @@ def elbereth_action(agent, monsters):
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
-        priority = -15 + 20 * adj_monsters_count * (1 - player_hp_ratio)
-        # hypothesis: below one-third health, engraving against an adjacent threat prevents the next melee exchange from becoming fatal.
-        if 3 * agent.blstats.hitpoints <= agent.blstats.max_hitpoints:
-            priority = max(priority, 20)
-        return [(priority, ('elbereth',))]
+        return [(-15 + 20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
     return []
 
 
