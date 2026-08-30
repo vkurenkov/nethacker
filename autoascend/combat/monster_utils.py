@@ -15,19 +15,21 @@ def is_monster_faster(agent, monster):
 
 
 def imminent_death_on_melee(agent, monster):
-    if is_dangerous_monster(monster):
+    if is_dangerous_monster(agent, monster):
         return agent.blstats.hitpoints <= 16
     return agent.blstats.hitpoints <= 8
 
 
-def is_dangerous_monster(monster):
+def is_dangerous_monster(agent, monster):
     _, y, x, mon, _ = monster
     is_pet = 'dog' in mon.mname or 'cat' in mon.mname or 'kitten' in mon.mname or 'pony' in mon.mname \
              or 'horse' in mon.mname
     # 'mumak' in mon.mname or 'orc' in mon.mname or 'rothe' in mon.mname \
     # or 'were' in mon.mname or 'unicorn' in mon.mname or 'elf' in mon.mname or 'leocrotta' in mon.mname \
     # or 'mimic' in mon.mname
-    return is_pet or mon.mname in INSECTS
+    # hypothesis: treating the rothe's three melee attacks as dangerous makes fragile healers spend defenses before the final attack kills them.
+    healer_rothe = agent.character.role == agent.character.HEALER and mon.mname == 'rothe'
+    return is_pet or mon.mname in INSECTS or healer_rothe
 
 
 def consider_melee_only_ranged_if_hp_full(agent, monster):
