@@ -77,7 +77,6 @@ class Agent:
         self._allow_attack_all_turn = -float('inf')
 
         self.last_cast_fail_turn = defaultdict(lambda: -float('inf'))
-        self._last_sleep_wand_turn = -float('inf')
 
         self.stats_logger = StatsLogger()
 
@@ -1209,8 +1208,6 @@ class Agent:
                 else:
                     assert 0
                 targeted_monsters = []
-            if wand.is_unambiguous() and wand.object.name == 'sleep':
-                self._last_sleep_wand_turn = self._last_turn
             dir = self.calc_direction(self.blstats.y, self.blstats.x, self.blstats.y + dy, self.blstats.x + dx,
                                       allow_nonunit_distance=True)
 
@@ -1412,11 +1409,6 @@ class Agent:
         #     self.cast('extra healing', direction=(0, 0))
         #     return
 
-        # if self.should_cast_heal():
-        #     yield True
-        #     self.cast('healing', direction=(0, 0))
-        #     return
-
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']]
         if (
@@ -1425,6 +1417,12 @@ class Agent:
         ):
             yield True
             self.inventory.quaff(items[0])
+            return
+
+        # hypothesis: spell healing after potion depletion extends weak healers without paying its hunger cost early.
+        if not items and self.should_cast_heal():
+            yield True
+            self.cast('healing', direction=(0, 0))
             return
 
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
@@ -1522,7 +1520,7 @@ class Agent:
                         ((Level.PLANE, 1), (None, None))  # TODO: check level num
                     self.character.parse()
                     self.character.parse_enhance_view()
-                    # self.character.parse_spellcast_view()
+                    self.character.parse_spellcast_view()
                     self.step(A.Command.AUTOPICKUP)
                     if 'Autopickup: ON' in self.message:
                         self.step(A.Command.AUTOPICKUP)
