@@ -221,6 +221,13 @@ def elbereth_action(agent, monsters):
             adj_monsters_count += 2 * multiplier
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
+    healing_potions = [item for item in agent.inventory.items if item.is_unambiguous() and
+                       item.object.name in ('healing', 'extra healing', 'full healing')]
+    # hypothesis: potion-depleted healers can use Elbereth as renewable defense during the long XL8 farm.
+    if agent.character.role == agent.character.HEALER and not healing_potions and adj_monsters_count > 0 and \
+            (agent.blstats.hitpoints <= 8 or
+             agent.blstats.hitpoints <= 0.6 * agent.blstats.max_hitpoints):
+        return [(17, ('elbereth',))]
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
         return [(-15 + 20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
     return []
