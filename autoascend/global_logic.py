@@ -515,13 +515,7 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                # hypothesis: healers should leave the exhausted first floor earlier, at XL6 for
-                # gnomes whose Mines population is mostly peaceful and at the safer XL7 for humans.
-                if self.agent.character.role == Character.HEALER:
-                    first_level_xp_target = 6 if self.agent.character.race == Character.GNOME else 7
-                else:
-                    first_level_xp_target = 8
-                condition = lambda: self.agent.blstats.experience_level >= first_level_xp_target
+                condition = lambda: self.agent.blstats.experience_level >= 8
                 # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
                 #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
                 level = (Level.DUNGEONS_OF_DOOM, 1)

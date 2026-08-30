@@ -1416,9 +1416,13 @@ class Agent:
 
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']]
+        # hypothesis: human healers should spend their ample healing stock before low HP permits a lethal combat round
+        fragile_healer = (self.character.role == Character.HEALER and
+                          self.character.race == Character.HUMAN and
+                          self.blstats.depth == 1)
         if (
-                (self.blstats.hitpoints < 1 / 3 * self.blstats.max_hitpoints
-                 or self.blstats.hitpoints < 8) and items
+                (self.blstats.hitpoints < (1 / 2 if fragile_healer else 1 / 3) * self.blstats.max_hitpoints
+                 or self.blstats.hitpoints <= (10 if fragile_healer else 7)) and items
         ):
             yield True
             self.inventory.quaff(items[0])
