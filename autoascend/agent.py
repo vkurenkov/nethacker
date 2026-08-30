@@ -1435,14 +1435,7 @@ class Agent:
                 (self.is_safe_to_pray(500) and
                  (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
                   * self.blstats.max_hitpoints or self.blstats.hitpoints < 6))
-                or (self.is_safe_to_pray(400) and (
-                    self.blstats.hunger_state >= Hunger.FAINTING
-                    # hypothesis: fragile human healers can spend prayer on weak hunger before fainting removes
-                    # control, because their starting healing potions preserve emergency recovery for combat.
-                    or (self.character.role == self.character.HEALER
-                        and self.character.race == self.character.HUMAN
-                        and self.blstats.hunger_state >= Hunger.WEAK)
-                ))
+                or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.FAINTING)
         ):
             yield True
             self.pray()
