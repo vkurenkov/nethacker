@@ -213,7 +213,9 @@ def elbereth_action(agent, monsters):
         multiplier = np.clip(20 / agent.blstats.hitpoints, 1.0, 1.5)
         if is_monster_faster(agent, monster):
             multiplier *= 2
-        if mon in WEAK_MONSTERS:
+        # hypothesis: recognizing weak monsters by name avoids wasting scarce defensive engravings on harmless
+        # newts and lichens, preserving turns and Elbereth squares for encounters that threaten fragile builds.
+        if mon.mname in WEAK_MONSTERS:
             adj_monsters_count += 0.1 * multiplier
             continue
         adj_monsters_count += 1 * multiplier
@@ -222,7 +224,8 @@ def elbereth_action(agent, monsters):
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
-        return [(-15 + 20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
+        # hypothesis: removing the fixed Elbereth penalty lets injured weak builds defend before a routine adjacent monster lands a lethal final hit.
+        return [(20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
     return []
 
 
