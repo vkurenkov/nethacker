@@ -2,6 +2,7 @@
 ONLY_RANGED_SLOW_MONSTERS = ['floating eye', 'blue jelly', 'brown mold', 'gas spore', 'acid blob']
 EXPLODING_MONSTERS = ['yellow light', 'gas spore', 'flaming sphere', 'freezing sphere', 'shocking sphere']
 INSECTS = ['giant ant', 'killer bee', 'soldier ant', 'fire ant', 'giant beetle', 'queen bee']
+EARLY_HARD_HITTERS = ['hill orc', 'wererat', 'werejackal', 'rabid rat', 'rothe', 'mumak']
 WEAK_MONSTERS = ['lichen', 'newt', 'shrieker', 'grid bug']
 WEIRD_MONSTERS = ['leprechaun', 'nymph']
 
@@ -24,14 +25,11 @@ def is_dangerous_monster(monster):
     _, y, x, mon, _ = monster
     is_pet = 'dog' in mon.mname or 'cat' in mon.mname or 'kitten' in mon.mname or 'pony' in mon.mname \
              or 'horse' in mon.mname
-    # hypothesis: using NetHack's difficulty rating catches early multi-attack and special-effect threats
-    # before fragile builds enter a fight they can only recognize as lethal after losing most of their HP.
-    if getattr(mon, 'difficulty', 0) >= 4:
-        return True
     # 'mumak' in mon.mname or 'orc' in mon.mname or 'rothe' in mon.mname \
     # or 'were' in mon.mname or 'unicorn' in mon.mname or 'elf' in mon.mname or 'leocrotta' in mon.mname \
     # or 'mimic' in mon.mname
-    return is_pet or mon.mname in INSECTS
+    # hypothesis: treating common early multi-hit and high-damage monsters as dangerous makes fragile builds retreat or defend before the old eight-HP cutoff is already lethal.
+    return is_pet or mon.mname in INSECTS or mon.mname in EARLY_HARD_HITTERS
 
 
 def consider_melee_only_ranged_if_hp_full(agent, monster):
