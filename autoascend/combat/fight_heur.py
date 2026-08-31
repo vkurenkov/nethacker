@@ -191,8 +191,7 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
                 targeted_monsters.add((y, x, monster))
         if targeted_monsters:
             # priority = priority * (1 - player_hp_ratio) - 10
-            # hypothesis: scaling the wand-conservation penalty by health spends identified offense against dangerous monsters before low-HP melee becomes lethal.
-            priority = priority - 15 * player_hp_ratio
+            priority = priority - 15
             if agent.inventory.engraving_below_me.lower() == 'elbereth':
                 priority -= 100
             ret.append((priority, ('zap', dy, dx, item, targeted_monsters)))
@@ -223,7 +222,8 @@ def elbereth_action(agent, monsters):
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
-        return [(-15 + 20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
+        # hypothesis: removing the fixed Elbereth penalty lets injured weak builds defend before a routine adjacent monster lands a lethal final hit.
+        return [(20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
     return []
 
 
@@ -274,13 +274,11 @@ def get_available_actions(agent, monsters):
 
 
 def decide_what_to_pickup(agent):
-    # hypothesis: skipping shop-owned projectiles during combat prevents accidental theft and shopkeeper deaths.
     projectiles_below_me = [i for i in agent.inventory.items_below_me
-                            if i.shop_status == i.NOT_SHOP and
-                            (i.is_thrown_projectile() or i.is_fired_projectile())]
+                            if i.is_thrown_projectile() or i.is_fired_projectile()]
     my_launcher, ammo = agent.inventory.get_best_ranged_set(additional_ammo=[i for i in projectiles_below_me])
     to_pickup = []
-    for item in projectiles_below_me:
+    for item in agent.inventory.items_below_me:
         if item.is_thrown_projectile() or (my_launcher is not None and item.is_fired_projectile(launcher=my_launcher)):
             to_pickup.append(item)
     return to_pickup
