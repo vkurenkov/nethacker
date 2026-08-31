@@ -137,6 +137,11 @@ def _simulate_wand_path(agent, wand, monsters, y, x, dy, dx, range_left, hit_tar
             monster = monster[0]
             # For each monster hit, range decreases by 2.
             range_left -= 2
+        # hypothesis: treating peaceful monsters as ray targets prevents collateral wand hits from turning
+        # shopkeepers and watchmen hostile, preserving otherwise successful runs that reached deeper levels.
+        elif inside(agent, y, x) and agent.monster_tracker.peaceful_monster_mask[y, x]:
+            monster = 'peaceful'
+            range_left -= 2
         elif inside(agent, y, x) and agent.glyphs[y, x] in G.PETS:
             monster = 'pet'
             # For each monster hit, range decreases by 2.
@@ -176,7 +181,7 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
         # print('--------------', dy, dx)
         for y, x, monster, p in simulate_wand_path(agent, item, monsters, dy, dx):
             # print(y, x, monster, p)
-            if monster == 'pet':
+            if monster in ('pet', 'peaceful'):
                 priority -= p * 20
             elif monster == 'self':
                 priority -= p * 30
