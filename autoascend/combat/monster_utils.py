@@ -24,11 +24,14 @@ def is_dangerous_monster(monster):
     _, y, x, mon, _ = monster
     is_pet = 'dog' in mon.mname or 'cat' in mon.mname or 'kitten' in mon.mname or 'pony' in mon.mname \
              or 'horse' in mon.mname
-    # hypothesis: classifying common multiattack and high-damage monsters as dangerous makes fragile builds
-    # spend defensive actions before the final blow instead of treating them like routine melee opponents.
-    is_hard_hitter = any(name in mon.mname for name in
-                         ('mumak', 'orc', 'rothe', 'were', 'unicorn', 'elf', 'leocrotta', 'mimic'))
-    return is_pet or is_hard_hitter or mon.mname in INSECTS
+    # hypothesis: using NetHack's difficulty rating catches early multi-attack and special-effect threats
+    # before fragile builds enter a fight they can only recognize as lethal after losing most of their HP.
+    if getattr(mon, 'difficulty', 0) >= 4:
+        return True
+    # 'mumak' in mon.mname or 'orc' in mon.mname or 'rothe' in mon.mname \
+    # or 'were' in mon.mname or 'unicorn' in mon.mname or 'elf' in mon.mname or 'leocrotta' in mon.mname \
+    # or 'mimic' in mon.mname
+    return is_pet or mon.mname in INSECTS
 
 
 def consider_melee_only_ranged_if_hp_full(agent, monster):
