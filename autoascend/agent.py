@@ -1421,7 +1421,9 @@ class Agent:
                  or self.blstats.hitpoints < 8) and items
         ):
             yield True
-            self.inventory.quaff(items[0])
+            # hypothesis: choosing the strongest known healing potion in a critical state prevents a weak heal from leaving fragile builds within the next monster's damage range.
+            healing_strength = {'healing': 1, 'extra healing': 2, 'full healing': 3}
+            self.inventory.quaff(max(items, key=lambda item: healing_strength[item.object.name]))
             return
 
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
