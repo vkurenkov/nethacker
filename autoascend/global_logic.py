@@ -515,8 +515,8 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                # hypothesis: leaving dungeon level 1 at XP 6 avoids weak-build attrition while retaining enough strength to descend safely.
-                condition = lambda: self.agent.blstats.experience_level >= 6
+                # hypothesis: advancing at XL7 avoids a long, resource-poor final farming level on Dlvl 1 and lets fragile builds turn survival into descent.
+                condition = lambda: self.agent.blstats.experience_level >= 7
                 # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
                 #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
                 level = (Level.DUNGEONS_OF_DOOM, 1)
