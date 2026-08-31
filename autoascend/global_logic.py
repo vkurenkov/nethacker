@@ -515,15 +515,10 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                # hypothesis: leaving the level-1 farm when hungry and out of carried food turns otherwise certain starvation into chances for food, gear, and progression on fresh levels.
-                condition = lambda: self.agent.blstats.experience_level >= 8 or (
-                    self.agent.blstats.hunger_state >= Hunger.HUNGRY and
-                    not any(
-                        item.category == nh.FOOD_CLASS and
-                        item.objs[0].name != 'sprig of wolfsbane' and
-                        (not item.is_corpse() or item.monster_id in [
-                            MON.from_name(name) - nh.GLYPH_MON_OFF for name in ('lizard', 'lichen')])
-                        for item in flatten_items(self.agent.inventory.items)))
+                # hypothesis: abandoning level-one farming when fainting and out of food turns otherwise-certain starvation into chances to find nutrition while descending.
+                condition = lambda: self.agent.blstats.experience_level >= 8 or \
+                    (self.agent.inventory.items.total_nutrition() == 0 and
+                     self.agent.blstats.hunger_state >= Hunger.FAINTING)
                 # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
                 #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
                 level = (Level.DUNGEONS_OF_DOOM, 1)
