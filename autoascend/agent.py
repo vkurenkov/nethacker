@@ -1409,11 +1409,6 @@ class Agent:
         #     self.cast('extra healing', direction=(0, 0))
         #     return
 
-        # if self.should_cast_heal():
-        #     yield True
-        #     self.cast('healing', direction=(0, 0))
-        #     return
-
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']]
         if (
@@ -1421,9 +1416,13 @@ class Agent:
                  or self.blstats.hitpoints < 8) and items
         ):
             yield True
-            # hypothesis: choosing the strongest known healing potion in a critical state prevents a weak heal from leaving fragile builds within the next monster's damage range.
-            healing_strength = {'healing': 1, 'extra healing': 2, 'full healing': 3}
-            self.inventory.quaff(max(items, key=lambda item: healing_strength[item.object.name]))
+            self.inventory.quaff(items[0])
+            return
+
+        # hypothesis: spell healing after potion depletion extends weak healers without paying its hunger cost early.
+        if not items and self.should_cast_heal():
+            yield True
+            self.cast('healing', direction=(0, 0))
             return
 
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
@@ -1521,7 +1520,7 @@ class Agent:
                         ((Level.PLANE, 1), (None, None))  # TODO: check level num
                     self.character.parse()
                     self.character.parse_enhance_view()
-                    # self.character.parse_spellcast_view()
+                    self.character.parse_spellcast_view()
                     self.step(A.Command.AUTOPICKUP)
                     if 'Autopickup: ON' in self.message:
                         self.step(A.Command.AUTOPICKUP)
