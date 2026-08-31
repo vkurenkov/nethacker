@@ -24,10 +24,11 @@ def is_dangerous_monster(monster):
     _, y, x, mon, _ = monster
     is_pet = 'dog' in mon.mname or 'cat' in mon.mname or 'kitten' in mon.mname or 'pony' in mon.mname \
              or 'horse' in mon.mname
-    # 'mumak' in mon.mname or 'orc' in mon.mname or 'rothe' in mon.mname \
-    # or 'were' in mon.mname or 'unicorn' in mon.mname or 'elf' in mon.mname or 'leocrotta' in mon.mname \
-    # or 'mimic' in mon.mname
-    return is_pet or mon.mname in INSECTS
+    # hypothesis: classifying common multiattack and high-damage monsters as dangerous makes fragile builds
+    # spend defensive actions before the final blow instead of treating them like routine melee opponents.
+    is_hard_hitter = any(name in mon.mname for name in
+                         ('mumak', 'orc', 'rothe', 'were', 'unicorn', 'elf', 'leocrotta', 'mimic'))
+    return is_pet or is_hard_hitter or mon.mname in INSECTS
 
 
 def consider_melee_only_ranged_if_hp_full(agent, monster):
