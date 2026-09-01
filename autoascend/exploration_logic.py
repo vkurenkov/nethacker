@@ -268,7 +268,10 @@ class ExplorationLogic:
 
             yielded = False
             for py, px in self.agent.neighbors(self.agent.blstats.y, self.agent.blstats.x, diagonal=False):
-                if (self.agent.current_level().door_open_count[py, px] < door_open_count or kick_doors) and \
+                # hypothesis: not kicking mapped shop doors avoids angering
+                # shopkeepers while preserving door kicking everywhere else.
+                can_kick = kick_doors and not self.agent.current_level().shop[py, px]
+                if (self.agent.current_level().door_open_count[py, px] < door_open_count or can_kick) and \
                         self.agent.glyphs[py, px] in G.DOOR_CLOSED:
                     if not yielded:
                         yielded = True
@@ -280,11 +283,11 @@ class ExplorationLogic:
                                     if self.agent.open_door(py, px):
                                         break
                                 else:
-                                    if kick_doors:
+                                    if can_kick:
                                         while self.agent.glyphs[py, px] in G.DOOR_CLOSED:
                                             self.agent.kick(py, px)
                             else:
-                                if kick_doors:
+                                if can_kick:
                                     while self.agent.glyphs[py, px] in G.DOOR_CLOSED:
                                         self.agent.kick(py, px)
                     break

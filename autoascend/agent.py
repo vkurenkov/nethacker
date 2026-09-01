@@ -812,6 +812,11 @@ class Agent:
 
     def search(self, max_count=1):
         assert max_count >= 1
+        # hypothesis: wounded pre-XL7 monks searching one turn at a time can react
+        # to an approaching monster instead of taking five uninterruptible combat turns.
+        if max_count > 1 and self.blstats.experience_level < 7 and \
+                self.blstats.hitpoints < 0.8 * self.blstats.max_hitpoints:
+            max_count = 1
         with self.panic_if_position_changes():
             with self.atom_operation():
                 if max_count > 1:
