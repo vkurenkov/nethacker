@@ -1,5 +1,9 @@
 # heuristic monster types lists
-ONLY_RANGED_SLOW_MONSTERS = ['floating eye', 'blue jelly', 'brown mold', 'gas spore', 'acid blob']
+# hypothesis: treating cockatrices as ranged-only prevents unarmed monks from touching them
+# in melee and instantly losing otherwise progressed runs to petrification.
+ONLY_RANGED_SLOW_MONSTERS = [
+    'floating eye', 'blue jelly', 'brown mold', 'gas spore', 'acid blob', 'cockatrice', 'chickatrice'
+]
 EXPLODING_MONSTERS = ['yellow light', 'gas spore', 'flaming sphere', 'freezing sphere', 'shocking sphere']
 INSECTS = ['giant ant', 'killer bee', 'soldier ant', 'fire ant', 'giant beetle', 'queen bee']
 WEAK_MONSTERS = ['lichen', 'newt', 'shrieker', 'grid bug']
