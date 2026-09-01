@@ -17,6 +17,10 @@ def melee_monster_priority(agent, monsters, monster):
     ret = 1
     if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
         ret += 15
+    # hypothesis: refusing bare-handed cockatrice attacks prevents instant
+    # petrification while still allowing protected monks to earn the experience.
+    if mon.mname in ('chickatrice', 'cockatrice') and agent.inventory.items.gloves is None:
+        ret -= 100
     if wielding_ranged_weapon(agent) and not is_monster_faster(agent, monster):
         ret -= 6
     if mon.mname in EXPLODING_MONSTERS:
