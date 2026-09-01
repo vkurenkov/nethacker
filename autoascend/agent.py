@@ -753,11 +753,6 @@ class Agent:
         with self.panic_if_position_changes():
             assert self.glyphs[y, x] in G.MONS or self.glyphs[y, x] in G.INVISIBLE_MON or \
                    self.glyphs[y, x] in G.SWALLOW
-            if self.character.role == Character.MONK and self.inventory.items.gloves is None and \
-                    self.inventory.items.main_hand is None and self.glyphs[y, x] in G.MONS and \
-                    MON.permonst(self.glyphs[y, x]).mname in ('cockatrice', 'chickatrice'):
-                self.kick(y, x)
-                return True
             self.direction(y, x)
         return True
 
@@ -1422,9 +1417,7 @@ class Agent:
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']]
         if (
-                # hypothesis: healing at two-fifths HP gives monks a two-hit buffer against midgame
-                # threats that can otherwise skip the old one-third-health emergency threshold.
-                (self.blstats.hitpoints < 2 / 5 * self.blstats.max_hitpoints
+                (self.blstats.hitpoints < 1 / 3 * self.blstats.max_hitpoints
                  or self.blstats.hitpoints < 8) and items
         ):
             yield True
