@@ -7,7 +7,8 @@ from scipy import signal
 from ..glyph import G
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
-    ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
+    ONLY_RANGED_SLOW_MONSTERS, CONTACT_HAZARDS, EXPLODING_MONSTERS, WEAK_MONSTERS, \
+    consider_melee_only_ranged_if_hp_full
 from .movement_priority import draw_monster_priority_positive, draw_monster_priority_negative
 from .utils import wielding_ranged_weapon, line_dis_from, inside
 
@@ -20,6 +21,8 @@ def melee_monster_priority(agent, monsters, monster):
     if wielding_ranged_weapon(agent) and not is_monster_faster(agent, monster):
         ret -= 6
     if mon.mname in EXPLODING_MONSTERS:
+        ret -= 17
+    if mon.mname in CONTACT_HAZARDS and agent.inventory.get_ranged_combinations():
         ret -= 17
     if 'were' in mon.mname:
         ret += 1
