@@ -1014,11 +1014,6 @@ class Inventory:
     @utils.debug_log('inventory.wand_engrave_identify')
     @Strategy.wrap
     def wand_engrave_identify(self):
-        # hypothesis: deferring unknown-wand engraving until XL4 avoids explosive or disruptive
-        # wand effects during the fragile first-floor farm while preserving later wand use.
-        if self.agent.blstats.experience_level < 4:
-            yield False
-            return
         if self.agent.character.prop.polymorph:
             yield False  # TODO: only for handless monsters (which cannot write)
 

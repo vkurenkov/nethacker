@@ -1302,8 +1302,9 @@ class Agent:
         if permonst.mflags2 & race_flag:
             return False
 
-        # corpse aging
-        if self.blstats.time - age_turn >= 50 and \
+        # hypothesis: a 30-turn freshness limit avoids lethal, already-aged corpses
+        # whose observed drop time makes the old 50-turn estimate overoptimistic.
+        if self.blstats.time - age_turn >= 30 and \
                 monster_id not in [MON.id_from_name('lizard'), MON.id_from_name('lichen')]:
             return False
 
@@ -1435,9 +1436,7 @@ class Agent:
                 (self.is_safe_to_pray(500) and
                  (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
                   * self.blstats.max_hitpoints or self.blstats.hitpoints < 6))
-                # hypothesis: praying while weak prevents the next multi-turn action from skipping straight into
-                # an unactionable faint, preserving otherwise viable low-food runs across healers and monks.
-                or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.WEAK)
+                or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.FAINTING)
         ):
             yield True
             self.pray()
