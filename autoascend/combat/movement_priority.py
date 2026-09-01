@@ -1,7 +1,7 @@
 from ..utils import adjacent
 from . import utils
 from .monster_utils import WEAK_MONSTERS, ONLY_RANGED_SLOW_MONSTERS, consider_melee_only_ranged_if_hp_full, \
-    imminent_death_on_melee, EXPLODING_MONSTERS, CONTACT_HAZARDS, WEIRD_MONSTERS
+    imminent_death_on_melee, EXPLODING_MONSTERS, WEIRD_MONSTERS
 
 
 def _draw_around(priority, y, x, value, radius=1, operation='add'):
@@ -55,8 +55,6 @@ def draw_monster_priority_positive(agent, monster, priority, walkable):
             _draw_around(priority, y, x, 1, radius=2, operation='max')
         if len(agent.inventory.get_ranged_combinations()):
             _draw_ranged(priority, y, x, 1, walkable, radius=7, operation='max')
-    elif mon.mname in CONTACT_HAZARDS and agent.inventory.get_ranged_combinations():
-        _draw_ranged(priority, y, x, 1, walkable, radius=7, operation='max')
     elif mon.mname in ONLY_RANGED_SLOW_MONSTERS:  # and agent.inventory.get_ranged_combinations():
         if consider_melee_only_ranged_if_hp_full(agent, monster):
             _draw_around(priority, y, x, 2, radius=1, operation='max')
@@ -108,10 +106,7 @@ def draw_monster_priority_negative(agent, monster, priority, walkable):
     #         # prefer avoiding being in line of fire
     #         _draw_ranged(priority, y, x, -1, walkable, radius=7)
 
-    # hypothesis: spacing from cockatrices only while ammunition remains prevents bare-handed
-    # petrification without stranding monks in a ranged-only policy after their missiles run out.
-    if mon.mname in EXPLODING_MONSTERS or \
-            (mon.mname in CONTACT_HAZARDS and agent.inventory.get_ranged_combinations()):
+    if mon.mname in EXPLODING_MONSTERS or mon.mname in ('chickatrice', 'cockatrice'):
         _draw_around(priority, y, x, -10, radius=1)
         if mon.mname not in ONLY_RANGED_SLOW_MONSTERS:
             _draw_around(priority, y, x, -5, radius=2)
