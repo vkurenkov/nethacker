@@ -17,10 +17,6 @@ def melee_monster_priority(agent, monsters, monster):
     ret = 1
     if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
         ret += 15
-    # hypothesis: refusing bare-handed cockatrice attacks prevents instant
-    # petrification while still allowing protected monks to earn the experience.
-    if mon.mname in ('chickatrice', 'cockatrice') and agent.inventory.items.gloves is None:
-        ret -= 100
     if wielding_ranged_weapon(agent) and not is_monster_faster(agent, monster):
         ret -= 6
     if mon.mname in EXPLODING_MONSTERS:
@@ -226,7 +222,12 @@ def elbereth_action(agent, monsters):
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
-        return [(-15 + 20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
+        priority = -15 + 20 * adj_monsters_count * (1 - player_hp_ratio)
+        # hypothesis: below three-quarters health, guaranteeing Elbereth outranks
+        # ordinary melee preserves a full hit of warning before monk emergencies.
+        if agent.blstats.hitpoints < 0.75 * agent.blstats.max_hitpoints:
+            priority = max(priority, 17)
+        return [(priority, ('elbereth',))]
     return []
 
 
