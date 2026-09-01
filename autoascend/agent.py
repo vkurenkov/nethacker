@@ -812,11 +812,6 @@ class Agent:
 
     def search(self, max_count=1):
         assert max_count >= 1
-        # hypothesis: wounded pre-XL7 monks searching one turn at a time can react
-        # to an approaching monster instead of taking five uninterruptible combat turns.
-        if max_count > 1 and self.blstats.experience_level < 7 and \
-                self.blstats.hitpoints < 0.8 * self.blstats.max_hitpoints:
-            max_count = 1
         with self.panic_if_position_changes():
             with self.atom_operation():
                 if max_count > 1:
@@ -1307,9 +1302,8 @@ class Agent:
         if permonst.mflags2 & race_flag:
             return False
 
-        # hypothesis: a 30-turn freshness limit avoids lethal, already-aged corpses
-        # whose observed drop time makes the old 50-turn estimate overoptimistic.
-        if self.blstats.time - age_turn >= 30 and \
+        # corpse aging
+        if self.blstats.time - age_turn >= 50 and \
                 monster_id not in [MON.id_from_name('lizard'), MON.id_from_name('lichen')]:
             return False
 
@@ -1379,7 +1373,7 @@ class Agent:
 
     def should_cast_heal(self):
         # TODO: consider casting for other classes
-        if self.character.role != self.character.HEALER:
+        if self.character.role not in (self.character.HEALER, self.character.MONK):
             return False
         if 'healing' not in self.character.known_spells:
             return False
@@ -1415,10 +1409,12 @@ class Agent:
         #     self.cast('extra healing', direction=(0, 0))
         #     return
 
-        # if self.should_cast_heal():
-        #     yield True
-        #     self.cast('healing', direction=(0, 0))
-        #     return
+        # hypothesis: using a monk's zero-failure starting healing spell at the existing
+        # low-HP threshold turns renewable energy into survival before ordinary melee can finish the run.
+        if self.should_cast_heal():
+            yield True
+            self.cast('healing', direction=(0, 0))
+            return
 
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']]
@@ -1441,7 +1437,9 @@ class Agent:
                 (self.is_safe_to_pray(500) and
                  (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
                   * self.blstats.max_hitpoints or self.blstats.hitpoints < 6))
-                or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.FAINTING)
+                # hypothesis: praying while weak prevents the next multi-turn action from skipping straight into
+                # an unactionable faint, preserving otherwise viable low-food runs across healers and monks.
+                or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.WEAK)
         ):
             yield True
             self.pray()
@@ -1525,7 +1523,7 @@ class Agent:
                         ((Level.PLANE, 1), (None, None))  # TODO: check level num
                     self.character.parse()
                     self.character.parse_enhance_view()
-                    # self.character.parse_spellcast_view()
+                    self.character.parse_spellcast_view()
                     self.step(A.Command.AUTOPICKUP)
                     if 'Autopickup: ON' in self.message:
                         self.step(A.Command.AUTOPICKUP)
