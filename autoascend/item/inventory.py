@@ -1017,6 +1017,12 @@ class Inventory:
         if self.agent.character.prop.polymorph:
             yield False  # TODO: only for handless monsters (which cannot write)
 
+        # hypothesis: deferring unknown-wand charge tests until XL8 prevents fragile
+        # monks from dying to cursed-wand explosions before earning any progression.
+        if self.agent.character.role == Character.MONK and self.agent.blstats.experience_level < 8:
+            yield False
+            return
+
         self.skip_engrave_counter -= 1
         if self.agent.character.prop.blind or self.skip_engrave_counter > 0:
             yield False
