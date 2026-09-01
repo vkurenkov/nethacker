@@ -808,7 +808,9 @@ class Inventory:
             slot = item.object.sub
             ac = item.get_ac()
 
-            if self.agent.character.role == Character.MONK and slot == O.ARM_SUIT:
+            # hypothesis: keeping monks shieldless preserves their level-scaled
+            # empty-handed accuracy, which is worth more than a shield's small AC gain.
+            if self.agent.character.role == Character.MONK and slot in [O.ARM_SUIT, O.ARM_SHIELD]:
                 continue
 
             if best_ac[slot] is None or best_ac[slot] > ac:
