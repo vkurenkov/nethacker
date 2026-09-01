@@ -8,11 +8,9 @@ WEIRD_MONSTERS = ['leprechaun', 'nymph']
 
 def is_monster_faster(agent, monster):
     _, y, x, mon, _ = monster
-    # hypothesis: recognizing fast ants avoids futile low-HP retreats and gives
-    # monks a better last-hit chance against a frequent early-game killer.
-    return 'bat' in mon.mname or 'dog' in mon.mname or 'cat' in mon.mname \
-           or 'kitten' in mon.mname or 'pony' in mon.mname or 'horse' in mon.mname \
-           or 'bee' in mon.mname or 'fox' in mon.mname or 'ant' in mon.mname
+    # hypothesis: using the monster's actual movement speed prevents low-HP
+    # monks from trying to outrun fast threats such as ants and underestimating Elbereth.
+    return mon.mmove > 12
 
 
 def imminent_death_on_melee(agent, monster):
@@ -25,10 +23,9 @@ def is_dangerous_monster(monster):
     _, y, x, mon, _ = monster
     is_pet = 'dog' in mon.mname or 'cat' in mon.mname or 'kitten' in mon.mname or 'pony' in mon.mname \
              or 'horse' in mon.mname
-    # 'mumak' in mon.mname or 'orc' in mon.mname or 'rothe' in mon.mname \
-    # or 'were' in mon.mname or 'unicorn' in mon.mname or 'elf' in mon.mname or 'leocrotta' in mon.mname \
-    # or 'mimic' in mon.mname
-    return is_pet or mon.mname in INSECTS
+    # hypothesis: treating level-4+ monsters as dangerous makes wounded monks
+    # retreat or engrave before another high-damage hit instead of trading to death.
+    return is_pet or mon.mname in INSECTS or mon.mlevel >= 4
 
 
 def consider_melee_only_ranged_if_hp_full(agent, monster):
