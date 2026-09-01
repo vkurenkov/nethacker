@@ -515,11 +515,10 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                condition = lambda: self.agent.blstats.experience_level >= 8
-                # hypothesis: when level-1 farming runs out of carried food, descending to seek
-                # nutrition is safer and advances farther than waiting for late dangerous spawns.
-                explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
-                                                   self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
+                # hypothesis: leaving the depleted first floor at XL7 avoids long, food-expensive spawn farming while retaining enough monk HP for early branch exploration.
+                condition = lambda: self.agent.blstats.experience_level >= 7
+                # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
+                #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
                 level = (Level.DUNGEONS_OF_DOOM, 1)
 
             elif self.milestone == Milestone.FIND_SOKOBAN:
