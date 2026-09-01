@@ -203,6 +203,12 @@ def elbereth_action(agent, monsters):
         return []
     if not agent.can_engrave():
         return []
+    # hypothesis: engraving immediately beside a mind flayer interrupts its
+    # tentacle-drain cascade before the monk can be killed by brainlessness.
+    if any(mon.mname in ('mind flayer', 'master mind flayer') and
+           adjacent((my, mx), (agent.blstats.y, agent.blstats.x))
+           for _, my, mx, mon, _ in monsters):
+        return [(100, ('elbereth',))]
     adj_monsters_count = 0
     for monster in monsters:
         _, my, mx, mon, _ = monster

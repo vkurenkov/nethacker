@@ -1,20 +1,16 @@
 # heuristic monster types lists
 ONLY_RANGED_SLOW_MONSTERS = ['floating eye', 'blue jelly', 'brown mold', 'gas spore', 'acid blob']
 EXPLODING_MONSTERS = ['yellow light', 'gas spore', 'flaming sphere', 'freezing sphere', 'shocking sphere']
-# hypothesis: treating poisonous spiders as dangerous at 16 HP gives monks
-# time to retreat or engrave before poison and fast follow-up attacks kill them.
-INSECTS = ['giant ant', 'killer bee', 'soldier ant', 'fire ant', 'giant beetle', 'queen bee',
-           'cave spider', 'giant spider', 'scorpion']
+INSECTS = ['giant ant', 'killer bee', 'soldier ant', 'fire ant', 'giant beetle', 'queen bee']
 WEAK_MONSTERS = ['lichen', 'newt', 'shrieker', 'grid bug']
 WEIRD_MONSTERS = ['leprechaun', 'nymph']
 
 
 def is_monster_faster(agent, monster):
     _, y, x, mon, _ = monster
-    # TOOD: implement properly
-    return 'bat' in mon.mname or 'dog' in mon.mname or 'cat' in mon.mname \
-           or 'kitten' in mon.mname or 'pony' in mon.mname or 'horse' in mon.mname \
-           or 'bee' in mon.mname or 'fox' in mon.mname
+    # hypothesis: using the monster's actual movement speed prevents low-HP
+    # monks from trying to outrun fast threats such as ants and underestimating Elbereth.
+    return mon.mmove > 12
 
 
 def imminent_death_on_melee(agent, monster):
