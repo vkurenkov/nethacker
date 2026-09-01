@@ -15,7 +15,9 @@ from .utils import wielding_ranged_weapon, line_dis_from, inside
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
     ret = 1
-    if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
+    # hypothesis: an experienced monk below one-third health should disengage from
+    # slow melee threats instead of treating the old absolute 8-HP cutoff as healthy.
+    if agent.blstats.hitpoints > max(8, agent.blstats.max_hitpoints / 3) or is_monster_faster(agent, monster):
         ret += 15
     if wielding_ranged_weapon(agent) and not is_monster_faster(agent, monster):
         ret -= 6
@@ -222,12 +224,7 @@ def elbereth_action(agent, monsters):
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
-        priority = -15 + 20 * adj_monsters_count * (1 - player_hp_ratio)
-        # hypothesis: at one-third HP, promptly engraving Elbereth lets a resource-poor
-        # monk stop trading blows and regenerate instead of waiting for prayer range.
-        if agent.blstats.hitpoints * 3 <= agent.blstats.max_hitpoints:
-            priority = max(priority, 20)
-        return [(priority, ('elbereth',))]
+        return [(-15 + 20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
     return []
 
 
