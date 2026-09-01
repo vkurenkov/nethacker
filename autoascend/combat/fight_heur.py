@@ -21,10 +21,6 @@ def melee_monster_priority(agent, monsters, monster):
         ret -= 6
     if mon.mname in EXPLODING_MONSTERS:
         ret -= 17
-    # hypothesis: strongly preferring movement or ranged attacks over touching a cockatrice avoids
-    # petrification without handing the active fight back to exploration and risking an action loop.
-    if mon.mname in ('chickatrice', 'cockatrice'):
-        ret -= 100
     if 'were' in mon.mname:
         ret += 1
     # if not wielding_melee_weapon(agent):
