@@ -515,13 +515,11 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                # hypothesis: a foodless XL7 monk is safer advancing toward new food than spending thousands more
-                # turns farming stronger level-1 spawns, while the XL7 floor avoids underpowered emergency dives.
-                condition = lambda: self.agent.blstats.experience_level >= 8 or (
-                    self.agent.blstats.experience_level >= 7 and
-                    self.agent.inventory.items.total_nutrition() == 0)
-                # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
-                #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
+                condition = lambda: self.agent.blstats.experience_level >= 8
+                # hypothesis: when level-1 farming runs out of carried food, descending to seek
+                # nutrition is safer and advances farther than waiting for late dangerous spawns.
+                explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
+                                                   self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
                 level = (Level.DUNGEONS_OF_DOOM, 1)
 
             elif self.milestone == Milestone.FIND_SOKOBAN:
