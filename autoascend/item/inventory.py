@@ -1014,14 +1014,13 @@ class Inventory:
     @utils.debug_log('inventory.wand_engrave_identify')
     @Strategy.wrap
     def wand_engrave_identify(self):
-        if self.agent.character.prop.polymorph:
-            yield False  # TODO: only for handless monsters (which cannot write)
-
-        # hypothesis: postponing unknown-wand engraving until a monk is fully
-        # healed and robust prevents early cursed-wand explosions from being lethal.
-        if self.agent.blstats.hitpoints < max(20, self.agent.blstats.max_hitpoints):
+        # hypothesis: deferring unknown-wand engraving until XL4 avoids explosive or disruptive
+        # wand effects during the fragile first-floor farm while preserving later wand use.
+        if self.agent.blstats.experience_level < 4:
             yield False
             return
+        if self.agent.character.prop.polymorph:
+            yield False  # TODO: only for handless monsters (which cannot write)
 
         self.skip_engrave_counter -= 1
         if self.agent.character.prop.blind or self.skip_engrave_counter > 0:
