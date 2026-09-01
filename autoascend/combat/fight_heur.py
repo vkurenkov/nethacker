@@ -203,13 +203,6 @@ def elbereth_action(agent, monsters):
         return []
     if not agent.can_engrave():
         return []
-    # hypothesis: immediately engraving Elbereth beside a cockatrice and holding
-    # the ward until it backs away prevents an unarmed, unshod monk's attacks
-    # from self-petrifying.
-    if any(mon.mname in ('cockatrice', 'chickatrice') and
-           adjacent((my, mx), (agent.blstats.y, agent.blstats.x))
-           for _, my, mx, mon, _ in monsters):
-        return [(100, ('elbereth',))]
     adj_monsters_count = 0
     for monster in monsters:
         _, my, mx, mon, _ = monster
@@ -229,16 +222,17 @@ def elbereth_action(agent, monsters):
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
-        return [(-15 + 20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
+        priority = -15 + 20 * adj_monsters_count * (1 - player_hp_ratio)
+        # hypothesis: at one-third HP, promptly engraving Elbereth lets a resource-poor
+        # monk stop trading blows and regenerate instead of waiting for prayer range.
+        if agent.blstats.hitpoints * 3 <= agent.blstats.max_hitpoints:
+            priority = max(priority, 20)
+        return [(priority, ('elbereth',))]
     return []
 
 
 def wait_action(agent, monsters):
     if agent.inventory.engraving_below_me.lower() == 'elbereth':
-        if any(mon.mname in ('cockatrice', 'chickatrice') and
-               adjacent((my, mx), (agent.blstats.y, agent.blstats.x))
-               for _, my, mx, mon, _ in monsters):
-            return [(100, ('wait',))]
         player_hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
         priority = 30 - player_hp_ratio * 40
         return [(priority, ('wait',))]
