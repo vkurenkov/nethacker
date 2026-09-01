@@ -106,7 +106,7 @@ def draw_monster_priority_negative(agent, monster, priority, walkable):
     #         # prefer avoiding being in line of fire
     #         _draw_ranged(priority, y, x, -1, walkable, radius=7)
 
-    if mon.mname in EXPLODING_MONSTERS or mon.mname in ('chickatrice', 'cockatrice'):
+    if mon.mname in EXPLODING_MONSTERS:
         _draw_around(priority, y, x, -10, radius=1)
         if mon.mname not in ONLY_RANGED_SLOW_MONSTERS:
             _draw_around(priority, y, x, -5, radius=2)
