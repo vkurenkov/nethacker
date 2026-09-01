@@ -279,8 +279,12 @@ class GlobalLogic:
                     if not utils.isin(self.agent.current_level().objects, G.TRAPS).any():
                         return
 
-                else:
+                elif sokomap.sokomap[y, x] == soko_solver.BOULDER:
                     sokomap.move(y, x, dy, dx)
+                else:
+                    # hypothesis: abandoning a desynchronized Sokoban route when its simulated boulder
+                    # is gone prevents an assertion from killing progressed runs under the action watchdog.
+                    break
 
                 if (~soko_boulder_mask | mask).all():
                     if self.agent.bfs()[ty, tx] != -1 and \
@@ -404,7 +408,13 @@ class GlobalLogic:
         if not item.is_corpse() or item.comment == 'old':
             return False
 
-        mname = MON.permonst(item.monster_id + nh.GLYPH_MON_OFF).mname
+        permonst = MON.permonst(item.monster_id + nh.GLYPH_MON_OFF)
+        # hypothesis: refusing cockatrice-family sacrifice cargo prevents bare-handed monks
+        # from petrifying while picking it up, without weakening ordinary altar farming.
+        if ord(permonst.mlet) == MON.S_COCKATRICE:
+            return False
+
+        mname = permonst.mname
         if (mname == 'pony' and self.agent.character.role in [Character.KNIGHT, Character.BARBARIAN]) or \
                 (mname == 'kitten' and self.agent.character.role == [Character.BARBARIAN, Character.WIZARD]) or \
                 (mname == 'little dog' and item.naming):  # little dogs are always named
@@ -419,7 +429,7 @@ class GlobalLogic:
                 Character.GNOME: MON.M2_GNOME,
                 Character.ORC: MON.M2_ORC,
             }
-            f2 = MON.permonst(item.monster_id + nh.GLYPH_MON_OFF).mflags2
+            f2 = permonst.mflags2
             if (f2 & mapping[self.agent.character.race]) > 0:
                 return False
 
@@ -516,10 +526,8 @@ class GlobalLogic:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
                 condition = lambda: self.agent.blstats.experience_level >= 8
-                # hypothesis: when level-1 farming runs out of carried food, descending to seek
-                # nutrition is safer and advances farther than waiting for late dangerous spawns.
-                explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
-                                                   self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
+                # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
+                #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
                 level = (Level.DUNGEONS_OF_DOOM, 1)
 
             elif self.milestone == Milestone.FIND_SOKOBAN:
@@ -559,13 +567,7 @@ class GlobalLogic:
                 level = (Level.DUNGEONS_OF_DOOM, 100)
 
             if condition():
-                # hypothesis: once a monk reaches XL8, descending the main dungeon
-                # converts its farmed strength into progression without exposing it
-                # to Minetown's dense fights or Sokoban branch-search stalls.
-                if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                    self.milestone = Milestone.GO_DOWN
-                else:
-                    self.milestone = Milestone(int(self.milestone) + 1)
+                self.milestone = Milestone(int(self.milestone) + 1)
                 continue
 
 

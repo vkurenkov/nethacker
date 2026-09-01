@@ -808,9 +808,7 @@ class Inventory:
             slot = item.object.sub
             ac = item.get_ac()
 
-            # hypothesis: keeping monks shieldless preserves their level-scaled
-            # empty-handed accuracy, which is worth more than a shield's small AC gain.
-            if self.agent.character.role == Character.MONK and slot in [O.ARM_SUIT, O.ARM_SHIELD]:
+            if self.agent.character.role == Character.MONK and slot == O.ARM_SUIT:
                 continue
 
             if best_ac[slot] is None or best_ac[slot] > ac:
@@ -1018,12 +1016,6 @@ class Inventory:
     def wand_engrave_identify(self):
         if self.agent.character.prop.polymorph:
             yield False  # TODO: only for handless monsters (which cannot write)
-
-        # hypothesis: postponing unknown-wand engraving until a monk is fully
-        # healed and robust prevents early cursed-wand explosions from being lethal.
-        if self.agent.blstats.hitpoints < max(20, self.agent.blstats.max_hitpoints):
-            yield False
-            return
 
         self.skip_engrave_counter -= 1
         if self.agent.character.prop.blind or self.skip_engrave_counter > 0:
