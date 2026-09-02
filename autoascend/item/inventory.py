@@ -1165,16 +1165,6 @@ class Inventory:
         while 1:
             best_armorset = self.get_best_armorset()
 
-            current_suit = self.items.suit
-            if current_suit is not None and current_suit.status == Item.UNKNOWN:
-                best_armorset[O.ARM_SUIT] = current_suit
-            elif current_suit is None and best_armorset[O.ARM_SUIT] is None:
-                unknown_suit = self.get_best_armorset(allow_unknown_status=True)[O.ARM_SUIT]
-                # hypothesis: filling an empty body-armor slot with unambiguous non-shop armor gives fragile Valkyries several points of AC, while limiting curse risk to a slot that otherwise provides no protection.
-                if unknown_suit is not None and unknown_suit.status == Item.UNKNOWN and \
-                        unknown_suit.shop_status == Item.NOT_SHOP:
-                    best_armorset[O.ARM_SUIT] = unknown_suit
-
             # TODO: twoweapon
             for slot, name in [(O.ARM_SHIELD, 'off_hand'), (O.ARM_HELM, 'helm'), (O.ARM_GLOVES, 'gloves'),
                                (O.ARM_BOOTS, 'boots'), (O.ARM_SHIRT, 'shirt'), (O.ARM_SUIT, 'suit'),
