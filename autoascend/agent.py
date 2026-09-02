@@ -1434,14 +1434,7 @@ class Agent:
         if (
                 (self.is_safe_to_pray(500) and
                  (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
-                  * self.blstats.max_hitpoints or self.blstats.hitpoints < 6
-                  # hypothesis: tolerating missing difficulty metadata keeps an adjacent unidentified
-                  # monster from crashing the human Valkyrie's emergency scan on held-out encounters.
-                  or (self.character.race == Character.HUMAN and
-                      self.blstats.hitpoints * 2 <= self.blstats.max_hitpoints and any(
-                          utils.adjacent((self.blstats.y, self.blstats.x), (y, x)) and
-                          (mon.mmove > 12 or getattr(mon, 'difficulty', 0) >= 7)
-                          for _, y, x, mon, _ in self.get_visible_monsters()))))
+                  * self.blstats.max_hitpoints or self.blstats.hitpoints < 6))
                 or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.FAINTING)
         ):
             yield True
