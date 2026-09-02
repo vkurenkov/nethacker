@@ -17,6 +17,16 @@ class ExplorationLogic:
     def __init__(self, agent):
         self.agent = agent
 
+    def quest_portal_sweep_targets(self):
+        level = self.agent.current_level()
+        # hypothesis: fully walking the specifically summoned quest-portal level before descending finds the hidden portal and secures Home progression in deep runs that currently skip it.
+        if self.agent.global_logic.quest_portal_level != level.key():
+            return np.zeros((C.SIZE_Y, C.SIZE_X), dtype=bool)
+        return level.walkable & ~level.was_on
+
+    def quest_portal_sweep_pending(self):
+        return (self.quest_portal_sweep_targets() & (self.agent.bfs() != -1)).any()
+
     # TODO: think how to handle the situation with wizard's tower
     def _level_dfs(self, start, end, path, vis):
         if start in vis:
@@ -178,7 +188,8 @@ class ExplorationLogic:
 
             explore_strategy.preempt(self.agent, [
                 self.explore_stairs(go_to_strategy, all=True) \
-                        .condition(lambda: self.agent.current_level().key() in levels_to_search),
+                        .condition(lambda: self.agent.current_level().key() in levels_to_search and
+                                           not self.quest_portal_sweep_pending()),
                 go_to_least_explored_level(),
             ], continue_after_preemption=False).run()
 
@@ -269,35 +280,6 @@ class ExplorationLogic:
             yielded = False
             # hypothesis: respecting a "Closed for inventory" shop sign prevents an unwinnable shopkeeper fight while preserving ordinary locked-door exploration.
             can_kick = kick_doors and 'closed for inventory' not in self.agent.inventory.engraving_below_me.lower()
-
-            def leg_is_injured():
-                return any(' in no shape for kicking' in message
-                           for message in [self.agent.message] + self.agent._message_history[-2:])
-
-            def get_safe_key():
-                return next((item for item in self.agent.inventory.items
-                             if item.is_unambiguous() and item.object.name == 'skeleton key'
-                             and item.status != item.CURSED and item.shop_status == item.NOT_SHOP), None)
-
-            # hypothesis: after an injured leg blocks kicking, human Valkyries should use a safe carried key to escape the door loop while preserving the stronger dwarf's established exploration path.
-            def should_unlock(key):
-                return self.agent.character.race == Character.HUMAN and leg_is_injured() and key is not None
-
-            def unlock(py, px, key):
-                with self.agent.atom_operation():
-                    self.agent.step(A.Command.APPLY)
-                    self.agent.type_text(self.agent.inventory.items.get_letter(key))
-                    self.agent.direction(py, px)
-                    self.agent.open_door(py, px)
-
-            def kick_closed_door(py, px):
-                while self.agent.glyphs[py, px] in G.DOOR_CLOSED:
-                    key = get_safe_key()
-                    if should_unlock(key):
-                        unlock(py, px, key)
-                        return
-                    self.agent.kick(py, px)
-
             for py, px in self.agent.neighbors(self.agent.blstats.y, self.agent.blstats.x, diagonal=False):
                 if (self.agent.current_level().door_open_count[py, px] < door_open_count or can_kick) and \
                         self.agent.glyphs[py, px] in G.DOOR_CLOSED:
@@ -305,20 +287,19 @@ class ExplorationLogic:
                         yielded = True
                         yield True
                     with self.agent.panic_if_position_changes():
-                        key = get_safe_key()
-                        if can_kick and should_unlock(key):
-                            unlock(py, px, key)
-                        elif not self.agent.open_door(py, px):
+                        if not self.agent.open_door(py, px):
                             if not 'locked' in self.agent.message:
                                 for _ in range(6):
                                     if self.agent.open_door(py, px):
                                         break
                                 else:
                                     if can_kick:
-                                        kick_closed_door(py, px)
+                                        while self.agent.glyphs[py, px] in G.DOOR_CLOSED:
+                                            self.agent.kick(py, px)
                             else:
                                 if can_kick:
-                                    kick_closed_door(py, px)
+                                    while self.agent.glyphs[py, px] in G.DOOR_CLOSED:
+                                        self.agent.kick(py, px)
                     break
 
             if not yielded:
@@ -330,9 +311,9 @@ class ExplorationLogic:
             stone = ~level.seen & utils.isin(self.agent.glyphs, G.STONE)
             doors = utils.isin(self.agent.glyphs, G.DOOR_CLOSED) & (level.door_open_count < door_open_count)
             if not stone.any() and not doors.any():
-                return stone
+                return self.quest_portal_sweep_targets()
 
-            to_visit = np.zeros((C.SIZE_Y, C.SIZE_X), dtype=bool)
+            to_visit = self.quest_portal_sweep_targets()
             tmp = np.zeros((C.SIZE_Y, C.SIZE_X), dtype=bool)
             for dy in [-1, 0, 1]:
                 for dx in [-1, 0, 1]:
