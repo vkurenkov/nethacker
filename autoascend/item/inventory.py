@@ -47,14 +47,12 @@ class Inventory:
         self.engraving_below_me = None
 
         self.skip_engrave_counter = 0
-        self._blind_floor_check_skipped = False
 
     def on_panic(self):
         self.items_below_me = None
         self.letters_below_me = None
         self.engraving_below_me = None
         self._previous_blstats = None
-        self._blind_floor_check_skipped = False
 
         self.item_manager.on_panic()
         self.items.on_panic()
@@ -68,9 +66,7 @@ class Inventory:
                  self._previous_blstats.level_number, self._previous_blstats.dungeon_number) != \
                 (self.agent.blstats.y, self.agent.blstats.x, \
                  self.agent.blstats.level_number, self.agent.blstats.dungeon_number) or \
-                (self.engraving_below_me is None or self.engraving_below_me.lower() == 'elbereth') or \
-                (self._blind_floor_check_skipped and
-                 not (self.agent.blstats.prop_mask & nh.BL_MASK_BLIND)):
+                (self.engraving_below_me is None or self.engraving_below_me.lower() == 'elbereth'):
             assume_appropriate_message = self._previous_blstats is not None and not self.engraving_below_me
 
             self._previous_blstats = self.agent.blstats
@@ -442,22 +438,6 @@ class Inventory:
         assert not items
 
     def get_items_below_me(self, assume_appropriate_message=False):
-        last_kill = self.agent._last_cockatrice_kill
-        recent_cockatrice_kill = last_kill is not None and \
-                last_kill[:2] == self.agent.current_level().key() and \
-                self.agent.blstats.time - last_kill[2] <= 250
-        # hypothesis: after a recent cockatrice-family kill, a blind gloveless dwarf Valkyrie must
-        # defer movement and tactile floor inspection so the weakest build cannot touch the unseen corpse.
-        if recent_cockatrice_kill and self.agent.character.role == Character.VALKYRIE and \
-                self.agent.character.race == Character.DWARF and \
-                self.agent.blstats.prop_mask & nh.BL_MASK_BLIND and self.items.gloves is None:
-            self.items_below_me = []
-            self.letters_below_me = []
-            self.engraving_below_me = ''
-            self._blind_floor_check_skipped = True
-            return self.items_below_me
-
-        self._blind_floor_check_skipped = False
         with self.agent.panic_if_position_changes():
             with self.agent.atom_operation():
                 if not assume_appropriate_message:

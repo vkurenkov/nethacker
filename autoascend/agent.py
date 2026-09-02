@@ -48,7 +48,6 @@ class Agent:
         self.last_observation = None
 
         self._last_pet_seen = 0
-        self._last_cockatrice_kill = None
 
         self.inventory = Inventory(self)
         self.character = Character(self)
@@ -445,13 +444,6 @@ class Agent:
 
         self.blstats = BLStats(*self.last_observation['blstats'])
         self.glyphs = self.last_observation['glyphs']
-
-        if self.character.race == Character.DWARF and (
-                re.search(r'(?:kills?|destroys?) (?:an? |the )?(?:chickatrice|cockatrice)!', self.message,
-                          flags=re.IGNORECASE) or
-                re.search(r'(?:chickatrice|cockatrice) is (?:killed|destroyed)!', self.message,
-                          flags=re.IGNORECASE)):
-            self._last_cockatrice_kill = (*self.current_level().key(), self.blstats.time)
 
         self.stats_logger.log_cumulative_value('max_turns_on_position',
                                                key=(self.current_level().dungeon_number,
@@ -1447,20 +1439,6 @@ class Agent:
         ):
             yield True
             self.pray()
-            return
-
-        last_kill = self._last_cockatrice_kill
-        recent_cockatrice_kill = last_kill is not None and \
-                last_kill[:2] == self.current_level().key() and self.blstats.time - last_kill[2] <= 250
-        if recent_cockatrice_kill and self.character.role == Character.VALKYRIE and \
-                self.character.race == Character.DWARF and \
-                self.blstats.prop_mask & nh.BL_MASK_BLIND and \
-                self.inventory.items.gloves is None:
-            yield True
-            if self.can_engrave():
-                self.engrave('Elbereth')
-            else:
-                self.direction('.')
             return
 
         # if self.inventory.engraving_below_me.lower() != 'elbereth' and self.can_engrave() and \
