@@ -1302,9 +1302,8 @@ class Agent:
         if permonst.mflags2 & race_flag:
             return False
 
-        # hypothesis: rejecting nonpreserved corpses after 30 turns avoids the randomized taint window
-        # that can poison a progressing Valkyrie before the old 50-turn cutoff.
-        if self.blstats.time - age_turn >= 30 and \
+        # corpse aging
+        if self.blstats.time - age_turn >= 50 and \
                 monster_id not in [MON.id_from_name('lizard'), MON.id_from_name('lichen')]:
             return False
 
@@ -1435,14 +1434,7 @@ class Agent:
         if (
                 (self.is_safe_to_pray(500) and
                  (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
-                  * self.blstats.max_hitpoints or self.blstats.hitpoints < 6
-                  # hypothesis: human Valkyries below half health need early prayer against adjacent fast or
-                  # difficulty-7+ enemies before a multiattack skips the old HP triggers; sturdier dwarves do not.
-                  or (self.character.race == Character.HUMAN and
-                      self.blstats.hitpoints * 2 <= self.blstats.max_hitpoints and any(
-                          utils.adjacent((self.blstats.y, self.blstats.x), (y, x)) and
-                          (mon.mmove > 12 or mon.difficulty >= 7)
-                          for _, y, x, mon, _ in self.get_visible_monsters()))))
+                  * self.blstats.max_hitpoints or self.blstats.hitpoints < 6))
                 or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.FAINTING)
         ):
             yield True
