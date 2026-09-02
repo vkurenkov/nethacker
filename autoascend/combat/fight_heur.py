@@ -14,10 +14,13 @@ from .utils import wielding_ranged_weapon, line_dis_from, inside
 
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
+    # hypothesis: preferring missiles or retreat, with a kick only when contact is forced,
+    # prevents bare-handed monks from turning survivable cockatrice encounters into petrification.
+    if agent.character.role == agent.character.MONK and agent.inventory.items.gloves is None and \
+            agent.inventory.items.main_hand is None and mon.mname in ('cockatrice', 'chickatrice'):
+        return -1000
     ret = 1
-    # hypothesis: an experienced monk below one-third health should disengage from
-    # slow melee threats instead of treating the old absolute 8-HP cutoff as healthy.
-    if agent.blstats.hitpoints > max(8, agent.blstats.max_hitpoints / 3) or is_monster_faster(agent, monster):
+    if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
         ret += 15
     if wielding_ranged_weapon(agent) and not is_monster_faster(agent, monster):
         ret -= 6
