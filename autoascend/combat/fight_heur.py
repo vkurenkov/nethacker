@@ -274,6 +274,9 @@ def get_available_actions(agent, monsters):
 
 
 def decide_what_to_pickup(agent):
+    # hypothesis: declining projectile recovery on shop squares prevents combat from taking merchandise and turning a peaceful shopkeeper into a lethal pursuer.
+    if agent.current_level().shop[agent.blstats.y, agent.blstats.x]:
+        return []
     projectiles_below_me = [i for i in agent.inventory.items_below_me
                             if i.is_thrown_projectile() or i.is_fired_projectile()]
     my_launcher, ammo = agent.inventory.get_best_ranged_set(additional_ammo=[i for i in projectiles_below_me])

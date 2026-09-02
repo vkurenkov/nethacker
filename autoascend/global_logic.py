@@ -518,9 +518,6 @@ class GlobalLogic:
                 # hypothesis: a hungry, foodless Valkyrie is durable enough to trade an otherwise-certain level-one starvation for productive dungeon descent.
                 condition = lambda: self.agent.blstats.experience_level >= 8 or (
                     self.agent.character.role == Character.VALKYRIE and
-                    # hypothesis: requiring XL6 before emergency food-seeking descent keeps the weak human Valkyrie out of depth-scaled threats until its HP can survive the search for food.
-                    (self.agent.character.race != Character.HUMAN or
-                     self.agent.blstats.experience_level >= 6) and
                     self.agent.inventory.items.total_nutrition() == 0 and
                     self.agent.blstats.hunger_state >= Hunger.HUNGRY
                 )
