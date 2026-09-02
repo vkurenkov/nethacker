@@ -1,13 +1,15 @@
 from collections import defaultdict
 from itertools import product
 
+import nle.nethack as nh
 import numpy as np
 from scipy import signal
 
 from ..glyph import G
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
-    ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
+    imminent_death_on_melee, ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, \
+    consider_melee_only_ranged_if_hp_full
 from .movement_priority import draw_monster_priority_positive, draw_monster_priority_negative
 from .utils import wielding_ranged_weapon, line_dis_from, inside
 
@@ -15,7 +17,7 @@ from .utils import wielding_ranged_weapon, line_dis_from, inside
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
     ret = 1
-    if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
+    if not imminent_death_on_melee(agent, monster) or is_monster_faster(agent, monster):
         ret += 15
     if wielding_ranged_weapon(agent) and not is_monster_faster(agent, monster):
         ret -= 6
@@ -204,18 +206,12 @@ def elbereth_action(agent, monsters):
     if not agent.can_engrave():
         return []
     adj_monsters_count = 0
-    adjacent_poison_threat = False
     for monster in monsters:
         _, my, mx, mon, _ = monster
         if mon.mname in ONLY_RANGED_SLOW_MONSTERS:
             continue
         if not adjacent((my, mx), (agent.blstats.y, agent.blstats.x)):
             continue
-        # hypothesis: after the opening farm, engraving before melee with a durable poison
-        # attacker prevents instant deaths that an HP threshold cannot anticipate.
-        adjacent_poison_threat |= agent.blstats.depth > 1 and mon.mname in (
-            'soldier ant', 'queen bee', 'giant spider', 'scorpion', 'snake',
-            'water moccasin', 'pit viper', 'cobra', 'guardian naga', 'green dragon')
         multiplier = np.clip(20 / agent.blstats.hitpoints, 1.0, 1.5)
         if is_monster_faster(agent, monster):
             multiplier *= 2
@@ -227,11 +223,8 @@ def elbereth_action(agent, monsters):
             adj_monsters_count += 2 * multiplier
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
-    if (agent.blstats.hitpoints < 30 and adj_monsters_count > 0) or adjacent_poison_threat:
-        priority = -15 + 20 * adj_monsters_count * (1 - player_hp_ratio)
-        if adjacent_poison_threat:
-            priority = max(priority, 20)
-        return [(priority, ('elbereth',))]
+    if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
+        return [(-15 + 20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
     return []
 
 
@@ -278,10 +271,45 @@ def get_available_actions(agent, monsters):
     actions.extend(elbereth_action(agent, monsters))
     actions.extend(wait_action(agent, monsters))
 
+    # hypothesis: when passive gaze monsters seal every exit, throwing recoverable carried gear at a floating eye avoids repeated long paralysis while preserving normal ammunition and melee policy elsewhere.
+    if not agent.character.prop.blind and not agent.inventory.get_ranged_combinations() and \
+            np.sum(agent.bfs() != -1) == 1 and monsters and \
+            all(mon.mname in ONLY_RANGED_SLOW_MONSTERS for _, _, _, mon, _ in monsters):
+        eyes = [(y, x) for _, y, x, mon, _ in monsters
+                if mon.mname == 'floating eye' and adjacent((y, x), (agent.blstats.y, agent.blstats.x))]
+        missiles = [item for item in agent.inventory.items
+                    if item.category != nh.COIN_CLASS and item.can_be_dropped_from_inventory() and
+                    not item.is_container() and not item.is_possible_container()]
+        if eyes and missiles:
+            category_priority = {
+                nh.WEAPON_CLASS: 0,
+                nh.GEM_CLASS: 1,
+                nh.SCROLL_CLASS: 2,
+                nh.SPBOOK_CLASS: 3,
+                nh.TOOL_CLASS: 4,
+                nh.FOOD_CLASS: 5,
+                nh.ARMOR_CLASS: 6,
+                nh.RING_CLASS: 7,
+                nh.AMULET_CLASS: 8,
+                nh.POTION_CLASS: 9,
+                nh.WAND_CLASS: 10,
+            }
+            ammo = min(missiles, key=lambda item: (
+                0 if item.is_thrown_projectile() else 1,
+                category_priority.get(item.category, 11),
+                item.equipped,
+                item.unit_weight(with_content=False),
+            ))
+            y, x = eyes[0]
+            actions.append((30, ('ranged', y - agent.blstats.y, x - agent.blstats.x, None, ammo)))
+
     return actions
 
 
 def decide_what_to_pickup(agent):
+    # hypothesis: declining projectile recovery on shop squares prevents combat from taking merchandise and turning a peaceful shopkeeper into a lethal pursuer.
+    if agent.current_level().shop[agent.blstats.y, agent.blstats.x]:
+        return []
     projectiles_below_me = [i for i in agent.inventory.items_below_me
                             if i.is_thrown_projectile() or i.is_fired_projectile()]
     my_launcher, ammo = agent.inventory.get_best_ranged_set(additional_ammo=[i for i in projectiles_below_me])
