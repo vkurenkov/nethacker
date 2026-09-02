@@ -273,11 +273,13 @@ def get_available_actions(agent, monsters):
 
 
 def decide_what_to_pickup(agent):
+    # hypothesis: filtering combat recovery by parsed ownership prevents stolen ammunition and shopkeeper retaliation while preserving recovery of the bot's own projectiles inside shops.
     projectiles_below_me = [i for i in agent.inventory.items_below_me
-                            if i.is_thrown_projectile() or i.is_fired_projectile()]
+                            if i.shop_status == i.NOT_SHOP and
+                            (i.is_thrown_projectile() or i.is_fired_projectile())]
     my_launcher, ammo = agent.inventory.get_best_ranged_set(additional_ammo=[i for i in projectiles_below_me])
     to_pickup = []
-    for item in agent.inventory.items_below_me:
+    for item in projectiles_below_me:
         if item.is_thrown_projectile() or (my_launcher is not None and item.is_fired_projectile(launcher=my_launcher)):
             to_pickup.append(item)
     return to_pickup
