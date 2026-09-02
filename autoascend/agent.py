@@ -1172,13 +1172,10 @@ class Agent:
                 return wait_counter
 
         elif best_action[0] == 'ranged':
-            if len(best_action) == 5:
-                _, dy, dx, launcher, ammo = best_action
-            else:
-                _, dy, dx = best_action
-                launcher, ammo = self.inventory.get_best_ranged_set()
+            _, dy, dx = best_action
             target_y = self.blstats.y + dy
             target_x = self.blstats.x + dx
+            launcher, ammo = self.inventory.get_best_ranged_set()
             assert ammo is not None
             if launcher is not None and not launcher.equipped:
                 if self.inventory.wield(launcher):
@@ -1305,8 +1302,8 @@ class Agent:
         if permonst.mflags2 & race_flag:
             return False
 
-        # hypothesis: rejecting delayed corpses after 30 turns prevents lethal rot poisoning while retaining fresh kills and reliably preserved lichen/lizard corpses for nutrition.
-        if self.blstats.time - age_turn >= 30 and \
+        # corpse aging
+        if self.blstats.time - age_turn >= 50 and \
                 monster_id not in [MON.id_from_name('lizard'), MON.id_from_name('lichen')]:
             return False
 
@@ -1403,34 +1400,9 @@ class Agent:
         low_hp = hp_ratio < 0.5 and (self.blstats.max_hitpoints - self.blstats.hitpoints > 25)
         return self.blstats.energy >= 15 and low_hp
 
-    @utils.debug_log('recover_health')
-    @Strategy.wrap
-    def recover_health(self):
-        # hypothesis: resting below half health while well-fed and no hostile is visible prevents an injured character from discovering the next fight before natural regeneration, without worsening hunger emergencies.
-        if self.blstats.hitpoints * 2 >= self.blstats.max_hitpoints or \
-                self.blstats.hunger_state >= Hunger.HUNGRY or self.get_visible_monsters():
-            yield False
-
-        yield True
-        while self.blstats.hitpoints < 0.8 * self.blstats.max_hitpoints and \
-                self.blstats.hunger_state < Hunger.HUNGRY and not self.get_visible_monsters():
-            self.direction('.')
-
     @utils.debug_log('emergency_strategy')
     @Strategy.wrap
     def emergency_strategy(self):
-
-        # hypothesis: turning one of the Tourist's two extra-healing potions into at least 2 maximum HP at the initial 10/10 health improves fragile early survival while preserving the other potion for emergencies.
-        items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
-                 item.category == nh.POTION_CLASS and item.object.name == 'extra healing' and
-                 item.status in [Item.UNCURSED, Item.BLESSED]]
-        if self.character.role == Character.TOURIST and \
-                self.blstats.hitpoints == self.blstats.max_hitpoints and \
-                self.blstats.max_hitpoints == 10 and items:
-            yield True
-            item = next((item for item in items if item.status == Item.BLESSED), items[0])
-            self.inventory.quaff(item)
-            return
 
         # if self.should_cast_extra_heal():
         #     yield True
@@ -1463,7 +1435,9 @@ class Agent:
                 (self.is_safe_to_pray(500) and
                  (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
                   * self.blstats.max_hitpoints or self.blstats.hitpoints < 6))
-                or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.FAINTING)
+                # hypothesis: spacing hunger prayers by 1500 turns avoids repeated divine anger and
+                # level loss that can trap a foodless farmer below XL6 until starvation.
+                or (self.is_safe_to_pray(1500) and self.blstats.hunger_state >= Hunger.FAINTING)
         ):
             yield True
             self.pray()
@@ -1486,14 +1460,24 @@ class Agent:
     def eat_from_inventory(self):
         if self.blstats.hunger_state < Hunger.HUNGRY:
             yield False
-        for item in flatten_items(self.inventory.items):
-            if item.category == nh.FOOD_CLASS and \
-                    item.objs[0].name != 'sprig of wolfsbane' and \
-                    (not item.is_corpse() or
-                     item.monster_id in [MON.from_name(n) - nh.GLYPH_MON_OFF for n in ['lizard', 'lichen']]):
+
+        edible_items = [item for item in flatten_items(self.inventory.items)
+                        if item.category == nh.FOOD_CLASS and
+                        (not item.is_corpse() or
+                         item.monster_id in [MON.from_name(n) - nh.GLYPH_MON_OFF for n in ['lizard', 'lichen']])]
+        for item in edible_items:
+            if item.objs[0].name != 'sprig of wolfsbane':
                 yield True
                 self.inventory.eat(item)
                 return
+
+        # hypothesis: eating reserved wolfsbane only when weak and out of ordinary food buys enough conscious turns to finish level-one farming instead of repeatedly fainting to death.
+        if self.blstats.hunger_state >= Hunger.WEAK:
+            for item in edible_items:
+                if item.objs[0].name == 'sprig of wolfsbane':
+                    yield True
+                    self.inventory.eat(item)
+                    return
         yield False
 
     @utils.debug_log('cure_disease')
