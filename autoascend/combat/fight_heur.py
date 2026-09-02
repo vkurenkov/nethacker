@@ -4,7 +4,7 @@ from itertools import product
 import numpy as np
 from scipy import signal
 
-from ..glyph import G, MON
+from ..glyph import G
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
     ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
@@ -204,7 +204,6 @@ def elbereth_action(agent, monsters):
     if not agent.can_engrave():
         return []
     adj_monsters_count = 0
-    adjacent_combatants = 0
     adjacent_poison_threat = False
     for monster in monsters:
         _, my, mx, mon, _ = monster
@@ -212,8 +211,6 @@ def elbereth_action(agent, monsters):
             continue
         if not adjacent((my, mx), (agent.blstats.y, agent.blstats.x)):
             continue
-        if mon.mname not in WEAK_MONSTERS:
-            adjacent_combatants += 1
         # hypothesis: after the opening farm, engraving before melee with a durable poison
         # attacker prevents instant deaths that an HP threshold cannot anticipate.
         adjacent_poison_threat |= agent.blstats.depth > 1 and mon.mname in (
@@ -230,35 +227,16 @@ def elbereth_action(agent, monsters):
             adj_monsters_count += 2 * multiplier
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
-    # hypothesis: a wounded Valkyrie facing two adjacent combatants needs Elbereth before
-    # another melee exchange lets both monsters retaliate, preventing shallow pack deaths.
-    adjacent_pack_threat = adjacent_combatants >= 2 and \
-        agent.blstats.hitpoints < agent.blstats.max_hitpoints
-    if (agent.blstats.hitpoints < 30 and adj_monsters_count > 0) or \
-            adjacent_poison_threat or adjacent_pack_threat:
+    if (agent.blstats.hitpoints < 30 and adj_monsters_count > 0) or adjacent_poison_threat:
         priority = -15 + 20 * adj_monsters_count * (1 - player_hp_ratio)
-        if adjacent_poison_threat or adjacent_pack_threat:
+        if adjacent_poison_threat:
             priority = max(priority, 20)
         return [(priority, ('elbereth',))]
     return []
 
 
-def _elbereth_ranged_threat(agent, monster):
-    distance, y, x, mon, _ = monster
-    dy, dx = abs(y - agent.blstats.y), abs(x - agent.blstats.x)
-    weapon_classes = (MON.S_HUMANOID, MON.S_KOBOLD, MON.S_ORC,
-                      MON.S_GNOME, MON.S_GIANT, MON.S_HUMAN)
-    # hypothesis: a wounded character should counterfire from Elbereth when a nearby
-    # weapon-using humanoid has a clear throwing line instead of waiting to be hit.
-    return agent.blstats.hitpoints < agent.blstats.max_hitpoints and 1 < distance <= 7 and \
-        (dy == 0 or dx == 0 or dy == dx) and ord(mon.mlet) in weapon_classes and \
-        mon.mflags2 & (MON.M2_COLLECT | MON.M2_ROCKTHROW)
-
-
 def wait_action(agent, monsters):
     if agent.inventory.engraving_below_me.lower() == 'elbereth':
-        if any(_elbereth_ranged_threat(agent, monster) for monster in monsters):
-            return []
         player_hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
         priority = 30 - player_hp_ratio * 40
         return [(priority, ('wait',))]
@@ -285,8 +263,7 @@ def get_available_actions(agent, monsters):
             ranged_pr = ranged_priority(agent, dy, dx, monsters)
             if ranged_pr is not None:
                 pri, y, x, monster = ranged_pr
-                if agent.inventory.engraving_below_me.lower() == 'elbereth' and not (
-                        _elbereth_ranged_threat(agent, monster)):
+                if agent.inventory.engraving_below_me.lower() == 'elbereth':
                     pri -= 100
                 if all(monster[3].mname in ONLY_RANGED_SLOW_MONSTERS for monster in monsters):
                     pri += 10
