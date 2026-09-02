@@ -204,18 +204,12 @@ def elbereth_action(agent, monsters):
     if not agent.can_engrave():
         return []
     adj_monsters_count = 0
-    adjacent_poison_threat = False
     for monster in monsters:
         _, my, mx, mon, _ = monster
         if mon.mname in ONLY_RANGED_SLOW_MONSTERS:
             continue
         if not adjacent((my, mx), (agent.blstats.y, agent.blstats.x)):
             continue
-        # hypothesis: after the opening farm, engraving before melee with a durable poison
-        # attacker prevents instant deaths that an HP threshold cannot anticipate.
-        adjacent_poison_threat |= agent.blstats.depth > 1 and mon.mname in (
-            'soldier ant', 'queen bee', 'giant spider', 'scorpion', 'snake',
-            'water moccasin', 'pit viper', 'cobra', 'guardian naga', 'green dragon')
         multiplier = np.clip(20 / agent.blstats.hitpoints, 1.0, 1.5)
         if is_monster_faster(agent, monster):
             multiplier *= 2
@@ -227,11 +221,8 @@ def elbereth_action(agent, monsters):
             adj_monsters_count += 2 * multiplier
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
-    if (agent.blstats.hitpoints < 30 and adj_monsters_count > 0) or adjacent_poison_threat:
-        priority = -15 + 20 * adj_monsters_count * (1 - player_hp_ratio)
-        if adjacent_poison_threat:
-            priority = max(priority, 20)
-        return [(priority, ('elbereth',))]
+    if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
+        return [(-15 + 20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
     return []
 
 

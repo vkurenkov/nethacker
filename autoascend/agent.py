@@ -420,10 +420,7 @@ class Agent:
             return
 
         if b'[yn]' in bytes(observation['tty_chars'].reshape(-1)):
-            # hypothesis: declining a tin whose revealed meat is cockatrice-family prevents instant petrification while preserving every safe tin as scarce nutrition.
-            dangerous_tin = any(f'It smells like {name}.' in self.message
-                                for name in ('chickatrices', 'cockatrices'))
-            self.type_text('n' if dangerous_tin else 'y')
+            self.type_text('y')
             return
 
         self._is_reading_message_or_popup = False
