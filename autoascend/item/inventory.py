@@ -47,6 +47,7 @@ class Inventory:
         self.engraving_below_me = None
 
         self.skip_engrave_counter = 0
+        self._amulet_tested = False
 
     def on_panic(self):
         self.items_below_me = None
@@ -826,6 +827,7 @@ class Inventory:
             self.pickup_and_drop_items()
                 .before(self.check_containers())
                 .before(self.wear_best_stuff())
+                .before(self.wear_amulet())
                 .before(self.wand_engrave_identify())
                 .before(self.go_to_unchecked_containers())
                 .before(self.check_items()
@@ -1203,6 +1205,44 @@ class Inventory:
 
         if not yielded:
             yield False
+
+    @utils.debug_log('inventory.wear_amulet')
+    @Strategy.wrap
+    def wear_amulet(self):
+        equipped = [item for item in flatten_items(self.items)
+                    if item.category == nh.AMULET_CLASS and item.equipped]
+        candidates = [item for item in flatten_items(self.items)
+                      if item.category == nh.AMULET_CLASS and
+                      item.shop_status == Item.NOT_SHOP and item.status != Item.CURSED and
+                      (not item.is_unambiguous() or item.object.name not in
+                       ['amulet of strangulation', 'amulet of restful sleep', 'amulet of change'])]
+
+        # hypothesis: safely wear-testing one unknown amulet while prayer is available turns otherwise-hoarded life-saving, reflection, poison-resistance, or ESP into protection for weak Valkyries, while immediate strangulation remains removable or pray-curable.
+        if self._amulet_tested or equipped or not candidates or \
+                self.agent.get_visible_monsters() or not self.agent.is_safe_to_pray():
+            yield False
+
+        yield True
+        self._amulet_tested = True
+        candidate = next((item for item in candidates if item.is_unambiguous()), candidates[0])
+        letter = self.items.get_letter(candidate)
+        with self.agent.atom_operation():
+            self.agent.step(A.Command.PUTON)
+            if 'What do you want to put on?' not in self.agent.message:
+                return
+            self.agent.type_text(letter)
+
+        if self.agent.blstats.prop_mask & nh.BL_MASK_STRNGL:
+            worn = next((item for item in flatten_items(self.items)
+                         if item.category == nh.AMULET_CLASS and item.equipped), None)
+            if worn is not None:
+                letter = self.items.get_letter(worn)
+                with self.agent.atom_operation():
+                    self.agent.step(A.Command.REMOVE)
+                    if 'What do you want to remove?' in self.agent.message:
+                        self.agent.type_text(letter)
+            if self.agent.blstats.prop_mask & nh.BL_MASK_STRNGL and self.agent.is_safe_to_pray():
+                self.agent.pray()
 
     @utils.debug_log('inventory.check_items')
     @Strategy.wrap
