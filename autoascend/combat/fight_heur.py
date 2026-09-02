@@ -7,8 +7,7 @@ from scipy import signal
 from ..glyph import G
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
-    imminent_death_on_melee, ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, \
-    consider_melee_only_ranged_if_hp_full
+    ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
 from .movement_priority import draw_monster_priority_positive, draw_monster_priority_negative
 from .utils import wielding_ranged_weapon, line_dis_from, inside
 
@@ -16,7 +15,7 @@ from .utils import wielding_ranged_weapon, line_dis_from, inside
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
     ret = 1
-    if not imminent_death_on_melee(agent, monster) or is_monster_faster(agent, monster):
+    if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
         ret += 15
     if wielding_ranged_weapon(agent) and not is_monster_faster(agent, monster):
         ret -= 6
@@ -200,16 +199,20 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
 
 
 def elbereth_action(agent, monsters):
+    # hypothesis: holding a valid Elbereth until nearby dangerous monsters retreat, and refreshing it before they close, prevents fast ants from receiving a poisoned attack between decisions.
     if agent.inventory.engraving_below_me.lower() == 'elbereth':
+        if any(monster[0] <= 3 and is_dangerous_monster(monster) for monster in monsters):
+            return [(float('inf'), ('wait',))]
         return []
     if not agent.can_engrave():
         return []
     adj_monsters_count = 0
     for monster in monsters:
-        _, my, mx, mon, _ = monster
+        distance, my, mx, mon, _ = monster
         if mon.mname in ONLY_RANGED_SLOW_MONSTERS:
             continue
-        if not adjacent((my, mx), (agent.blstats.y, agent.blstats.x)):
+        if not adjacent((my, mx), (agent.blstats.y, agent.blstats.x)) and \
+                not (distance <= 2 and is_dangerous_monster(monster)):
             continue
         multiplier = np.clip(20 / agent.blstats.hitpoints, 1.0, 1.5)
         if is_monster_faster(agent, monster):
@@ -274,9 +277,6 @@ def get_available_actions(agent, monsters):
 
 
 def decide_what_to_pickup(agent):
-    # hypothesis: declining projectile recovery on shop squares prevents combat from taking merchandise and turning a peaceful shopkeeper into a lethal pursuer.
-    if agent.current_level().shop[agent.blstats.y, agent.blstats.x]:
-        return []
     projectiles_below_me = [i for i in agent.inventory.items_below_me
                             if i.is_thrown_projectile() or i.is_fired_projectile()]
     my_launcher, ammo = agent.inventory.get_best_ranged_set(additional_ammo=[i for i in projectiles_below_me])
