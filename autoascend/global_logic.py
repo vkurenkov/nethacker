@@ -521,11 +521,8 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                # hypothesis: the weakest neutral human Valkyrie gains more from dungeon food and depth at XL5 than from risking another hunger cycle to farm XL6.
-                early_descent = self.agent.character.role == Character.VALKYRIE and \
-                    self.agent.character.race == Character.HUMAN and \
-                    self.agent.character.alignment == Character.NEUTRAL
-                condition = lambda: self.agent.blstats.experience_level >= (5 if early_descent else 6)
+                # hypothesis: XL6 leaves sparse Dlvl 1 sooner without sacrificing Valkyrie farming safety.
+                condition = lambda: self.agent.blstats.experience_level >= 6
                 # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
                 #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
                 level = (Level.DUNGEONS_OF_DOOM, 1)

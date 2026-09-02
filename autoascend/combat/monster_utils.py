@@ -8,10 +8,9 @@ WEIRD_MONSTERS = ['leprechaun', 'nymph']
 
 def is_monster_faster(agent, monster):
     _, y, x, mon, _ = monster
-    # TOOD: implement properly
-    return 'bat' in mon.mname or 'dog' in mon.mname or 'cat' in mon.mname \
-           or 'kitten' in mon.mname or 'pony' in mon.mname or 'horse' in mon.mname \
-           or 'bee' in mon.mname or 'fox' in mon.mname
+    # hypothesis: using actual movement speed keeps low-HP Valkyries from trying to outrun fast
+    # threats such as ants, snakes, and centaurs that the name list missed.
+    return mon.mmove > 12
 
 
 def imminent_death_on_melee(agent, monster):
