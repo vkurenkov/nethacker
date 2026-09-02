@@ -4,7 +4,7 @@ from itertools import product
 import numpy as np
 from scipy import signal
 
-from ..glyph import G
+from ..glyph import G, MON
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
     ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
@@ -243,8 +243,22 @@ def elbereth_action(agent, monsters):
     return []
 
 
+def _elbereth_ranged_threat(agent, monster):
+    distance, y, x, mon, _ = monster
+    dy, dx = abs(y - agent.blstats.y), abs(x - agent.blstats.x)
+    weapon_classes = (MON.S_HUMANOID, MON.S_KOBOLD, MON.S_ORC,
+                      MON.S_GNOME, MON.S_GIANT, MON.S_HUMAN)
+    # hypothesis: a wounded character should counterfire from Elbereth when a nearby
+    # weapon-using humanoid has a clear throwing line instead of waiting to be hit.
+    return agent.blstats.hitpoints < agent.blstats.max_hitpoints and 1 < distance <= 7 and \
+        (dy == 0 or dx == 0 or dy == dx) and ord(mon.mlet) in weapon_classes and \
+        mon.mflags2 & (MON.M2_COLLECT | MON.M2_ROCKTHROW)
+
+
 def wait_action(agent, monsters):
     if agent.inventory.engraving_below_me.lower() == 'elbereth':
+        if any(_elbereth_ranged_threat(agent, monster) for monster in monsters):
+            return []
         player_hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
         priority = 30 - player_hp_ratio * 40
         return [(priority, ('wait',))]
@@ -271,7 +285,8 @@ def get_available_actions(agent, monsters):
             ranged_pr = ranged_priority(agent, dy, dx, monsters)
             if ranged_pr is not None:
                 pri, y, x, monster = ranged_pr
-                if agent.inventory.engraving_below_me.lower() == 'elbereth':
+                if agent.inventory.engraving_below_me.lower() == 'elbereth' and not (
+                        _elbereth_ranged_threat(agent, monster)):
                     pri -= 100
                 if all(monster[3].mname in ONLY_RANGED_SLOW_MONSTERS for monster in monsters):
                     pri += 10
