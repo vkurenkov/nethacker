@@ -1404,6 +1404,14 @@ class Agent:
     @Strategy.wrap
     def emergency_strategy(self):
 
+        # hypothesis: praying as soon as a safely curable fatal illness is reported
+        # saves runs that corpse-age filtering cannot protect from randomized taint.
+        fatal_illness = self.blstats.prop_mask & (nh.BL_MASK_FOODPOIS | nh.BL_MASK_TERMILL)
+        if fatal_illness and self.is_safe_to_pray(500):
+            yield True
+            self.pray()
+            return
+
         # if self.should_cast_extra_heal():
         #     yield True
         #     self.cast('extra healing', direction=(0, 0))
