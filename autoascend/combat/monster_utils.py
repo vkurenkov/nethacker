@@ -17,7 +17,8 @@ def is_monster_faster(agent, monster):
 def imminent_death_on_melee(agent, monster):
     if is_dangerous_monster(monster):
         return agent.blstats.hitpoints <= 16
-    return agent.blstats.hitpoints <= 8
+    # hypothesis: retreating from ordinary melee below 13 HP keeps early knights outside one-hit range of armed and high-damage foes long enough to regenerate.
+    return agent.blstats.hitpoints <= 12
 
 
 def is_dangerous_monster(monster):
