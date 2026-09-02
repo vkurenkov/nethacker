@@ -575,10 +575,8 @@ class GlobalLogic:
                         self.identify_items_on_altar().condition(
                             lambda: self.agent.current_level().objects[self.agent.blstats.y,
                                                                        self.agent.blstats.x] in G.ALTAR),
-                        # hypothesis: pursuing Excalibur from its XL5 eligibility point lets the two weak
-                        # lawful Valkyries gain its benefits before the common XL5-6 deaths.
                         self.dip_for_excalibur().condition(
-                            lambda: self.agent.blstats.experience_level >= 5).every(10),
+                            lambda: self.agent.blstats.experience_level >= 7).every(10),
                     ])
                 )
 
@@ -589,7 +587,7 @@ class GlobalLogic:
                         self.agent.exploration.go_to_strategy(y, x).preempt(self.agent, [
                             self.agent.inventory.gather_items(),
                             self.identify_items_on_altar(),
-                            self.dip_for_excalibur().condition(lambda: self.agent.blstats.experience_level >= 5),
+                            self.dip_for_excalibur().condition(lambda: self.agent.blstats.experience_level >= 7),
                         ])
                         .condition(lambda: self._got_artifact or
                                            not any([alignment == self.agent.character.alignment
