@@ -643,14 +643,6 @@ class GlobalLogic:
             .preempt(self.agent, [
                 self.agent.fight2(),
             ])
-            # hypothesis: once fainting has begun, eating known-safe food must preempt combat
-            # because a bounded eating occupation is safer than repeatedly giving visible monsters helpless attacks.
-            .preempt(self.agent, [
-                self.agent.eat_corpses_from_ground(only_below_me=True)
-                .condition(lambda: self.agent.blstats.hunger_state >= Hunger.FAINTING),
-                self.agent.eat_from_inventory()
-                .condition(lambda: self.agent.blstats.hunger_state >= Hunger.FAINTING),
-            ])
             .preempt(self.agent, [
                 self.agent.engulfed_fight(),
             ])
