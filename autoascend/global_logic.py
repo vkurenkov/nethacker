@@ -140,11 +140,13 @@ class ItemPriority(ItemPriorityBase):
 
 class Milestone(IntEnum):
     BE_ON_FIRST_LEVEL = auto()
+    # hypothesis: finding Sokoban before entering the monster-dense Mines gains
+    # main-dungeon depth progression without committing a fragile monk to the puzzle.
+    FIND_SOKOBAN = auto()
     FIND_GNOMISH_MINES = auto()
     # FIND_LIGHT_GNOMISH_MINES = auto()
     # FARM_LIGHT_GNOMISH_MINES = auto()
     FIND_MINETOWN = auto()
-    FIND_SOKOBAN = auto()
     SOLVE_SOKOBAN = auto()
     FIND_MINES_END = auto()
     GO_DOWN = auto() # TODO
@@ -327,12 +329,7 @@ class GlobalLogic:
                 yield True
                 yielded = True
 
-            if self.agent.character.prop.hallu and \
-                    self.agent.inventory.engraving_below_me.lower() != 'elbereth' and \
-                    self.agent.can_engrave():
-                self.agent.engrave('Elbereth')
-            else:
-                self.agent.direction('.')
+            self.agent.direction('.')
 
         if not yielded:
             yield False
@@ -564,13 +561,7 @@ class GlobalLogic:
                 level = (Level.DUNGEONS_OF_DOOM, 100)
 
             if condition():
-                # hypothesis: once a monk reaches XL8, descending the main dungeon
-                # converts its farmed strength into progression without exposing it
-                # to Minetown's dense fights or Sokoban branch-search stalls.
-                if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                    self.milestone = Milestone.GO_DOWN
-                else:
-                    self.milestone = Milestone(int(self.milestone) + 1)
+                self.milestone = Milestone(int(self.milestone) + 1)
                 continue
 
 
