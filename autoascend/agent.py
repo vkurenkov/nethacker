@@ -753,11 +753,6 @@ class Agent:
         with self.panic_if_position_changes():
             assert self.glyphs[y, x] in G.MONS or self.glyphs[y, x] in G.INVISIBLE_MON or \
                    self.glyphs[y, x] in G.SWALLOW
-            if self.character.role == Character.MONK and self.inventory.items.gloves is None and \
-                    self.inventory.items.main_hand is None and self.glyphs[y, x] in G.MONS and \
-                    MON.permonst(self.glyphs[y, x]).mname in ('cockatrice', 'chickatrice'):
-                self.kick(y, x)
-                return True
             self.direction(y, x)
         return True
 
@@ -817,6 +812,11 @@ class Agent:
 
     def search(self, max_count=1):
         assert max_count >= 1
+        # hypothesis: wounded pre-XL7 monks searching one turn at a time can react
+        # to an approaching monster instead of taking five uninterruptible combat turns.
+        if max_count > 1 and self.blstats.experience_level < 7 and \
+                self.blstats.hitpoints < 0.8 * self.blstats.max_hitpoints:
+            max_count = 1
         with self.panic_if_position_changes():
             with self.atom_operation():
                 if max_count > 1:
@@ -1307,8 +1307,9 @@ class Agent:
         if permonst.mflags2 & race_flag:
             return False
 
-        # corpse aging
-        if self.blstats.time - age_turn >= 50 and \
+        # hypothesis: a 30-turn freshness limit avoids lethal, already-aged corpses
+        # whose observed drop time makes the old 50-turn estimate overoptimistic.
+        if self.blstats.time - age_turn >= 30 and \
                 monster_id not in [MON.id_from_name('lizard'), MON.id_from_name('lichen')]:
             return False
 
@@ -1440,9 +1441,7 @@ class Agent:
                 (self.is_safe_to_pray(500) and
                  (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
                   * self.blstats.max_hitpoints or self.blstats.hitpoints < 6))
-                # hypothesis: praying while weak prevents the next multi-turn action from skipping straight into
-                # an unactionable faint, preserving otherwise viable low-food runs across healers and monks.
-                or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.WEAK)
+                or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.FAINTING)
         ):
             yield True
             self.pray()
