@@ -327,7 +327,12 @@ class GlobalLogic:
                 yield True
                 yielded = True
 
-            self.agent.direction('.')
+            if self.agent.character.prop.hallu and \
+                    self.agent.inventory.engraving_below_me.lower() != 'elbereth' and \
+                    self.agent.can_engrave():
+                self.agent.engrave('Elbereth')
+            else:
+                self.agent.direction('.')
 
         if not yielded:
             yield False
@@ -362,10 +367,7 @@ class GlobalLogic:
     @utils.debug_log('dip_for_excalibur')
     @Strategy.wrap
     def dip_for_excalibur(self):
-        # hypothesis: monks should skip the risky, time-consuming Excalibur fountain ritual
-        # because their combat policy is hard-coded to remain unarmed and can never use the sword.
-        if self.agent.character.role == Character.MONK or \
-                self.agent.character.alignment != Character.LAWFUL or self.agent.blstats.experience_level < 5:
+        if self.agent.character.alignment != Character.LAWFUL or self.agent.blstats.experience_level < 5:
             yield False
         if self.agent.current_level().dungeon_number == Level.GNOMISH_MINES and \
                 (self.minetown_level is None or self.agent.current_level().key() == self.minetown_level):
