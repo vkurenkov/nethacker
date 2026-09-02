@@ -204,7 +204,6 @@ def elbereth_action(agent, monsters):
     if not agent.can_engrave():
         return []
     adj_monsters_count = 0
-    adjacent_combatants = 0
     adjacent_poison_threat = False
     for monster in monsters:
         _, my, mx, mon, _ = monster
@@ -212,8 +211,6 @@ def elbereth_action(agent, monsters):
             continue
         if not adjacent((my, mx), (agent.blstats.y, agent.blstats.x)):
             continue
-        if mon.mname not in WEAK_MONSTERS:
-            adjacent_combatants += 1
         # hypothesis: after the opening farm, engraving before melee with a durable poison
         # attacker prevents instant deaths that an HP threshold cannot anticipate.
         adjacent_poison_threat |= agent.blstats.depth > 1 and mon.mname in (
@@ -230,14 +227,9 @@ def elbereth_action(agent, monsters):
             adj_monsters_count += 2 * multiplier
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
-    # hypothesis: a wounded Valkyrie facing two adjacent combatants needs Elbereth before
-    # another melee exchange lets both monsters retaliate, preventing shallow pack deaths.
-    adjacent_pack_threat = adjacent_combatants >= 2 and \
-        agent.blstats.hitpoints < agent.blstats.max_hitpoints
-    if (agent.blstats.hitpoints < 30 and adj_monsters_count > 0) or \
-            adjacent_poison_threat or adjacent_pack_threat:
+    if (agent.blstats.hitpoints < 30 and adj_monsters_count > 0) or adjacent_poison_threat:
         priority = -15 + 20 * adj_monsters_count * (1 - player_hp_ratio)
-        if adjacent_poison_threat or adjacent_pack_threat:
+        if adjacent_poison_threat:
             priority = max(priority, 20)
         return [(priority, ('elbereth',))]
     return []

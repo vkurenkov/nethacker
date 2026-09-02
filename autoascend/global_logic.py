@@ -160,14 +160,10 @@ class GlobalLogic:
 
         self.oracle_level = None
         self.minetown_level = None
-        self.quest_portal_level = None
 
         self._got_artifact = False
 
     def update(self):
-        if 'Look for a ...ic transporter.' in self.agent.message:
-            self.quest_portal_level = self.agent.current_level().key()
-
         if not self.agent.character.prop.hallu:
             if utils.isin(self.agent.glyphs, G.ORACLE).any():
                 if self.oracle_level is None:

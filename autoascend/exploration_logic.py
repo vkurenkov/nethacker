@@ -17,16 +17,6 @@ class ExplorationLogic:
     def __init__(self, agent):
         self.agent = agent
 
-    def quest_portal_sweep_targets(self):
-        level = self.agent.current_level()
-        # hypothesis: fully walking the specifically summoned quest-portal level before descending finds the hidden portal and secures Home progression in deep runs that currently skip it.
-        if self.agent.global_logic.quest_portal_level != level.key():
-            return np.zeros((C.SIZE_Y, C.SIZE_X), dtype=bool)
-        return level.walkable & ~level.was_on
-
-    def quest_portal_sweep_pending(self):
-        return (self.quest_portal_sweep_targets() & (self.agent.bfs() != -1)).any()
-
     # TODO: think how to handle the situation with wizard's tower
     def _level_dfs(self, start, end, path, vis):
         if start in vis:
@@ -188,8 +178,7 @@ class ExplorationLogic:
 
             explore_strategy.preempt(self.agent, [
                 self.explore_stairs(go_to_strategy, all=True) \
-                        .condition(lambda: self.agent.current_level().key() in levels_to_search and
-                                           not self.quest_portal_sweep_pending()),
+                        .condition(lambda: self.agent.current_level().key() in levels_to_search),
                 go_to_least_explored_level(),
             ], continue_after_preemption=False).run()
 
@@ -311,9 +300,9 @@ class ExplorationLogic:
             stone = ~level.seen & utils.isin(self.agent.glyphs, G.STONE)
             doors = utils.isin(self.agent.glyphs, G.DOOR_CLOSED) & (level.door_open_count < door_open_count)
             if not stone.any() and not doors.any():
-                return self.quest_portal_sweep_targets()
+                return stone
 
-            to_visit = self.quest_portal_sweep_targets()
+            to_visit = np.zeros((C.SIZE_Y, C.SIZE_X), dtype=bool)
             tmp = np.zeros((C.SIZE_Y, C.SIZE_X), dtype=bool)
             for dy in [-1, 0, 1]:
                 for dx in [-1, 0, 1]:
