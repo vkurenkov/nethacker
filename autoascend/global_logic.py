@@ -520,12 +520,24 @@ class GlobalLogic:
         yield True
         while 1:
             explore_stairs_condition = lambda: False
+            strategy_refresh_condition = None
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
                 # hypothesis: XL6 leaves sparse Dlvl 1 sooner without sacrificing Valkyrie farming safety.
                 condition = lambda: self.agent.blstats.experience_level >= 6
+                # hypothesis: a foodless, hungry XL4 Valkyrie should seek dungeon food below
+                # level one, but resume the safer farm if food or prayer resolves the emergency.
+                needs_food_descent = lambda: (
+                    self.agent.character.role == Character.VALKYRIE and
+                    self.agent.blstats.experience_level >= 4 and
+                    self.agent.inventory.items.total_nutrition() == 0 and
+                    self.agent.blstats.hunger_state >= Hunger.HUNGRY
+                )
+                descending_for_food = needs_food_descent()
+                strategy_refresh_condition = lambda: condition() or \
+                    needs_food_descent() != descending_for_food
                 # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
                 #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
-                level = (Level.DUNGEONS_OF_DOOM, 1)
+                level = (Level.DUNGEONS_OF_DOOM, 100 if descending_for_food else 1)
 
             elif self.milestone == Milestone.FIND_SOKOBAN:
                 condition = lambda: self.agent.current_level().dungeon_number == Level.SOKOBAN
@@ -563,6 +575,9 @@ class GlobalLogic:
                 # TODO
                 condition = lambda: False
                 level = (Level.DUNGEONS_OF_DOOM, 100)
+
+            if strategy_refresh_condition is None:
+                strategy_refresh_condition = condition
 
             if condition():
                 self.milestone = Milestone(int(self.milestone) + 1)
@@ -610,7 +625,7 @@ class GlobalLogic:
                 .preempt(self.agent, [
                     self.agent.exploration.explore_stairs(go_to_strategy, all=True).condition(explore_stairs_condition),
                 ])
-                .until(self.agent, condition)
+                .until(self.agent, strategy_refresh_condition)
             ).run()
 
     def global_strategy(self):

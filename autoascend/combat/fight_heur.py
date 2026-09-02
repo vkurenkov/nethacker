@@ -222,9 +222,7 @@ def elbereth_action(agent, monsters):
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
-        # hypothesis: removing the fixed Elbereth penalty lets wounded Valkyries ward an
-        # adjacent threat before one more ordinary attack crosses the emergency threshold.
-        return [(20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
+        return [(-15 + 20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
     return []
 
 
