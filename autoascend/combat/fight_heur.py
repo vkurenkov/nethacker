@@ -50,11 +50,6 @@ def melee_monster_priority(agent, monsters, monster):
 def ranged_priority(agent, dy, dx, monsters):
     ret = 11
 
-    # hypothesis: refusing shots whose flight path enters a mapped shop prevents thrown Valkyrie
-    # daggers from becoming shop stock and provoking lethal recovery theft, while preserving ranged combat elsewhere.
-    if agent.current_level().shop[agent.blstats.y, agent.blstats.x]:
-        return None
-
     closest_mon_dis = float('inf')
     for monster in monsters:
         _, my, mx, mon, _ = monster
@@ -80,9 +75,6 @@ def ranged_priority(agent, dy, dx, monsters):
             return None
 
         if agent.glyphs[y, x] in G.PETS or not agent.current_level().walkable[y, x]:
-            return None
-
-        if agent.current_level().shop[y, x]:
             return None
 
         if agent.glyphs[y, x] in G.MONS:
@@ -212,12 +204,21 @@ def elbereth_action(agent, monsters):
     if not agent.can_engrave():
         return []
     adj_monsters_count = 0
+    adjacent_combatants = 0
+    adjacent_poison_threat = False
     for monster in monsters:
         _, my, mx, mon, _ = monster
         if mon.mname in ONLY_RANGED_SLOW_MONSTERS:
             continue
         if not adjacent((my, mx), (agent.blstats.y, agent.blstats.x)):
             continue
+        if mon.mname not in WEAK_MONSTERS:
+            adjacent_combatants += 1
+        # hypothesis: after the opening farm, engraving before melee with a durable poison
+        # attacker prevents instant deaths that an HP threshold cannot anticipate.
+        adjacent_poison_threat |= agent.blstats.depth > 1 and mon.mname in (
+            'soldier ant', 'queen bee', 'giant spider', 'scorpion', 'snake',
+            'water moccasin', 'pit viper', 'cobra', 'guardian naga', 'green dragon')
         multiplier = np.clip(20 / agent.blstats.hitpoints, 1.0, 1.5)
         if is_monster_faster(agent, monster):
             multiplier *= 2
@@ -229,8 +230,16 @@ def elbereth_action(agent, monsters):
             adj_monsters_count += 2 * multiplier
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
-    if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
-        return [(-15 + 20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
+    # hypothesis: a wounded Valkyrie facing two adjacent combatants needs Elbereth before
+    # another melee exchange lets both monsters retaliate, preventing shallow pack deaths.
+    adjacent_pack_threat = adjacent_combatants >= 2 and \
+        agent.blstats.hitpoints < agent.blstats.max_hitpoints
+    if (agent.blstats.hitpoints < 30 and adj_monsters_count > 0) or \
+            adjacent_poison_threat or adjacent_pack_threat:
+        priority = -15 + 20 * adj_monsters_count * (1 - player_hp_ratio)
+        if adjacent_poison_threat or adjacent_pack_threat:
+            priority = max(priority, 20)
+        return [(priority, ('elbereth',))]
     return []
 
 
