@@ -1245,19 +1245,9 @@ class Agent:
     def _is_corpse_editable(self, monster_id, age_turn):
         permonst = MON.permonst(monster_id)
 
-        # hypothesis: a healthy, strong Valkyrie can safely sample a short poison-resistance
-        # corpse, trading bounded poison damage for an intrinsic that prevents common run-ending stings.
+        # TODO: read intrinsics
         if self.character.race != Character.ORC and permonst.mflags1 & MON.M1_POIS != 0:
-            safe_resistance_attempt = (
-                self.character.role == Character.VALKYRIE and
-                (permonst.mconveys & MON.MR_POISON) != 0 and
-                permonst.cwt <= 150 and
-                self.blstats.hitpoints >= max(30, 2 * self.blstats.max_hitpoints / 3) and
-                self.blstats.strength >= 18 and
-                not self.get_visible_monsters()
-            )
-            if not safe_resistance_attempt:
-                return False
+            return False
 
         # TODO: read intrinsics
         if permonst.mflags1 & MON.M1_ACID != 0:
@@ -1433,6 +1423,27 @@ class Agent:
             yield True
             self.inventory.quaff(items[0])
             return
+
+        teleport_scrolls = [
+            item for item in flatten_items(self.inventory.items)
+            if item.is_unambiguous()
+            and item.category == nh.SCROLL_CLASS
+            and item.object.name == 'teleportation'
+            and item.status in (Item.UNCURSED, Item.BLESSED)
+            and item.shop_status == Item.NOT_SHOP
+        ]
+        nearby_monster = bool(teleport_scrolls) and \
+            any(monster[0] <= 2 for monster in self.get_visible_monsters())
+        # hypothesis: reading a known safe teleport scroll at critical relative or absolute HP escapes nearby lethal fights that weak Valkyries otherwise die carrying it through.
+        if teleport_scrolls and nearby_monster and not self.character.prop.blind and \
+                not self.character.prop.confusion and \
+                self.blstats.hitpoints < max(20, 0.4 * self.blstats.max_hitpoints):
+            yield True
+            scroll = self.inventory.move_to_inventory(teleport_scrolls[0])
+            with self.atom_operation():
+                self.step(A.Command.READ)
+                self.type_text(self.inventory.items.get_letter(scroll))
+            raise AgentPanic('restart after emergency teleport')
 
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name in ['fruit juice']]
