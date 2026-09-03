@@ -18,6 +18,16 @@ def melee_monster_priority(agent, monsters, monster):
     ret = 1
     if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
         ret += 15
+    # hypothesis: after descending, an early knight should stand and thin an
+    # adjacent giant-ant pair instead of futilely retreating into unknown terrain.
+    adjacent_giant_ants = sum(
+        other[3].mname == 'giant ant' and
+        adjacent((other[1], other[2]), (agent.blstats.y, agent.blstats.x))
+        for other in monsters
+    )
+    if mon.mname == 'giant ant' and \
+            agent.blstats.experience_level <= 8 and agent.blstats.depth > 1:
+        ret += 4 * max(0, adjacent_giant_ants - 1)
     # hypothesis: below a mumak's typical attack-round damage, preferring retreat
     # or missiles over another melee exchange prevents avoidable burst deaths.
     if mon.mname == 'mumak' and agent.blstats.hitpoints <= 28:
