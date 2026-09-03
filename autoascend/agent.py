@@ -1400,6 +1400,20 @@ class Agent:
         low_hp = hp_ratio < 0.5 and (self.blstats.max_hitpoints - self.blstats.hitpoints > 25)
         return self.blstats.energy >= 15 and low_hp
 
+    @utils.debug_log('recover_health')
+    @Strategy.wrap
+    def recover_health(self):
+        # hypothesis: resting after severe fights on deeper levels, while fed and
+        # unthreatened, prevents accumulated damage from making the next encounter lethal.
+        if self.blstats.depth < 5 or self.blstats.hitpoints * 2 >= self.blstats.max_hitpoints or \
+                self.blstats.hunger_state >= Hunger.HUNGRY or self.get_visible_monsters():
+            yield False
+
+        yield True
+        while self.blstats.hitpoints < 0.8 * self.blstats.max_hitpoints and \
+                self.blstats.hunger_state < Hunger.HUNGRY and not self.get_visible_monsters():
+            self.direction('.')
+
     @utils.debug_log('emergency_strategy')
     @Strategy.wrap
     def emergency_strategy(self):

@@ -636,6 +636,9 @@ class GlobalLogic:
                 self.agent.fight2(),
             ])
             .preempt(self.agent, [
+                self.agent.recover_health(),
+            ])
+            .preempt(self.agent, [
                 self.agent.engulfed_fight(),
             ])
             .preempt(self.agent, [
