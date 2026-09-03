@@ -1165,7 +1165,7 @@ class Agent:
             if not actions:
                 assert 0, 'No possible action available during fight2'
 
-            priority, best_action = max(actions, key=lambda x: x[0]) if actions else None
+            priority, best_action = combat.fight_heur.choose_action(self, monsters, actions)
 
             with self.env.debug_tiles(move_priority_heatmap, color='turbo', is_heatmap=True):
                 actions_str = '|'.join([combat.utils.action_str(self, a) for a in sorted(actions, key=lambda x: x[0])])

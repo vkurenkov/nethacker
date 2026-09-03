@@ -408,3 +408,35 @@ def get_move_actions(agent, dis, move_priority_heatmap):
         if not np.isnan(move_priority_heatmap[y, x]):
             ret.append((move_priority_heatmap[y, x], ('move', dy, dx)))
     return ret
+
+
+def choose_action(agent, monsters, actions):
+    priority, best_action = max(actions, key=lambda action: action[0])
+
+    def ray_aligned(y1, x1, y2, x2):
+        return y1 == y2 or x1 == x2 or abs(y1 - y2) == abs(x1 - x2)
+
+    # hypothesis: when approaching a lone distant ogre, taking a nearly tied
+    # nonaligned step avoids offering its carried wand a disabling ray shot.
+    if agent.blstats.hitpoints == agent.blstats.max_hitpoints and len(monsters) == 1 and \
+            monsters[0][0] > 3 and monsters[0][3].mname == 'ogre' and \
+            best_action[0] == 'move':
+        _, my, mx, _, _ = monsters[0]
+        py, px = agent.blstats.y, agent.blstats.x
+        _, dy, dx = best_action
+        if not ray_aligned(py, px, my, mx) and ray_aligned(py + dy, px + dx, my, mx):
+            alternatives = [
+                action for action in actions
+                if action[1][0] == 'move' and action[0] >= priority - 1 and
+                not ray_aligned(py + action[1][1], px + action[1][2], my, mx)
+            ]
+            if alternatives:
+                priority, best_action = max(
+                    alternatives,
+                    key=lambda action: (
+                        action[0],
+                        -max(abs(py + action[1][1] - my), abs(px + action[1][2] - mx)),
+                    ),
+                )
+
+    return priority, best_action
