@@ -52,6 +52,10 @@ def convert_map(text):
     for line in text.splitlines():
         if not line:
             continue
+        # hypothesis: removing the four-space source indentation keeps Sokoban
+        # diagrams aligned with the coordinates in their stored solutions.
+        assert line.startswith('    ')
+        line = line[4:]
         ret.append([mapping[l] for l in line])
     ret = np.array(ret)
     assert len(list(zip(*(ret == TARGET).nonzero()))) == 1
