@@ -204,12 +204,19 @@ def elbereth_action(agent, monsters):
     if not agent.can_engrave():
         return []
     adj_monsters_count = 0
+    adjacent_pack_hunter = False
+    adjacent_weak_monster = False
     for monster in monsters:
         _, my, mx, mon, _ = monster
         if mon.mname in ONLY_RANGED_SLOW_MONSTERS:
             continue
         if not adjacent((my, mx), (agent.blstats.y, agent.blstats.x)):
             continue
+        adjacent_pack_hunter |= mon.mname in (
+            'jackal', 'coyote', 'wolf', 'winter wolf cub', 'warg',
+            'winter wolf', 'hell hound pup', 'hell hound',
+        )
+        adjacent_weak_monster |= mon.mname in WEAK_MONSTERS
         multiplier = np.clip(20 / agent.blstats.hitpoints, 1.0, 1.5)
         if is_monster_faster(agent, monster):
             multiplier *= 2
@@ -221,12 +228,16 @@ def elbereth_action(agent, monsters):
             adj_monsters_count += 2 * multiplier
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
+    # hypothesis: urgently engraving against fast canine pack hunters at retreat
+    # HP prevents them from following and finishing otherwise viable knight runs.
+    if agent.blstats.hitpoints <= 12 and adjacent_pack_hunter:
+        return [(25, ('elbereth',))]
+    # hypothesis: after the fragile opening, a knight newly reaching the retreat
+    # boundary can use an adjacent weak monster as an Elbereth shelter to recover.
+    if agent.blstats.time >= 500 and agent.blstats.hitpoints == 12 and adjacent_weak_monster:
+        return [(25, ('elbereth',))]
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
-        priority = -15 + 20 * adj_monsters_count * (1 - player_hp_ratio)
-        # hypothesis: below one-third health, engraving against an adjacent threat prevents the next melee exchange from becoming fatal.
-        if 3 * agent.blstats.hitpoints <= agent.blstats.max_hitpoints:
-            priority = max(priority, 20)
-        return [(priority, ('elbereth',))]
+        return [(-15 + 20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
     return []
 
 

@@ -8,16 +8,17 @@ WEIRD_MONSTERS = ['leprechaun', 'nymph']
 
 def is_monster_faster(agent, monster):
     _, y, x, mon, _ = monster
-    # TOOD: implement properly
-    return 'bat' in mon.mname or 'dog' in mon.mname or 'cat' in mon.mname \
-           or 'kitten' in mon.mname or 'pony' in mon.mname or 'horse' in mon.mname \
-           or 'bee' in mon.mname or 'fox' in mon.mname
+    # hypothesis: using NetHack's movement rate consistently lets combat defend
+    # against every monster that can close distance faster than the hero, including
+    # soldier ants and jaguars omitted by the old name-based list.
+    return mon.mmove > 12
 
 
 def imminent_death_on_melee(agent, monster):
     if is_dangerous_monster(monster):
         return agent.blstats.hitpoints <= 16
-    return agent.blstats.hitpoints <= 8
+    # hypothesis: retreating from ordinary melee below 13 HP keeps early knights outside one-hit range of armed and high-damage foes long enough to regenerate.
+    return agent.blstats.hitpoints <= 12
 
 
 def is_dangerous_monster(monster):
