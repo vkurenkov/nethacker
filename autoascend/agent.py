@@ -58,6 +58,7 @@ class Agent:
         self.last_bfs_dis = None
         self.last_bfs_step = None
         self.last_prayer_turn = None
+        self.handled_minetown_hallu = False
         self._previous_glyphs = None
         self._last_turn = -1
         self._inactivity_counter = 0
@@ -1443,6 +1444,19 @@ class Agent:
             yield True
             self.pray()
             return
+
+        in_minetown = self.global_logic.minetown_level is not None and \
+            self.current_level().key() == self.global_logic.minetown_level
+        # hypothesis: resolving the first late Minetown hallucination with one safe,
+        # out-of-combat prayer preserves recognition of the peaceful watch without
+        # repeatedly spending prayers or losing a combat turn.
+        if self.character.prop.hallu and self.blstats.experience_level >= 11 and in_minetown and \
+                not self.handled_minetown_hallu:
+            self.handled_minetown_hallu = True
+            if not self.get_visible_monsters() and self.is_safe_to_pray(400):
+                yield True
+                self.pray()
+                return
 
         # if self.should_cast_extra_heal():
         #     yield True
