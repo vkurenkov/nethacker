@@ -22,6 +22,9 @@ def melee_monster_priority(agent, monsters, monster):
         ret -= 6
     if mon.mname in EXPLODING_MONSTERS:
         ret -= 17
+    if mon.mname == 'spotted jelly' and \
+            agent.blstats.hitpoints * 2 <= agent.blstats.max_hitpoints:
+        ret -= 100
     if 'were' in mon.mname:
         ret += 1
     # if not wielding_melee_weapon(agent):

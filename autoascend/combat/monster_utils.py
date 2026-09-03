@@ -18,6 +18,10 @@ def is_monster_faster(agent, monster):
 
 
 def imminent_death_on_melee(agent, monster):
+    # hypothesis: disengaging from a spotted jelly below half health prevents
+    # cumulative passive acid splashes from consuming the rest of the run.
+    if monster[3].mname == 'spotted jelly':
+        return agent.blstats.hitpoints * 2 <= agent.blstats.max_hitpoints
     if is_dangerous_monster(monster):
         return agent.blstats.hitpoints <= 16
     # hypothesis: retreating from ordinary melee below 13 HP keeps early knights outside one-hit range of armed and high-damage foes long enough to regenerate.
