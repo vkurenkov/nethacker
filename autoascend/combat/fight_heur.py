@@ -4,7 +4,7 @@ from itertools import product
 import numpy as np
 from scipy import signal
 
-from ..glyph import G, MON
+from ..glyph import G
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
     ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, PETRIFYING_MONSTERS, \
@@ -174,7 +174,7 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
     # TODO: also get items recursively from bags
     for item in agent.inventory.items:
         targeted_monsters = set()
-        hits_protected_peaceful = False
+        hits_peaceful = False
         if not item.is_offensive_usable_wand():
             continue
         priority = 0
@@ -184,15 +184,7 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
             if monster == 'pet':
                 priority -= p * 20
             elif monster == 'peaceful':
-                glyph = agent.glyphs[y, x]
-                if agent.character.prop.hallu or glyph not in G.MONS:
-                    hits_protected_peaceful = True
-                else:
-                    peaceful_name = MON.permonst(glyph).mname
-                    hits_protected_peaceful |= peaceful_name in {
-                        'watchman', 'watch captain', 'shopkeeper', 'guard',
-                        'aligned priest', 'high priest', 'Oracle',
-                    }
+                hits_peaceful = True
             elif monster == 'self':
                 priority -= p * 30
             elif monster is not None:
@@ -204,9 +196,9 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
                 else:
                     priority += min(p, 1) * 10
                 targeted_monsters.add((y, x, monster))
-        # hypothesis: vetoing wand collateral only for high-consequence peaceful
-        # NPCs preserves Minetown without suppressing useful fire past ordinary allies.
-        if targeted_monsters and not hits_protected_peaceful:
+        # hypothesis: rejecting wand paths through peaceful creatures prevents one
+        # collateral hit from turning Minetown's watch into a lethal hostile mob.
+        if targeted_monsters and not hits_peaceful:
             # priority = priority * (1 - player_hp_ratio) - 10
             priority = priority - 15
             if agent.inventory.engraving_below_me.lower() == 'elbereth':

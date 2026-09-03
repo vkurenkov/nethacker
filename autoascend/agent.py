@@ -760,6 +760,14 @@ class Agent:
         with self.atom_operation():
             self.step(A.Command.ZAP)
             self.type_text(self.inventory.items.get_letter(item))
+            # hypothesis: retiring a drained wand when NetHack declines to ask for
+            # a direction prevents repeated pseudo-zaps from becoming accidental
+            # wall bumps or melee attacks during dangerous fights.
+            if 'In what direction?' not in self.single_message:
+                if 'Nothing happens.' in self.message or \
+                        'absence of magical power' in self.message:
+                    item.uses = 'no charges'
+                return False
             self.direction(direction)
         return True
 
