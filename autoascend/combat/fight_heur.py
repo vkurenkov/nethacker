@@ -142,6 +142,9 @@ def _simulate_wand_path(agent, wand, monsters, y, x, dy, dx, range_left, hit_tar
             monster = 'pet'
             # For each monster hit, range decreases by 2.
             range_left -= 2
+        elif inside(agent, y, x) and agent.monster_tracker.peaceful_monster_mask[y, x]:
+            monster = 'peaceful'
+            range_left -= 2
         elif agent.blstats.y == y and agent.blstats.x == x:
             monster = 'self'
             range_left -= 2
@@ -171,6 +174,7 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
     # TODO: also get items recursively from bags
     for item in agent.inventory.items:
         targeted_monsters = set()
+        hits_peaceful = False
         if not item.is_offensive_usable_wand():
             continue
         priority = 0
@@ -179,6 +183,8 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
             # print(y, x, monster, p)
             if monster == 'pet':
                 priority -= p * 20
+            elif monster == 'peaceful':
+                hits_peaceful = True
             elif monster == 'self':
                 priority -= p * 30
             elif monster is not None:
@@ -190,7 +196,9 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
                 else:
                     priority += min(p, 1) * 10
                 targeted_monsters.add((y, x, monster))
-        if targeted_monsters:
+        # hypothesis: rejecting wand paths through peaceful creatures prevents one
+        # collateral hit from turning Minetown's watch into a lethal hostile mob.
+        if targeted_monsters and not hits_peaceful:
             # priority = priority * (1 - player_hp_ratio) - 10
             priority = priority - 15
             if agent.inventory.engraving_below_me.lower() == 'elbereth':
