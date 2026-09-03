@@ -4,6 +4,9 @@ EXPLODING_MONSTERS = ['yellow light', 'gas spore', 'flaming sphere', 'freezing s
 INSECTS = ['giant ant', 'killer bee', 'soldier ant', 'fire ant', 'giant beetle', 'queen bee']
 WEAK_MONSTERS = ['lichen', 'newt', 'shrieker', 'grid bug']
 WEIRD_MONSTERS = ['leprechaun', 'nymph']
+# hypothesis: treating petrification as an emergency—avoiding bare-contact attacks
+# while polymorphed and praying away delayed stoning—preserves productive runs.
+PETRIFYING_MONSTERS = ['chickatrice', 'cockatrice']
 
 
 def is_monster_faster(agent, monster):

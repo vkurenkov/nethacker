@@ -1418,6 +1418,11 @@ class Agent:
     @Strategy.wrap
     def emergency_strategy(self):
 
+        if self.blstats.prop_mask & nh.BL_MASK_STONE:
+            yield True
+            self.pray()
+            return
+
         # if self.should_cast_extra_heal():
         #     yield True
         #     self.cast('extra healing', direction=(0, 0))
