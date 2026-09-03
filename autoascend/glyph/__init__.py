@@ -68,6 +68,7 @@ class G:  # Glyphs
     STAIR_DOWN: ['>'] = frozenset({SS.S_dnstair, SS.S_dnladder})
     ALTAR: ['_'] = frozenset({SS.S_altar})
     FOUNTAIN = frozenset({SS.S_fountain})
+    HAZARDS = frozenset({SS.S_pool, SS.S_lava, SS.S_water})
 
     DOOR_CLOSED: ['+'] = frozenset({SS.S_vcdoor, SS.S_hcdoor})
     DOOR_OPENED: ['-', '|'] = frozenset({SS.S_vodoor, SS.S_hodoor})

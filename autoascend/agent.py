@@ -606,7 +606,9 @@ class Agent:
         level.seen[mask] = True
         level.walkable[mask & (level.objects == -1)] = True
 
-        mask = utils.isin(self.glyphs, G.WALL, G.DOOR_CLOSED, G.BARS)
+        # hypothesis: recording visible liquid hazards as non-walkable prevents a
+        # previously obscuring monster or item from leaving lava in the path map.
+        mask = utils.isin(self.glyphs, G.WALL, G.DOOR_CLOSED, G.BARS, G.HAZARDS)
         level.seen[mask] = True
         level.objects[mask] = self.glyphs[mask]
         level.walkable[mask] = False
