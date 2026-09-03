@@ -18,6 +18,10 @@ def melee_monster_priority(agent, monsters, monster):
     ret = 1
     if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
         ret += 15
+    # hypothesis: below a mumak's typical attack-round damage, preferring retreat
+    # or missiles over another melee exchange prevents avoidable burst deaths.
+    if mon.mname == 'mumak' and agent.blstats.hitpoints <= 28:
+        ret -= 20
     if wielding_ranged_weapon(agent) and not is_monster_faster(agent, monster):
         ret -= 6
     if mon.mname in EXPLODING_MONSTERS:
