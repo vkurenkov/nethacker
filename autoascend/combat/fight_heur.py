@@ -4,7 +4,7 @@ from itertools import product
 import numpy as np
 from scipy import signal
 
-from ..glyph import G
+from ..glyph import G, Hunger
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
     ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, PETRIFYING_MONSTERS, \
@@ -268,11 +268,15 @@ def elbereth_action(agent, monsters):
 
 
 def wait_action(agent, monsters):
-    if agent.inventory.engraving_below_me.lower() == 'elbereth':
-        player_hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
-        priority = 30 - player_hp_ratio * 40
-        return [(priority, ('wait',))]
-    return []
+    if agent.inventory.engraving_below_me.lower() != 'elbereth':
+        return []
+    # hypothesis: once hunger starts, leaving an Elbereth shelter to resolve the
+    # fight preserves the turns needed to find food instead of waiting to faint.
+    if agent.blstats.hunger_state >= Hunger.HUNGRY:
+        return []
+    player_hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
+    priority = 30 - player_hp_ratio * 40
+    return [(priority, ('wait',))]
 
 
 def get_available_actions(agent, monsters):
