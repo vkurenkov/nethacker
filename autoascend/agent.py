@@ -1456,12 +1456,17 @@ class Agent:
 
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']]
-        if (
-                (self.blstats.hitpoints < 1 / 3 * self.blstats.max_hitpoints
-                 or self.blstats.hitpoints < 8) and items
-        ):
+        urgent_healing = self.blstats.hitpoints < 1 / 3 * self.blstats.max_hitpoints or \
+            self.blstats.hitpoints < 8
+        full_healing_items = [item for item in items if item.object.name == 'full healing']
+        # hypothesis: spending full healing below two-fifths health prevents a
+        # multiattack from crossing the old one-third trigger and killing the hero
+        # before another action, while weaker healing keeps its conservative timing.
+        early_full_healing = not urgent_healing and \
+            self.blstats.hitpoints < 2 / 5 * self.blstats.max_hitpoints and full_healing_items
+        if (urgent_healing and items) or early_full_healing:
             yield True
-            self.inventory.quaff(items[0])
+            self.inventory.quaff(full_healing_items[0] if early_full_healing else items[0])
             return
 
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
