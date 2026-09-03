@@ -232,6 +232,7 @@ def elbereth_action(agent, monsters):
     adj_monsters_count = 0
     adjacent_pack_hunter = False
     adjacent_weak_monster = False
+    adjacent_water_moccasins = 0
     for monster in monsters:
         _, my, mx, mon, _ = monster
         if mon.mname in ONLY_RANGED_SLOW_MONSTERS:
@@ -243,6 +244,7 @@ def elbereth_action(agent, monsters):
             'winter wolf', 'hell hound pup', 'hell hound',
         )
         adjacent_weak_monster |= mon.mname in WEAK_MONSTERS
+        adjacent_water_moccasins += mon.mname == 'water moccasin'
         multiplier = np.clip(20 / agent.blstats.hitpoints, 1.0, 1.5)
         if is_monster_faster(agent, monster):
             multiplier *= 2
@@ -254,6 +256,11 @@ def elbereth_action(agent, monsters):
             adj_monsters_count += 2 * multiplier
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
+    # hypothesis: immediately engraving against an adjacent water-moccasin swarm
+    # prevents a fountain's surrounding snakes from taking several attack rounds
+    # before the ordinary low-HP defense activates.
+    if adjacent_water_moccasins >= 2:
+        return [(20, ('elbereth',))]
     # hypothesis: urgently engraving against fast canine pack hunters at retreat
     # HP prevents them from following and finishing otherwise viable knight runs.
     if agent.blstats.hitpoints <= 12 and adjacent_pack_hunter:
