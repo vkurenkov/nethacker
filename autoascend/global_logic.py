@@ -632,15 +632,13 @@ class GlobalLogic:
             .preempt(self.agent, [
                 self.follow_guard(),
             ])
-            # hypothesis: allowing the active combat loop to resolve before generic
-            # emergency actions avoids losing decisive attack or retreat turns.
             .preempt(self.agent, [
-                self.agent.emergency_strategy(),
+                self.agent.fight2(),
             ])
             .preempt(self.agent, [
                 self.agent.engulfed_fight(),
             ])
             .preempt(self.agent, [
-                self.agent.fight2(),
+                self.agent.emergency_strategy(),
             ])
         )
