@@ -59,6 +59,7 @@ class Agent:
         self.last_bfs_step = None
         self.last_prayer_turn = None
         self.handled_minetown_hallu = False
+        self._recent_poison_resistance_fungus_kills = {}
         self._previous_glyphs = None
         self._last_turn = -1
         self._inactivity_counter = 0
@@ -571,6 +572,12 @@ class Agent:
             for mname in mnames:
                 glyph = MON.from_name(mname)
                 monster_id = glyph - nh.GLYPH_MON_OFF
+                permonst = MON.permonst(glyph)
+                if self.blstats.depth == 1 and self.blstats.experience_level >= 7 and \
+                        ord(permonst.mlet) == MON.S_FUNGUS and \
+                        permonst.mconveys & MON.MR_POISON and \
+                        self._is_corpse_editable(monster_id, self.blstats.time):
+                    self._recent_poison_resistance_fungus_kills[monster_id] = self.blstats.time
                 corpse_glyph = MON.body_from_name(mname)
                 for y, x in zip(*utils.isin(mons, [glyph]).nonzero()):
                     # TODO: it works because level.items is updated in `inventory.check_items`
@@ -596,8 +603,17 @@ class Agent:
             if count != 1:
                 continue
 
-            level.corpses_to_eat[self.blstats.y, self.blstats.x][item.monster_id] = \
-                old_possible_corpses[item.monster_id]
+            corpse_age = old_possible_corpses[item.monster_id]
+            permonst = MON.permonst(item.monster_id)
+            recent_kill_turn = self._recent_poison_resistance_fungus_kills.get(item.monster_id, -10000)
+            # hypothesis: during the late first-floor farm, an experienced hero
+            # can safely recover a just-obscured fungus corpse for food and poison resistance.
+            if corpse_age == -10000 and self.blstats.depth == 1 and \
+                    self.blstats.experience_level >= 7 and ord(permonst.mlet) == MON.S_FUNGUS and \
+                    permonst.mconveys & MON.MR_POISON and \
+                    0 <= self.blstats.time - recent_kill_turn <= 1:
+                corpse_age = recent_kill_turn
+            level.corpses_to_eat[self.blstats.y, self.blstats.x][item.monster_id] = corpse_age
 
     def update_level(self):
         if utils.isin(self.glyphs, G.SWALLOW).any():
