@@ -279,8 +279,12 @@ class GlobalLogic:
                     if not utils.isin(self.agent.current_level().objects, G.TRAPS).any():
                         return
 
-                else:
+                elif sokomap.sokomap[y, x] == soko_solver.BOULDER:
                     sokomap.move(y, x, dy, dx)
+                else:
+                    # hypothesis: abandoning a desynchronized Sokoban route when its simulated boulder
+                    # is gone prevents an assertion from killing progressed runs under the action watchdog.
+                    break
 
                 if (~soko_boulder_mask | mask).all():
                     if self.agent.bfs()[ty, tx] != -1 and \
@@ -404,7 +408,14 @@ class GlobalLogic:
         if not item.is_corpse() or item.comment == 'old':
             return False
 
-        mname = MON.permonst(item.monster_id + nh.GLYPH_MON_OFF).mname
+        permonst = MON.permonst(item.monster_id + nh.GLYPH_MON_OFF)
+        # hypothesis: a gloveless monk must leave cockatrice-family sacrifice cargo on the floor,
+        # because picking it up bare-handed turns an otherwise progressed altar run to stone.
+        if self.agent.character.role == Character.MONK and self.agent.inventory.items.gloves is None and \
+                ord(permonst.mlet) == MON.S_COCKATRICE:
+            return False
+
+        mname = permonst.mname
         if (mname == 'pony' and self.agent.character.role in [Character.KNIGHT, Character.BARBARIAN]) or \
                 (mname == 'kitten' and self.agent.character.role == [Character.BARBARIAN, Character.WIZARD]) or \
                 (mname == 'little dog' and item.naming):  # little dogs are always named

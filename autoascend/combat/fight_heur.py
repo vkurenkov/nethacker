@@ -14,6 +14,11 @@ from .utils import wielding_ranged_weapon, line_dis_from, inside
 
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
+    # hypothesis: preferring missiles or retreat, with a kick only when contact is forced,
+    # prevents bare-handed monks from turning survivable cockatrice encounters into petrification.
+    if agent.character.role == agent.character.MONK and agent.inventory.items.gloves is None and \
+            agent.inventory.items.main_hand is None and mon.mname in ('cockatrice', 'chickatrice'):
+        return -1000
     ret = 1
     if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
         ret += 15
@@ -222,11 +227,7 @@ def elbereth_action(agent, monsters):
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
-        priority = -15 + 20 * adj_monsters_count * (1 - player_hp_ratio)
-        # hypothesis: below one-third health, engraving against an adjacent threat prevents the next melee exchange from becoming fatal.
-        if 3 * agent.blstats.hitpoints <= agent.blstats.max_hitpoints:
-            priority = max(priority, 20)
-        return [(priority, ('elbereth',))]
+        return [(-15 + 20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
     return []
 
 
