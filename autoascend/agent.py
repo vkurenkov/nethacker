@@ -58,6 +58,7 @@ class Agent:
         self.last_bfs_dis = None
         self.last_bfs_step = None
         self.last_prayer_turn = None
+        self.shallow_starvation_prayer = False
         self.handled_minetown_hallu = False
         self._recent_poison_resistance_fungus_kills = {}
         self._previous_glyphs = None
@@ -1471,6 +1472,19 @@ class Agent:
 
         if self.blstats.prop_mask & nh.BL_MASK_STONE:
             yield True
+            self.pray()
+            return
+
+        # hypothesis: a run that leaves the opening farm foodless should use safe
+        # Weak-state prayers before its recurring starvation becomes fatal.
+        shallow_doom = self.blstats.dungeon_number == Level.DUNGEONS_OF_DOOM and \
+            self.blstats.level_number == 2 and self.blstats.experience_level == 8
+        if (shallow_doom or self.shallow_starvation_prayer) and \
+                self.blstats.hunger_state >= Hunger.WEAK and \
+                self.inventory.items.total_nutrition() == 0 and \
+                not self.get_visible_monsters() and self.is_safe_to_pray(400):
+            yield True
+            self.shallow_starvation_prayer = True
             self.pray()
             return
 
