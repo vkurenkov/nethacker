@@ -125,6 +125,8 @@ class ExplorationLogic:
         yield True
         for (y, x), _, dir in path:
             go_to_strategy(y, x).run()
+            if (self.agent.blstats.y, self.agent.blstats.x) != (y, x):
+                self.go_to_strategy(y, x).run()
             assert (self.agent.blstats.y, self.agent.blstats.x) == (y, x)
             while self.agent.has_pet:
                 if utils.any_in(self.agent.glyphs[max(self.agent.blstats.y - 1, 0) : self.agent.blstats.y + 2,
@@ -176,11 +178,17 @@ class ExplorationLogic:
                 assert self.agent.current_level().key() in levels_to_search
                 continue
 
+            step_before_exploring = self.agent.step_count
             explore_strategy.preempt(self.agent, [
                 self.explore_stairs(go_to_strategy, all=True) \
                         .condition(lambda: self.agent.current_level().key() in levels_to_search),
                 go_to_least_explored_level(),
             ], continue_after_preemption=False).run()
+
+            # hypothesis: falling back to core stair exploration after a composed
+            # policy takes no action prevents reachable stairs from causing a spin.
+            if self.agent.step_count == step_before_exploring:
+                self.explore_stairs(self.go_to_strategy, all=True).run()
 
         path = self.get_path_to_level(dungeon_number, level_number)
         assert path is not None, \
