@@ -898,7 +898,15 @@ class Agent:
             level = self.current_level()
             with self.atom_operation():
                 self.direction(dir)
-                assert self.current_level().key() != level.key(), self.message
+                # hypothesis: treating a failed traversal of a mimic-disguised
+                # staircase as recoverable lets terrain refresh discard the
+                # counterfeit stair instead of permanently killing the policy.
+                if self.current_level().key() == level.key():
+                    if "You can't go up here." in self.message or \
+                            "You can't go down here." in self.message:
+                        level.objects[expected_y, expected_x] = -1
+                        level.stair_destination.pop((expected_y, expected_x), None)
+                    raise AgentPanic(f'failed stair traversal: {self.message}')
                 level.stair_destination[expected_y, expected_x] = \
                     (self.current_level().key(), (self.blstats.y, self.blstats.x))
                 # TODO: one way portals (elemental and astral planes)
