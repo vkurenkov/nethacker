@@ -231,6 +231,7 @@ def elbereth_action(agent, monsters):
     if not agent.can_engrave():
         return []
     adj_monsters_count = 0
+    adjacent_unicorn = False
     adjacent_pack_hunter = False
     adjacent_weak_monster = False
     adjacent_water_moccasins = 0
@@ -240,6 +241,7 @@ def elbereth_action(agent, monsters):
             continue
         if not adjacent((my, mx), (agent.blstats.y, agent.blstats.x)):
             continue
+        adjacent_unicorn |= 'unicorn' in mon.mname
         adjacent_pack_hunter |= mon.mname in (
             'jackal', 'coyote', 'wolf', 'winter wolf cub', 'warg',
             'winter wolf', 'hell hound pup', 'hell hound',
@@ -257,6 +259,10 @@ def elbereth_action(agent, monsters):
             adj_monsters_count += 2 * multiplier
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
+    # hypothesis: engraving at low HP against an adjacent, twice-as-fast
+    # multiattack unicorn prevents a knowingly lethal extra melee exchange.
+    if agent.blstats.hitpoints <= 16 and adjacent_unicorn:
+        return [(25, ('elbereth',))]
     # hypothesis: immediately engraving against an adjacent water-moccasin swarm
     # prevents a fountain's surrounding snakes from taking several attack rounds
     # before the ordinary low-HP defense activates.
