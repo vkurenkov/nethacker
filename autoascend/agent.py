@@ -60,6 +60,7 @@ class Agent:
         self.last_prayer_turn = None
         self.shallow_starvation_prayer = False
         self.handled_minetown_hallu = False
+        self.abandon_opening_after_disease = False
         self._recent_poison_resistance_fungus_kills = {}
         self._previous_glyphs = None
         self._last_turn = -1
@@ -1596,7 +1597,17 @@ class Agent:
             # pray
             if self.is_safe_to_pray():
                 yield True
+                late_opening_disease = \
+                    self.blstats.dungeon_number == Level.DUNGEONS_OF_DOOM and \
+                    self.blstats.level_number == 1 and \
+                    self.blstats.experience_level == 6 and \
+                    self.blstats.hitpoints * 4 < self.blstats.max_hitpoints * 3
                 self.pray()
+                # hypothesis: after a wounded level-6 farmer spends its prayer
+                # safety margin curing lycanthropy, marking the farm for a safe
+                # exit avoids the unaffordable starvation cycle that follows.
+                if late_opening_disease:
+                    self.abandon_opening_after_disease = True
                 return
 
         yield False
