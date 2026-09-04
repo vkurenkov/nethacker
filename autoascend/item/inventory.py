@@ -159,6 +159,10 @@ class Inventory:
                 return False
             assert 'What do you want to wear?' in self.agent.message, self.agent.message
             self.agent.type_text(letter)
+            # hypothesis: treating monster-interrupted armor donning as a failed
+            # attempt keeps the policy alive after seduction or combat interrupts it.
+            if 'You stop putting on ' in self.agent.message:
+                return False
             assert 'You finish your dressing maneuver.' in self.agent.message or \
                    'You are now wearing ' in self.agent.message or \
                    'Your foot is trapped!' in self.agent.message, self.agent.message
