@@ -570,7 +570,12 @@ class Agent:
             assert mons.any()
 
             for mname in mnames:
-                glyph = MON.from_name(mname)
+                try:
+                    glyph = MON.from_name(mname)
+                except AssertionError:
+                    # hypothesis: ignoring shapechanger role titles that are not
+                    # real monster species keeps corpse tracking from killing the strategy thread.
+                    continue
                 monster_id = glyph - nh.GLYPH_MON_OFF
                 permonst = MON.permonst(glyph)
                 if self.blstats.depth == 1 and self.blstats.experience_level >= 7 and \
