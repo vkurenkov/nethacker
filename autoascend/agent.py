@@ -753,6 +753,13 @@ class Agent:
         with self.panic_if_position_changes():
             assert self.glyphs[y, x] in G.MONS or self.glyphs[y, x] in G.INVISIBLE_MON or \
                    self.glyphs[y, x] in G.SWALLOW
+            # hypothesis: avoiding bare-hand contact with cockatrices in both combat and corpse
+            # handling preserves advanced Monk runs that would otherwise end in petrification.
+            if self.inventory.items.gloves is None and self.inventory.items.main_hand is None and \
+                    self.glyphs[y, x] in G.MONS and \
+                    ord(MON.permonst(self.glyphs[y, x]).mlet) == MON.S_COCKATRICE:
+                self.kick(y, x)
+                return True
             self.direction(y, x)
         return True
 
@@ -812,6 +819,11 @@ class Agent:
 
     def search(self, max_count=1):
         assert max_count >= 1
+        # hypothesis: wounded pre-XL7 monks searching one turn at a time can react
+        # to an approaching monster instead of taking five uninterruptible combat turns.
+        if max_count > 1 and self.blstats.experience_level < 7 and \
+                self.blstats.hitpoints < 0.8 * self.blstats.max_hitpoints:
+            max_count = 1
         with self.panic_if_position_changes():
             with self.atom_operation():
                 if max_count > 1:
@@ -1242,48 +1254,38 @@ class Agent:
                 break
             assert self.melee_attack(*list(zip(*mask.nonzero()))[0])
 
-    # hypothesis: the parent starves to death whenever it hits FAINTING while its prayer is on
-    # cooldown — it refuses mildly-unsafe corpses (poisonous, stunning, aggravating, etc.) and
-    # just dies. When starvation death is otherwise imminent, eating such corpses (still
-    # refusing petrifying, acidic/green-slime and old/tainted ones) is strictly better than
-    # dying. This state is only reached in runs the parent already loses to starvation, so all
-    # other trajectories stay identical.
-    def _is_starvation_desperate(self):
-        return self.blstats.hunger_state >= Hunger.FAINTING and not self.is_safe_to_pray(400)
-
     def _is_corpse_editable(self, monster_id, age_turn):
         permonst = MON.permonst(monster_id)
-        desperate = self._is_starvation_desperate()
 
         # TODO: read intrinsics
-        if not desperate and self.character.race != Character.ORC and permonst.mflags1 & MON.M1_POIS != 0:
+        if self.character.race != Character.ORC and permonst.mflags1 & MON.M1_POIS != 0:
             return False
 
         # TODO: read intrinsics
         if permonst.mflags1 & MON.M1_ACID != 0:
             return False
 
-        if not desperate and permonst.mflags2 & MON.M2_WERE != 0:
+        if permonst.mflags2 & MON.M2_WERE != 0:
             return False
 
         # polymorph
-        if not desperate and monster_id in [MON.id_from_name(name) for name in ['chameleon', 'doppelganger', 'sandestin']]:
+        if monster_id in [MON.id_from_name(name) for name in ['chameleon', 'doppelganger', 'sandestin']]:
             return False
 
         # remove random intrinsic
-        if not desperate and monster_id in [MON.id_from_name(name) for name in ['disenchanter']]:
+        if monster_id in [MON.id_from_name(name) for name in ['disenchanter']]:
             return False
 
         # hallucination
-        if not desperate and monster_id in [MON.id_from_name(name) for name in ['abbot', 'violet fungus', 'yellow mold']]:
+        if monster_id in [MON.id_from_name(name) for name in ['abbot', 'violet fungus', 'yellow mold']]:
             return False
 
         # stun
-        if not desperate and monster_id in [MON.id_from_name(name) for name in ['bat', 'giant bat']]:
+        if monster_id in [MON.id_from_name(name) for name in ['bat', 'giant bat']]:
             return False
 
         # aggravate monster
-        if not desperate and monster_id in [MON.id_from_name(name) for name in ['dog', 'little dog', 'large dog',
+        if monster_id in [MON.id_from_name(name) for name in ['dog', 'little dog', 'large dog',
                                                               'kitten', 'housecat', 'large cat']]:
             return False
 
@@ -1312,8 +1314,9 @@ class Agent:
         if permonst.mflags2 & race_flag:
             return False
 
-        # corpse aging
-        if self.blstats.time - age_turn >= 50 and \
+        # hypothesis: a 30-turn freshness limit avoids lethal, already-aged corpses
+        # whose observed drop time makes the old 50-turn estimate overoptimistic.
+        if self.blstats.time - age_turn >= 30 and \
                 monster_id not in [MON.id_from_name('lizard'), MON.id_from_name('lichen')]:
             return False
 
@@ -1413,19 +1416,6 @@ class Agent:
     @utils.debug_log('emergency_strategy')
     @Strategy.wrap
     def emergency_strategy(self):
-
-        if self.blstats.prop_mask & nh.BL_MASK_STONE:
-            lizard_id = MON.id_from_name('lizard')
-            lizard_corpses = [item for item in flatten_items(self.inventory.items)
-                               if item.is_corpse() and item.monster_id == lizard_id]
-            if lizard_corpses:
-                yield True
-                self.inventory.eat(lizard_corpses[0])
-                return
-            if self.is_safe_to_pray():
-                yield True
-                self.pray()
-                return
 
         # if self.should_cast_extra_heal():
         #     yield True

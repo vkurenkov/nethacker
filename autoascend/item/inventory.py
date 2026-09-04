@@ -630,12 +630,7 @@ class Inventory:
                             moved_items = moved_items.union(its)
                             self.use_container(container, items_to_take=its, items_to_put=[])
 
-                # part of the starvation-avoidance change: corpses fetched for eating or
-                # sacrifice often rot or vanish from tracking before the move; crashing the
-                # whole agent here (old assert) forfeited the rest of the game — panic and
-                # recover instead, like eat() does for the same situation
-                if moved_items != set(items):
-                    raise AgentPanic('items to move to inventory disappeared')
+                assert moved_items == set(items), ('TODO: nested containers', moved_items, items)
 
             # TODO: HACK
             self.agent.last_observation = self.agent.last_observation.copy()
@@ -1021,6 +1016,12 @@ class Inventory:
     def wand_engrave_identify(self):
         if self.agent.character.prop.polymorph:
             yield False  # TODO: only for handless monsters (which cannot write)
+
+        # hypothesis: postponing unknown-wand engraving until a monk is fully
+        # healed and robust prevents early cursed-wand explosions from being lethal.
+        if self.agent.blstats.hitpoints < max(20, self.agent.blstats.max_hitpoints):
+            yield False
+            return
 
         self.skip_engrave_counter -= 1
         if self.agent.character.prop.blind or self.skip_engrave_counter > 0:
