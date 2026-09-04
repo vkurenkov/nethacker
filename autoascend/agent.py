@@ -1490,16 +1490,11 @@ class Agent:
             self.inventory.quaff(items[0])
             return
 
-        # hypothesis: delaying repeated deep starvation prayers only while no
-        # hostile is visible avoids divine anger without withholding combat relief.
-        starvation_prayer_cooldown = 900 if self.blstats.depth >= 5 and \
-            not self.get_visible_monsters() else 400
         if (
                 (self.is_safe_to_pray(500) and
                  (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
                   * self.blstats.max_hitpoints or self.blstats.hitpoints < 6))
-                or (self.is_safe_to_pray(starvation_prayer_cooldown) and
-                    self.blstats.hunger_state >= Hunger.FAINTING)
+                or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.FAINTING)
         ):
             yield True
             self.pray()

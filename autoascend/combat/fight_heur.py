@@ -5,6 +5,7 @@ import numpy as np
 from scipy import signal
 
 from ..glyph import G, Hunger
+from ..level import Level
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
     ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, PETRIFYING_MONSTERS, \
@@ -416,10 +417,11 @@ def choose_action(agent, monsters, actions):
     def ray_aligned(y1, x1, y2, x2):
         return y1 == y2 or x1 == x2 or abs(y1 - y2) == abs(x1 - x2)
 
-    # hypothesis: when approaching a lone distant ogre, taking a nearly tied
-    # nonaligned step avoids offering its carried wand a disabling ray shot.
-    if agent.blstats.hitpoints == agent.blstats.max_hitpoints and len(monsters) == 1 and \
-            monsters[0][0] > 3 and monsters[0][3].mname == 'ogre' and \
+    # hypothesis: in the open Mines, approaching a lone item-carrying ogre along
+    # a nearly tied nonaligned route avoids giving its attack wand a free ray shot.
+    if agent.blstats.dungeon_number == Level.GNOMISH_MINES and \
+            agent.blstats.hitpoints == agent.blstats.max_hitpoints and len(monsters) == 1 and \
+            monsters[0][0] > 3 and monsters[0][3].mname in ('ogre', 'ogre lord') and \
             best_action[0] == 'move':
         _, my, mx, _, _ = monsters[0]
         py, px = agent.blstats.y, agent.blstats.x
@@ -438,5 +440,4 @@ def choose_action(agent, monsters, actions):
                         -max(abs(py + action[1][1] - my), abs(px + action[1][2] - mx)),
                     ),
                 )
-
     return priority, best_action
