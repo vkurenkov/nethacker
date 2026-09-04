@@ -14,14 +14,20 @@ from .utils import wielding_ranged_weapon, line_dis_from, inside
 
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
-    # hypothesis: preferring missiles or retreat, with a kick only when contact is forced,
-    # prevents bare-handed monks from turning survivable cockatrice encounters into petrification.
-    if agent.character.role == agent.character.MONK and agent.inventory.items.gloves is None and \
-            agent.inventory.items.main_hand is None and mon.mname in ('cockatrice', 'chickatrice'):
+    # hypothesis: ungloved, unarmed monks should keep cockatrice-family monsters
+    # at range and kick only when contact is forced, avoiding lethal petrification.
+    if agent.inventory.items.gloves is None and agent.inventory.items.main_hand is None and \
+            mon.mname in ('cockatrice', 'chickatrice'):
         return -1000
     ret = 1
     if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
         ret += 15
+    # hypothesis: fast monsters get another attack whenever a retreat loses the
+    # initiative, so favoring melee at every HP total below 16 turns bats, dogs,
+    # and bees into avoidable deaths; let the existing escape map choose space
+    # or Elbereth while there is still a survivable margin.
+    if is_monster_faster(agent, monster) and agent.blstats.hitpoints <= 16:
+        ret -= 20
     if wielding_ranged_weapon(agent) and not is_monster_faster(agent, monster):
         ret -= 6
     if mon.mname in EXPLODING_MONSTERS:
