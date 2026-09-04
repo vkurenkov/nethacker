@@ -101,6 +101,15 @@ class ItemPriority(ItemPriorityBase):
                            key=lambda x: -x.nutrition_per_weight() - 1000 * (x.objs[0].name == 'sprig of wolfsbane')):
             add_item(item)
 
+        # hypothesis (starvation avoidance): lizard and lichen corpses never rot and are always
+        # safe to eat, and eat_from_inventory already accepts them — but the food-pickup rule
+        # above skips every corpse, so the bot walks past permanent emergency rations and later
+        # starves when a level runs out of food. Stock them.
+        for item in items:
+            if item.is_corpse() and item.monster_id in [
+                    MON.id_from_name('lizard'), MON.id_from_name('lichen')]:
+                add_item(item)
+
         if self._take_sacrificial_corpses:
             for item in filter(self.agent.global_logic.can_sacrify, items):
                 add_item(item)
@@ -279,12 +288,8 @@ class GlobalLogic:
                     if not utils.isin(self.agent.current_level().objects, G.TRAPS).any():
                         return
 
-                elif sokomap.sokomap[y, x] == soko_solver.BOULDER:
-                    sokomap.move(y, x, dy, dx)
                 else:
-                    # hypothesis: abandoning a desynchronized Sokoban route when its simulated boulder
-                    # is gone prevents an assertion from killing progressed runs under the action watchdog.
-                    break
+                    sokomap.move(y, x, dy, dx)
 
                 if (~soko_boulder_mask | mask).all():
                     if self.agent.bfs()[ty, tx] != -1 and \
@@ -409,10 +414,7 @@ class GlobalLogic:
             return False
 
         permonst = MON.permonst(item.monster_id + nh.GLYPH_MON_OFF)
-        # hypothesis: a gloveless monk must leave cockatrice-family sacrifice cargo on the floor,
-        # because picking it up bare-handed turns an otherwise progressed altar run to stone.
-        if self.agent.character.role == Character.MONK and self.agent.inventory.items.gloves is None and \
-                ord(permonst.mlet) == MON.S_COCKATRICE:
+        if self.agent.inventory.items.gloves is None and ord(permonst.mlet) == MON.S_COCKATRICE:
             return False
 
         mname = permonst.mname

@@ -7,21 +7,27 @@ from scipy import signal
 from ..glyph import G
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
-    ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
+    ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, PETRIFYING_MONSTERS, \
+    consider_melee_only_ranged_if_hp_full
 from .movement_priority import draw_monster_priority_positive, draw_monster_priority_negative
 from .utils import wielding_ranged_weapon, line_dis_from, inside
 
 
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
-    # hypothesis: preferring missiles or retreat, with a kick only when contact is forced,
-    # prevents bare-handed monks from turning survivable cockatrice encounters into petrification.
-    if agent.character.role == agent.character.MONK and agent.inventory.items.gloves is None and \
-            agent.inventory.items.main_hand is None and mon.mname in ('cockatrice', 'chickatrice'):
+    # hypothesis: treating cockatrice-family encounters as strictly ranged threats, and keeping
+    # gloveless hands off their corpses, prevents otherwise successful monks from being petrified.
+    if mon.mname in PETRIFYING_MONSTERS:
         return -1000
     ret = 1
     if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
         ret += 15
+    # hypothesis: fast monsters get another attack whenever a retreat loses the
+    # initiative, so favoring melee at every HP total below 16 turns bats, dogs,
+    # and bees into avoidable deaths; let the existing escape map choose space
+    # or Elbereth while there is still a survivable margin.
+    if is_monster_faster(agent, monster) and agent.blstats.hitpoints <= 16:
+        ret -= 20
     if wielding_ranged_weapon(agent) and not is_monster_faster(agent, monster):
         ret -= 6
     if mon.mname in EXPLODING_MONSTERS:
@@ -245,6 +251,9 @@ def get_available_actions(agent, monsters):
     # melee attack actions
     for monster in monsters:
         _, y, x, mon, _ = monster
+        if mon.mname in PETRIFYING_MONSTERS:
+            # Do not expose an unsafe fallback for fight2's attack-all recovery mode.
+            continue
         if adjacent((y, x), (agent.blstats.y, agent.blstats.x)):
             priority = melee_monster_priority(agent, monsters, monster)
             if agent.inventory.engraving_below_me.lower() == 'elbereth':
