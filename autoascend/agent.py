@@ -1496,7 +1496,12 @@ class Agent:
         if self.character.prop.hallu and self.blstats.experience_level >= 11 and in_minetown and \
                 not self.handled_minetown_hallu:
             self.handled_minetown_hallu = True
-            if not self.get_visible_monsters() and self.is_safe_to_pray(400):
+            visible_monsters = self.get_visible_monsters()
+            # hypothesis: hallucination makes peaceful Minetown residents appear
+            # hostile, so allow the one-shot cure when every reported threat is
+            # more than three steps away while retaining the close-danger guard.
+            if all(monster[0] > 3 for monster in visible_monsters) and \
+                    self.is_safe_to_pray(400):
                 yield True
                 self.pray()
                 return
