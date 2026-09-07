@@ -170,7 +170,8 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
     sleep_threats = {
         (y, x) for monster in monsters for distance, y, x, mon, _ in [monster]
         if agent.character.role == agent.character.HEALER
-        and agent.character.race == agent.character.HUMAN
+        and (agent.character.race == agent.character.HUMAN
+             or agent.blstats.experience_level <= 6)
         and agent.blstats.max_hitpoints >= 20
         and distance == 1
         and adjacent((y, x), (agent.blstats.y, agent.blstats.x))
@@ -192,8 +193,9 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
         is_sleep_wand = item.is_unambiguous() and item.is_ray_wand() and item.object.name == 'sleep' \
                         and item.uses not in ('no charge', 'no charges') and sleep_charges != 0
         if is_sleep_wand:
-            # hypothesis: human Healers survive burst-damage fights by spending charged sleep rays and
-            # their strongest safe cure as a coordinated panic kit instead of dying with either resource unused.
+            # hypothesis: early gnome Healers close their survival gap by using the same
+            # collateral-aware emergency sleep rays that protect human Healers, while the
+            # XP cap avoids disrupting established later-game combat paths.
             if not sleep_threats or agent._last_turn - agent._last_sleep_wand_turn < 6:
                 continue
         targeted_monsters = set()
