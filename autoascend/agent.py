@@ -77,6 +77,7 @@ class Agent:
         self._allow_attack_all_turn = -float('inf')
 
         self.last_cast_fail_turn = defaultdict(lambda: -float('inf'))
+        self._last_sleep_wand_turn = -float('inf')
 
         self.stats_logger = StatsLogger()
 
@@ -1213,6 +1214,8 @@ class Agent:
 
             with self.env.debug_tiles([[my, mx] for my, mx, _ in targeted_monsters],
                                       (255, 0, 255, 255), mode='frame'):
+                if wand.is_unambiguous() and wand.object.name == 'sleep':
+                    self._last_sleep_wand_turn = self._last_turn
                 self.zap(wand, dir)
             return wait_counter
 
@@ -1416,12 +1419,26 @@ class Agent:
 
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']]
-        if (
-                (self.blstats.hitpoints < 1 / 3 * self.blstats.max_hitpoints
-                 or self.blstats.hitpoints < 8) and items
-        ):
+        human_healer = self.character.role == Character.HEALER and \
+                       self.character.race == Character.HUMAN
+        low_health = (self.blstats.hitpoints < 1 / 3 * self.blstats.max_hitpoints or
+                      self.blstats.hitpoints < 8)
+        # hypothesis: gnome Healers survive their repeated early low-HP deaths by spending a
+        # healing potion at 50% HP (or below 10 HP), before one more melee roll can kill them.
+        if self.character.role == Character.HEALER and self.character.race == Character.GNOME:
+            low_health = (self.blstats.hitpoints < 1 / 2 * self.blstats.max_hitpoints or
+                          self.blstats.hitpoints < 10)
+        if self.character.role == Character.PRIEST:
+            low_health = (self.blstats.hitpoints < 1 / 2 * self.blstats.max_hitpoints or
+                          self.blstats.hitpoints < 12)
+        if low_health and items:
             yield True
-            self.inventory.quaff(items[0])
+            if human_healer:
+                healing_power = {'healing': 1, 'extra healing': 2, 'full healing': 3}
+                item = max(items, key=lambda candidate: healing_power[candidate.object.name])
+            else:
+                item = items[0]
+            self.inventory.quaff(item)
             return
 
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
