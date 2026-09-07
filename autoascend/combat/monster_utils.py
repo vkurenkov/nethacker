@@ -15,6 +15,10 @@ def is_monster_faster(agent, monster):
 
 
 def imminent_death_on_melee(agent, monster):
+    # hypothesis: orc groups warrant defensive spacing before the generic critical
+    # HP cutoff because several attackers can land damage in the same turn cycle.
+    if 'orc' in monster[3].mname:
+        return agent.blstats.hitpoints <= 24
     if is_dangerous_monster(monster):
         return agent.blstats.hitpoints <= 16
     # hypothesis: a 12-HP melee safety floor lets fragile characters kite with ranged weapons before one more hit becomes fatal.
@@ -28,8 +32,7 @@ def is_dangerous_monster(monster):
     # 'mumak' in mon.mname or 'orc' in mon.mname or 'rothe' in mon.mname \
     # or 'were' in mon.mname or 'elf' in mon.mname or 'leocrotta' in mon.mname \
     # or 'mimic' in mon.mname
-    # hypothesis: classifying unicorns as dangerous makes fragile characters preserve distance and use escape resources before their fast, high-damage attacks become fatal.
-    return is_pet or mon.mname in INSECTS or 'unicorn' in mon.mname
+    return is_pet or mon.mname in INSECTS or 'unicorn' in mon.mname or 'orc' in mon.mname
 
 
 def consider_melee_only_ranged_if_hp_full(agent, monster):
