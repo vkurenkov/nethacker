@@ -17,11 +17,6 @@ def is_monster_faster(agent, monster):
 def imminent_death_on_melee(agent, monster):
     if is_dangerous_monster(monster):
         return agent.blstats.hitpoints <= 16
-    # hypothesis: the Samurai's strong starting armor and katana make continued
-    # melee safer than prolonged kiting down to 8 HP, reducing attrition and
-    # starvation against ordinary early monsters.
-    if agent.character.role == agent.character.SAMURAI:
-        return agent.blstats.hitpoints <= 8
     # hypothesis: a 12-HP melee safety floor lets fragile characters kite with ranged weapons before one more hit becomes fatal.
     return agent.blstats.hitpoints <= 12
 
