@@ -204,6 +204,12 @@ def elbereth_action(agent, monsters):
         return []
     if not agent.can_engrave():
         return []
+    # hypothesis: forcing Elbereth when a wounded hero is caught by an adjacent
+    # unicorn repels its fast, high-damage melee before the next hit is fatal.
+    if agent.blstats.hitpoints <= 30 and any(
+            'unicorn' in mon.mname and adjacent((my, mx), (agent.blstats.y, agent.blstats.x))
+            for _, my, mx, mon, _ in monsters):
+        return [(100, ('elbereth',))]
     adj_monsters_count = 0
     for monster in monsters:
         _, my, mx, mon, _ = monster
