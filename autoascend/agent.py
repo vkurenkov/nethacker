@@ -1460,7 +1460,9 @@ class Agent:
                 (self.is_safe_to_pray(500) and
                  (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
                   * self.blstats.max_hitpoints or self.blstats.hitpoints < 6))
-                or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.FAINTING)
+                # hypothesis: praying while foodless and weak, rather than waiting
+                # to faint, leaves enough time for a safe prayer to prevent starvation.
+                or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.WEAK)
         ):
             yield True
             self.pray()
