@@ -204,11 +204,6 @@ def elbereth_action(agent, monsters):
         return []
     if not agent.can_engrave():
         return []
-    # hypothesis: immediately engraving Elbereth beside a hostile shopkeeper
-    # avoids an unwinnable ordinary melee exchange and preserves the run.
-    if any(mon[3].mname == 'shopkeeper' and
-           adjacent((mon[1], mon[2]), (agent.blstats.y, agent.blstats.x)) for mon in monsters):
-        return [(100, ('elbereth',))]
     adj_monsters_count = 0
     for monster in monsters:
         _, my, mx, mon, _ = monster
