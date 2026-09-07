@@ -15,12 +15,13 @@ def is_monster_faster(agent, monster):
 
 
 def imminent_death_on_melee(agent, monster):
-    # hypothesis: orc groups warrant defensive spacing before the generic critical
-    # HP cutoff because several attackers can land damage in the same turn cycle.
-    if 'orc' in monster[3].mname:
-        return agent.blstats.hitpoints <= 24
     if is_dangerous_monster(monster):
         return agent.blstats.hitpoints <= 16
+    # hypothesis: the Samurai's strong starting armor and katana make continued
+    # melee safer than prolonged kiting down to 8 HP, reducing attrition and
+    # starvation against ordinary early monsters.
+    if agent.character.role == agent.character.SAMURAI:
+        return agent.blstats.hitpoints <= 8
     # hypothesis: a 12-HP melee safety floor lets fragile characters kite with ranged weapons before one more hit becomes fatal.
     return agent.blstats.hitpoints <= 12
 
@@ -32,7 +33,8 @@ def is_dangerous_monster(monster):
     # 'mumak' in mon.mname or 'orc' in mon.mname or 'rothe' in mon.mname \
     # or 'were' in mon.mname or 'elf' in mon.mname or 'leocrotta' in mon.mname \
     # or 'mimic' in mon.mname
-    return is_pet or mon.mname in INSECTS or 'unicorn' in mon.mname or 'orc' in mon.mname
+    # hypothesis: classifying unicorns as dangerous makes fragile characters preserve distance and use escape resources before their fast, high-damage attacks become fatal.
+    return is_pet or mon.mname in INSECTS or 'unicorn' in mon.mname
 
 
 def consider_melee_only_ranged_if_hp_full(agent, monster):
