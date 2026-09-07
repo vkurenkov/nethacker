@@ -7,7 +7,8 @@ from scipy import signal
 from ..glyph import G
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
-    ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
+    imminent_death_on_melee, ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, \
+    consider_melee_only_ranged_if_hp_full
 from .movement_priority import draw_monster_priority_positive, draw_monster_priority_negative
 from .utils import wielding_ranged_weapon, line_dis_from, inside
 
@@ -15,7 +16,7 @@ from .utils import wielding_ranged_weapon, line_dis_from, inside
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
     ret = 1
-    if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
+    if not imminent_death_on_melee(agent, monster) or is_monster_faster(agent, monster):
         ret += 15
     if wielding_ranged_weapon(agent) and not is_monster_faster(agent, monster):
         ret -= 6
@@ -137,6 +138,11 @@ def _simulate_wand_path(agent, wand, monsters, y, x, dy, dx, range_left, hit_tar
             monster = monster[0]
             # For each monster hit, range decreases by 2.
             range_left -= 2
+        # hypothesis: treating peaceful monsters as wand-path blockers prevents
+        # accidental shopkeeper aggression without weakening attacks on hostiles.
+        elif inside(agent, y, x) and agent.monster_tracker.peaceful_monster_mask[y, x]:
+            monster = 'peaceful'
+            range_left -= 2
         elif inside(agent, y, x) and agent.glyphs[y, x] in G.PETS:
             monster = 'pet'
             # For each monster hit, range decreases by 2.
@@ -176,7 +182,7 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
         # print('--------------', dy, dx)
         for y, x, monster, p in simulate_wand_path(agent, item, monsters, dy, dx):
             # print(y, x, monster, p)
-            if monster == 'pet':
+            if monster in ('pet', 'peaceful'):
                 priority -= p * 20
             elif monster == 'self':
                 priority -= p * 30
@@ -222,11 +228,7 @@ def elbereth_action(agent, monsters):
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
-        priority = -15 + 20 * adj_monsters_count * (1 - player_hp_ratio)
-        # hypothesis: below one-third health, engraving against an adjacent threat prevents the next melee exchange from becoming fatal.
-        if 3 * agent.blstats.hitpoints <= agent.blstats.max_hitpoints:
-            priority = max(priority, 20)
-        return [(priority, ('elbereth',))]
+        return [(-15 + 20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
     return []
 
 
