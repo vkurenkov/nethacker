@@ -605,25 +605,6 @@ class GlobalLogic:
                 .until(self.agent, condition)
             ).run()
 
-    @Strategy.wrap
-    def recover_health(self):
-        # hypothesis: resting between fights lets both knights face the next
-        # monster with enough HP to survive instead of exploring while wounded.
-        agent = self.agent
-        if (agent.blstats.hitpoints >= 0.7 * agent.blstats.max_hitpoints
-                or agent.blstats.hunger_state >= Hunger.HUNGRY
-                or agent.get_visible_monsters()):
-            yield False
-        yield True
-
-        while (agent.blstats.hitpoints < 0.9 * agent.blstats.max_hitpoints
-               and agent.blstats.hunger_state < Hunger.HUNGRY
-               and not agent.get_visible_monsters()):
-            previous_hp = agent.blstats.hitpoints
-            agent.direction('.')
-            if agent.blstats.hitpoints < previous_hp:
-                return
-
     def global_strategy(self):
         return (
             self.current_strategy().repeat()
@@ -636,9 +617,6 @@ class GlobalLogic:
                 self.offer_corpses().preempt(self.agent, [
                     self.agent.eat_corpses_from_ground().condition(lambda: self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
                 ]),
-            ])
-            .preempt(self.agent, [
-                self.recover_health(),
             ])
             .preempt(self.agent, [
                 self.wait_out_unexpected_state_strategy(),

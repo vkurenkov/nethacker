@@ -606,7 +606,9 @@ class Agent:
         level.seen[mask] = True
         level.walkable[mask & (level.objects == -1)] = True
 
-        mask = utils.isin(self.glyphs, G.WALL, G.DOOR_CLOSED, G.BARS)
+        # hypothesis: flooded floor must become unwalkable, preventing repeated
+        # water entries that ruin equipment and risk drowning while exploring.
+        mask = utils.isin(self.glyphs, G.WALL, G.DOOR_CLOSED, G.BARS, G.LIQUID)
         level.seen[mask] = True
         level.objects[mask] = self.glyphs[mask]
         level.walkable[mask] = False
