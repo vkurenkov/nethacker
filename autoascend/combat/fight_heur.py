@@ -220,7 +220,12 @@ def elbereth_action(agent, monsters):
         if is_dangerous_monster(monster):
             adj_monsters_count += 2 * multiplier
 
-    player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
+    # hypothesis: use Elbereth before critical HP, then recover under its
+    # protection, instead of letting melee priority win until it is too late.
+    hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
+    if adj_monsters_count > 0 and hp_ratio < 0.5:
+        return [(30, ('elbereth',))]
+    player_hp_ratio = hp_ratio ** 0.5
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
         return [(-15 + 20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
     return []
@@ -229,6 +234,8 @@ def elbereth_action(agent, monsters):
 def wait_action(agent, monsters):
     if agent.inventory.engraving_below_me.lower() == 'elbereth':
         player_hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
+        if player_hp_ratio < 0.85:
+            return [(30, ('wait',))]
         priority = 30 - player_hp_ratio * 40
         return [(priority, ('wait',))]
     return []
