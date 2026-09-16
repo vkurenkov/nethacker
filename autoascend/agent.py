@@ -573,11 +573,7 @@ class Agent:
                 corpse_glyph = MON.body_from_name(mname)
                 for y, x in zip(*utils.isin(mons, [glyph]).nonzero()):
                     # TODO: it works because level.items is updated in `inventory.check_items`
-                    # hypothesis: equipment on a kill square should not hide
-                    # fresh food; only an older corpse of the same species makes
-                    # its age ambiguous and prevents safely tracking this kill.
-                    if all(not item.is_corpse() or item.monster_id != monster_id
-                           for item in level.items[y, x]):
+                    if all(map(lambda item: item.is_corpse() and item.monster_id != monster_id, level.items[y, x])):
                         level.corpses_to_eat[y, x][monster_id] = self.blstats.time
 
         old_possible_corpses = level.corpses_to_eat[self.blstats.y, self.blstats.x].copy()
