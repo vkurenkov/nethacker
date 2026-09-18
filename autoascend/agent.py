@@ -71,7 +71,7 @@ class Agent:
         self._is_reading_message_or_popup = False
         self._last_terrain_check = None
         self._forbidden_engrave_position = (-1, -1)
-        self._elbereth_recovery_position = None
+        self._failed_elbereth_position = None
 
         # when (number of turn) there was last decision about allowing these actions (e.g. agent is somewhat stuck)
         self._allow_walking_through_traps_turn = -float('inf')
@@ -1120,6 +1120,7 @@ class Agent:
                     self.search()
                     wait_counter -= 1
                     continue
+                self._failed_elbereth_position = None
                 if not yielded:
                     yield False
                 return
@@ -1190,14 +1191,23 @@ class Agent:
 
         elif best_action[0] == 'elbereth':
             assert self.inventory.engraving_below_me.lower() != 'elbereth'
-            self._elbereth_recovery_position = (self.blstats.dungeon_number, self.blstats.level_number,
-                                               self.blstats.y, self.blstats.x)
             self.engrave("Elbereth")
             return wait_counter
         elif best_action[0] == 'wait':
             assert self.inventory.engraving_below_me.lower() == 'elbereth'
             self.stats_logger.log_event('wait_in_fight')
-            self.search()
+            hp_before_wait = self.blstats.hitpoints
+            position = (self.blstats.dungeon_number, self.blstats.level_number,
+                        self.blstats.y, self.blstats.x)
+            try:
+                self.search()
+            finally:
+                # Remember failed protection even if an emergency interrupts the wait.
+                current_position = (self.blstats.dungeon_number, self.blstats.level_number,
+                                    self.blstats.y, self.blstats.x)
+                if (current_position == position and self.blstats.hitpoints < hp_before_wait
+                        and (self.inventory.engraving_below_me or '').lower() == 'elbereth'):
+                    self._failed_elbereth_position = position
             return wait_counter
         elif best_action[0] == 'zap':
             if len(best_action) == 5:

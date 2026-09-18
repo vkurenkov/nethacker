@@ -4,7 +4,7 @@ from itertools import product
 import numpy as np
 from scipy import signal
 
-from ..glyph import G
+from ..glyph import G, MON
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
     ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
@@ -198,20 +198,28 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
     return ret
 
 
-def elbereth_action(agent, monsters):
-    hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
+def elbereth_is_ineffective(agent, monsters):
+    # hypothesis: avoid recovery behind ineffective Elbereth, using known
+    # monster immunities and damage observed while waiting on an intact ward.
     position = (agent.blstats.dungeon_number, agent.blstats.level_number,
                 agent.blstats.y, agent.blstats.x)
-    if agent._elbereth_recovery_position != position or hp_ratio >= 0.85:
-        agent._elbereth_recovery_position = None
+    if agent._failed_elbereth_position == position:
+        return True
+    if agent.character.prop.hallu:
+        return False
+    return any(adjacent((y, x), (agent.blstats.y, agent.blstats.x))
+               and (ord(mon.mlet) == MON.S_HUMAN or mon.mname in
+                    ('minotaur', 'Angel', 'Death', 'Famine', 'Pestilence'))
+               for _, y, x, mon, _ in monsters)
+
+
+def elbereth_action(agent, monsters):
+    if elbereth_is_ineffective(agent, monsters):
+        return []
     if agent.inventory.engraving_below_me.lower() == 'elbereth':
         return []
     if not agent.can_engrave():
         return []
-    # hypothesis: repair eroded Elbereth until recovery reaches its 85% HP
-    # target, rather than resuming combat as soon as HP has passed 50%.
-    if agent._elbereth_recovery_position == position:
-        return [(30, ('elbereth',))]
     adj_monsters_count = 0
     for monster in monsters:
         _, my, mx, mon, _ = monster
@@ -231,6 +239,7 @@ def elbereth_action(agent, monsters):
 
     # hypothesis: use Elbereth before critical HP, then recover under its
     # protection, instead of letting melee priority win until it is too late.
+    hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
     if adj_monsters_count > 0 and hp_ratio < 0.5:
         return [(30, ('elbereth',))]
     player_hp_ratio = hp_ratio ** 0.5
@@ -240,6 +249,8 @@ def elbereth_action(agent, monsters):
 
 
 def wait_action(agent, monsters):
+    if elbereth_is_ineffective(agent, monsters):
+        return []
     if agent.inventory.engraving_below_me.lower() == 'elbereth':
         player_hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
         if player_hp_ratio < 0.85:
