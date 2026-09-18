@@ -154,6 +154,10 @@ class GlobalLogic:
     def __init__(self, agent):
         self.agent = agent
         self.milestone = Milestone(1)
+        # hypothesis: recover from failed food prayers by foraging or moving
+        # training to a fresh floor while still mobile, preventing starvation.
+        self.food_prayer_failed = False
+        self._training_level = 1
         self.step_completion_log = {}  # Milestone -> (step, turn)
 
         self.item_priority = ItemPriority(self.agent)
@@ -515,10 +519,14 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                condition = lambda: self.agent.blstats.experience_level >= 8
-                # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
-                #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
-                level = (Level.DUNGEONS_OF_DOOM, 1)
+                if self.food_prayer_failed:
+                    self.food_prayer_failed = False
+                    self.agent.eat_corpses_from_ground(only_below_me=False).condition(
+                        lambda: self.agent.blstats.hunger_state >= Hunger.WEAK).run()
+                    if self.agent.blstats.hunger_state >= Hunger.WEAK:
+                        self._training_level += 1
+                condition = lambda: self.agent.blstats.experience_level >= 8 or self.food_prayer_failed
+                level = (Level.DUNGEONS_OF_DOOM, self._training_level)
 
             elif self.milestone == Milestone.FIND_SOKOBAN:
                 condition = lambda: self.agent.current_level().dungeon_number == Level.SOKOBAN

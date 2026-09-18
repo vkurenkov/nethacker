@@ -13,7 +13,7 @@ from . import utils
 from .character import Character
 from .exceptions import AgentPanic, AgentFinished, AgentChangeStrategy
 from .exploration_logic import ExplorationLogic
-from .global_logic import GlobalLogic
+from .global_logic import GlobalLogic, Milestone
 from .glyph import MON, C, Hunger, G, SHOP
 from .item import Item, flatten_items
 from .item.inventory import Inventory
@@ -573,10 +573,7 @@ class Agent:
                 corpse_glyph = MON.body_from_name(mname)
                 for y, x in zip(*utils.isin(mons, [glyph]).nonzero()):
                     # TODO: it works because level.items is updated in `inventory.check_items`
-                    # hypothesis: existing loot must not hide fresh corpses;
-                    # retain their kill times so they can become safe food.
-                    if not any(item.is_corpse() and item.monster_id == monster_id
-                               for item in level.items[y, x]):
+                    if all(map(lambda item: item.is_corpse() and item.monster_id != monster_id, level.items[y, x])):
                         level.corpses_to_eat[y, x][monster_id] = self.blstats.time
 
         old_possible_corpses = level.corpses_to_eat[self.blstats.y, self.blstats.x].copy()
@@ -1434,14 +1431,21 @@ class Agent:
             self.inventory.quaff(items[0])
             return
 
+        food_prayer_threshold = (Hunger.WEAK
+                                 if self.global_logic.milestone == Milestone.BE_ON_FIRST_LEVEL
+                                 else Hunger.FAINTING)
         if (
                 (self.is_safe_to_pray(500) and
                  (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
                   * self.blstats.max_hitpoints or self.blstats.hitpoints < 6))
-                or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.FAINTING)
+                or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= food_prayer_threshold)
         ):
             yield True
+            needed_food = self.blstats.hunger_state >= Hunger.WEAK
             self.pray()
+            if (needed_food and self.blstats.hunger_state >= Hunger.WEAK
+                    and self.inventory.items.total_nutrition() == 0):
+                self.global_logic.food_prayer_failed = True
             return
 
         # if self.inventory.engraving_below_me.lower() != 'elbereth' and self.can_engrave() and \
