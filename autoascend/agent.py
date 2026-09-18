@@ -13,7 +13,7 @@ from . import utils
 from .character import Character
 from .exceptions import AgentPanic, AgentFinished, AgentChangeStrategy
 from .exploration_logic import ExplorationLogic
-from .global_logic import GlobalLogic, Milestone
+from .global_logic import GlobalLogic
 from .glyph import MON, C, Hunger, G, SHOP
 from .item import Item, flatten_items
 from .item.inventory import Inventory
@@ -1431,21 +1431,14 @@ class Agent:
             self.inventory.quaff(items[0])
             return
 
-        food_prayer_threshold = (Hunger.WEAK
-                                 if self.global_logic.milestone == Milestone.BE_ON_FIRST_LEVEL
-                                 else Hunger.FAINTING)
         if (
                 (self.is_safe_to_pray(500) and
                  (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
                   * self.blstats.max_hitpoints or self.blstats.hitpoints < 6))
-                or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= food_prayer_threshold)
+                or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.FAINTING)
         ):
             yield True
-            needed_food = self.blstats.hunger_state >= Hunger.WEAK
             self.pray()
-            if (needed_food and self.blstats.hunger_state >= Hunger.WEAK
-                    and self.inventory.items.total_nutrition() == 0):
-                self.global_logic.food_prayer_failed = True
             return
 
         # if self.inventory.engraving_below_me.lower() != 'elbereth' and self.can_engrave() and \
