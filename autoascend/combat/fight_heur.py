@@ -199,10 +199,19 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
 
 
 def elbereth_action(agent, monsters):
+    hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
+    position = (agent.blstats.dungeon_number, agent.blstats.level_number,
+                agent.blstats.y, agent.blstats.x)
+    if agent._elbereth_recovery_position != position or hp_ratio >= 0.85:
+        agent._elbereth_recovery_position = None
     if agent.inventory.engraving_below_me.lower() == 'elbereth':
         return []
     if not agent.can_engrave():
         return []
+    # hypothesis: repair eroded Elbereth until recovery reaches its 85% HP
+    # target, rather than resuming combat as soon as HP has passed 50%.
+    if agent._elbereth_recovery_position == position:
+        return [(30, ('elbereth',))]
     adj_monsters_count = 0
     for monster in monsters:
         _, my, mx, mon, _ = monster
@@ -222,7 +231,6 @@ def elbereth_action(agent, monsters):
 
     # hypothesis: use Elbereth before critical HP, then recover under its
     # protection, instead of letting melee priority win until it is too late.
-    hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
     if adj_monsters_count > 0 and hp_ratio < 0.5:
         return [(30, ('elbereth',))]
     player_hp_ratio = hp_ratio ** 0.5

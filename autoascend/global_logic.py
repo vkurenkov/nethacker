@@ -359,20 +359,6 @@ class GlobalLogic:
 
         self.agent.inventory.drop(items_to_drop)
 
-    @Strategy.wrap
-    def recover_from_hallucination(self):
-        # hypothesis: hallucinated glyphs cannot distinguish peaceful NPCs from
-        # enemies; recover under Elbereth instead of starting avoidable fights.
-        if not self.agent.character.prop.hallu:
-            yield False
-        yield True
-        while self.agent.character.prop.hallu:
-            if (self.agent.inventory.engraving_below_me.lower() != 'elbereth'
-                    and self.agent.can_engrave()):
-                self.agent.engrave('Elbereth')
-            else:
-                self.agent.direction('.')
-
     @utils.debug_log('dip_for_excalibur')
     @Strategy.wrap
     def dip_for_excalibur(self):
@@ -648,9 +634,6 @@ class GlobalLogic:
             ])
             .preempt(self.agent, [
                 self.agent.fight2(),
-            ])
-            .preempt(self.agent, [
-                self.recover_from_hallucination(),
             ])
             .preempt(self.agent, [
                 self.agent.engulfed_fight(),

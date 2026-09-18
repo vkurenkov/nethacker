@@ -71,6 +71,7 @@ class Agent:
         self._is_reading_message_or_popup = False
         self._last_terrain_check = None
         self._forbidden_engrave_position = (-1, -1)
+        self._elbereth_recovery_position = None
 
         # when (number of turn) there was last decision about allowing these actions (e.g. agent is somewhat stuck)
         self._allow_walking_through_traps_turn = -float('inf')
@@ -1189,6 +1190,8 @@ class Agent:
 
         elif best_action[0] == 'elbereth':
             assert self.inventory.engraving_below_me.lower() != 'elbereth'
+            self._elbereth_recovery_position = (self.blstats.dungeon_number, self.blstats.level_number,
+                                               self.blstats.y, self.blstats.x)
             self.engrave("Elbereth")
             return wait_counter
         elif best_action[0] == 'wait':
