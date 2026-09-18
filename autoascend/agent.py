@@ -573,7 +573,10 @@ class Agent:
                 corpse_glyph = MON.body_from_name(mname)
                 for y, x in zip(*utils.isin(mons, [glyph]).nonzero()):
                     # TODO: it works because level.items is updated in `inventory.check_items`
-                    if all(map(lambda item: item.is_corpse() and item.monster_id != monster_id, level.items[y, x])):
+                    # hypothesis: existing loot must not hide fresh corpses;
+                    # retain their kill times so they can become safe food.
+                    if not any(item.is_corpse() and item.monster_id == monster_id
+                               for item in level.items[y, x]):
                         level.corpses_to_eat[y, x][monster_id] = self.blstats.time
 
         old_possible_corpses = level.corpses_to_eat[self.blstats.y, self.blstats.x].copy()
@@ -1431,13 +1434,11 @@ class Agent:
             self.inventory.quaff(items[0])
             return
 
-        # hypothesis: pray for food while Weak, before a hunger faint gives
-        # nearby monsters several unanswered attacks against a healthy knight.
         if (
                 (self.is_safe_to_pray(500) and
                  (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
                   * self.blstats.max_hitpoints or self.blstats.hitpoints < 6))
-                or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.WEAK)
+                or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.FAINTING)
         ):
             yield True
             self.pray()
