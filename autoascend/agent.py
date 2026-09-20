@@ -14,7 +14,7 @@ from .character import Character
 from .exceptions import AgentPanic, AgentFinished, AgentChangeStrategy
 from .exploration_logic import ExplorationLogic
 from .global_logic import GlobalLogic
-from .glyph import MON, C, Hunger, G, SHOP
+from .glyph import MON, C, Hunger, G, SHOP, SS
 from .item import Item, flatten_items
 from .item.inventory import Inventory
 from .level import Level
@@ -58,6 +58,7 @@ class Agent:
         self.last_bfs_dis = None
         self.last_bfs_step = None
         self.last_prayer_turn = None
+        self._failed_dig_escape_positions = set()
         self._last_failed_food_purchase_turn = -float('inf')
         self._previous_glyphs = None
         self._last_turn = -1
@@ -1404,6 +1405,56 @@ class Agent:
         low_hp = hp_ratio < 0.5 and (self.blstats.max_hitpoints - self.blstats.hitpoints > 25)
         return self.blstats.energy >= 15 and low_hp
 
+    def _get_dig_escape_wand(self):
+        if self.blstats.hitpoints >= self.blstats.max_hitpoints / 2 and self.blstats.hitpoints >= 8:
+            return None
+        if self.blstats.prop_mask & (nh.BL_MASK_HALLU | nh.BL_MASK_CONF |
+                                    nh.BL_MASK_STUN | nh.BL_MASK_LEV | nh.BL_MASK_FLY) or \
+                self.character.prop.polymorph or utils.any_in(self.glyphs, G.SWALLOW):
+            return None
+        level = self.current_level()
+        y, x = self.blstats.y, self.blstats.x
+        position = (*level.key(), y, x)
+        if level.dungeon_number not in (Level.DUNGEONS_OF_DOOM, Level.GNOMISH_MINES) or \
+                not level.get_stairs(down=True) or position in self._failed_dig_escape_positions:
+            return None
+        if level.shop[y, x] or level.objects[y, x] not in (SS.S_room, SS.S_darkroom, SS.S_corr, SS.S_litcorr):
+            return None
+        # Unknown adjacent terrain might hide water; a new hole can flood immediately.
+        region = np.s_[max(0, y - 1):y + 2, max(0, x - 1):x + 2]
+        liquids = [SS.S_pool, SS.S_water, SS.S_lava]
+        if utils.isin(level.objects[region], [-1, *liquids]).any() or \
+                utils.isin(self.glyphs[region], liquids).any():
+            return None
+        if any(item.is_unambiguous() and item.object.name == 'boulder'
+               for item in self.inventory.items_below_me):
+            return None
+        adjacent = [monster for _, my, mx, monster, _ in self.get_visible_monsters()
+                    if utils.adjacent((y, x), (my, mx))]
+        # These monsters can hold the hero in place, preventing a fall through the hole.
+        grabbers = {'large mimic', 'giant mimic', 'couatl', 'lichen', 'violet fungus', 'guardian naga',
+                    'python', 'owlbear', 'carnivorous ape', 'rope golem', 'pit fiend', 'giant eel',
+                    'electric eel', 'kraken', 'salamander'}
+        if not adjacent or any(monster.mname in grabbers for monster in adjacent):
+            return None
+        elbereth_threats = [monster for monster in adjacent
+                           if not hasattr(monster, 'mflags1') or monster.mflags1 & MON.M1_NOEYES
+                           or ord(monster.mlet) in (MON.S_HUMAN, MON.S_ANGEL)
+                           or monster.mname in ('minotaur', 'Death', 'Pestilence', 'Famine')]
+        early_escape = any(monster.mname not in combat.monster_utils.ONLY_RANGED_SLOW_MONSTERS
+                           + combat.monster_utils.WEAK_MONSTERS for monster in elbereth_threats)
+        if not early_escape and (
+                (self.blstats.hitpoints >= self.blstats.max_hitpoints / 3 and self.blstats.hitpoints >= 8)
+                or self.is_safe_to_pray(500)):
+            return None
+        if self.inventory.engraving_below_me.lower() == 'elbereth' and not elbereth_threats:
+            return None
+        return next((item for item in self.inventory.items
+                     if item.category == nh.WAND_CLASS and item.is_unambiguous() and item.object.name == 'digging'
+                     and item.status != Item.CURSED and item.shop_status == Item.NOT_SHOP
+                     and item.comment != 'EMPT' and item.uses != 'no charges'
+                     and not (item.uses and item.uses.endswith(':0'))), None)
+
     @utils.debug_log('emergency_strategy')
     @Strategy.wrap
     def emergency_strategy(self):
@@ -1448,6 +1499,22 @@ class Agent:
         ):
             yield True
             self.pray()
+            return
+
+        # hypothesis: dig away from Elbereth-immune attackers before their damage
+        # becomes lethal, while preserving Elbereth defenses in ordinary fights.
+        wand = self._get_dig_escape_wand()
+        if wand is not None:
+            yield True
+            self._failed_dig_escape_positions.add((*self.current_level().key(), self.blstats.y, self.blstats.x))
+            with self.atom_operation():
+                self.step(A.Command.ZAP)
+                if 'What do you want to zap?' in self.single_message:
+                    self.type_text(self.inventory.items.get_letter(wand))
+                    if self.single_message == 'In what direction?':
+                        self.direction('>')
+                    elif 'Nothing happens.' in self.message:
+                        self.inventory.call_item(wand, 'EMPT')
             return
 
         # if self.inventory.engraving_below_me.lower() != 'elbereth' and self.can_engrave() and \
