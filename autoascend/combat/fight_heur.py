@@ -4,7 +4,7 @@ from itertools import product
 import numpy as np
 from scipy import signal
 
-from ..glyph import G
+from ..glyph import G, MON
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
     ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
@@ -198,18 +198,22 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
     return ret
 
 
-def elbereth_action(agent, monsters):
+def elbereth_action(agent, monsters, recent_damage=0):
     if agent.inventory.engraving_below_me.lower() == 'elbereth':
         return []
     if not agent.can_engrave():
         return []
     adj_monsters_count = 0
+    damage_can_be_repelled = not agent.character.prop.hallu
     for monster in monsters:
         _, my, mx, mon, _ = monster
         if mon.mname in ONLY_RANGED_SLOW_MONSTERS:
             continue
         if not adjacent((my, mx), (agent.blstats.y, agent.blstats.x)):
             continue
+        if ord(mon.mlet) in (MON.S_HUMAN, MON.S_ANGEL) or mon.mname in (
+                'minotaur', 'Death', 'Famine', 'Pestilence'):
+            damage_can_be_repelled = False
         multiplier = np.clip(20 / agent.blstats.hitpoints, 1.0, 1.5)
         if is_monster_faster(agent, monster):
             multiplier *= 2
@@ -223,7 +227,10 @@ def elbereth_action(agent, monsters):
     # hypothesis: use Elbereth before critical HP, then recover under its
     # protection, instead of letting melee priority win until it is too late.
     hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
-    if adj_monsters_count > 0 and hp_ratio < 0.5:
+    # hypothesis: respond to heavy damage with earlier Elbereth when nearby
+    # enemies can be frightened, leaving enough HP to establish protection.
+    damage_emergency = damage_can_be_repelled and agent.blstats.hitpoints <= 1.5 * recent_damage
+    if adj_monsters_count > 0 and (hp_ratio < 0.5 or damage_emergency):
         return [(30, ('elbereth',))]
     player_hp_ratio = hp_ratio ** 0.5
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
@@ -243,7 +250,7 @@ def wait_action(agent, monsters):
     return []
 
 
-def get_available_actions(agent, monsters):
+def get_available_actions(agent, monsters, recent_damage=0):
     actions = []
 
     # melee attack actions
@@ -275,7 +282,7 @@ def get_available_actions(agent, monsters):
     if to_pickup:
         actions.append((15, ('pickup', to_pickup)))
 
-    actions.extend(elbereth_action(agent, monsters))
+    actions.extend(elbereth_action(agent, monsters, recent_damage))
     actions.extend(wait_action(agent, monsters))
 
     return actions
@@ -322,7 +329,7 @@ def get_corridors_priority_map(walkable):
     return corridor_mask + corridor_dilated >= 1
 
 
-def get_priorities(agent):
+def get_priorities(agent, recent_damage=0):
     """ Returns a pair (move priority heatmap, other actions (with priorities) list) """
     walkable = agent.current_level().walkable
     priority = np.zeros(walkable.shape, dtype=float)
@@ -344,7 +351,7 @@ def get_priorities(agent):
     # use relative priority to te current position
     priority -= priority[agent.blstats.y, agent.blstats.x]
 
-    actions = get_available_actions(agent, monsters)
+    actions = get_available_actions(agent, monsters, recent_damage)
     if not any(a[1][0] in ('melee', 'ranged') for a in actions):
         actions.extend(goto_action(agent, priority, monsters))
     return priority, actions

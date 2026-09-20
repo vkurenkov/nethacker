@@ -1102,6 +1102,7 @@ class Agent:
     def fight2(self):
         yielded = False
         wait_counter = 0
+        recent_damage = 0
         while 1:
             monsters = self.get_visible_monsters()
             allow_attack_all = self._last_turn - self._allow_attack_all_turn < 3
@@ -1129,7 +1130,7 @@ class Agent:
                 self.character.parse_enhance_view()
                 # self.character.parse_spellcast_view()
 
-            move_priority_heatmap, actions = combat.fight_heur.get_priorities(self)
+            move_priority_heatmap, actions = combat.fight_heur.get_priorities(self, recent_damage)
             actions.extend(combat.fight_heur.get_move_actions(self, dis, move_priority_heatmap))
 
             if self.character.prop.polymorph:
@@ -1148,7 +1149,9 @@ class Agent:
             with self.env.debug_tiles(move_priority_heatmap, color='turbo', is_heatmap=True):
                 actions_str = '|'.join([combat.utils.action_str(self, a) for a in sorted(actions, key=lambda x: x[0])])
                 with self.env.debug_log(actions_str):
+                    previous_hp = self.blstats.hitpoints
                     wait_counter = self._fight2_perform_action(best_action, wait_counter)
+                    recent_damage = max(0, previous_hp - self.blstats.hitpoints)
 
     def _fight2_perform_action(self, best_action, wait_counter):
         if best_action[0] == 'move':
