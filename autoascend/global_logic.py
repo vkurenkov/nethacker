@@ -362,7 +362,9 @@ class GlobalLogic:
     @utils.debug_log('dip_for_excalibur')
     @Strategy.wrap
     def dip_for_excalibur(self):
-        if self.agent.character.alignment != Character.LAWFUL or self.agent.blstats.experience_level < 5:
+        # hypothesis: obtain Excalibur at level 6 to strengthen early combat,
+        # while retaining an extra level of health for fountain hazards.
+        if self.agent.character.alignment != Character.LAWFUL or self.agent.blstats.experience_level < 6:
             yield False
         if self.agent.current_level().dungeon_number == Level.GNOMISH_MINES and \
                 (self.minetown_level is None or self.agent.current_level().key() == self.minetown_level):
@@ -570,8 +572,7 @@ class GlobalLogic:
                         self.identify_items_on_altar().condition(
                             lambda: self.agent.current_level().objects[self.agent.blstats.y,
                                                                        self.agent.blstats.x] in G.ALTAR),
-                        self.dip_for_excalibur().condition(
-                            lambda: self.agent.blstats.experience_level >= 7).every(10),
+                        self.dip_for_excalibur().every(10),
                     ])
                 )
 
@@ -582,7 +583,7 @@ class GlobalLogic:
                         self.agent.exploration.go_to_strategy(y, x).preempt(self.agent, [
                             self.agent.inventory.gather_items(),
                             self.identify_items_on_altar(),
-                            self.dip_for_excalibur().condition(lambda: self.agent.blstats.experience_level >= 7),
+                            self.dip_for_excalibur(),
                         ])
                         .condition(lambda: self._got_artifact or
                                            not any([alignment == self.agent.character.alignment
