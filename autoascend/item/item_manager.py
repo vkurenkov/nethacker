@@ -472,6 +472,11 @@ class ItemManager:
             to_hit_bonus = 3  # 1d5
 
         objs, ret_glyphs = ItemManager.parse_name(name)
+        # hypothesis: recognize custom fruit names as slime molds so finding
+        # edible supplies does not terminate an otherwise viable run.
+        if category == nh.FOOD_CLASS and objs == [O.from_name('unknown')]:
+            objs = [O.from_name('slime mold')]
+            ret_glyphs = O.possible_glyphs_from_object(objs[0])
         assert category is None or category == O.get_category(objs[0]), (text, category, O.get_category(objs[0]))
 
         if glyph is not None:
