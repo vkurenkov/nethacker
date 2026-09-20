@@ -1480,7 +1480,8 @@ class Agent:
     @utils.debug_log('buy_food_from_shop')
     @Strategy.wrap
     def buy_food_from_shop(self):
-        # hypothesis: buying affordable shop food when supplies run out prevents avoidable starvation.
+        # hypothesis: seek out known affordable shop food when rations run out,
+        # preventing starvation even when the food is not already underfoot.
         if (self.blstats.hunger_state < Hunger.HUNGRY or self.character.prop.hallu or
                 self.character.prop.blind or
                 self.blstats.time - self._last_failed_food_purchase_turn < 100 or
@@ -1490,23 +1491,46 @@ class Agent:
             yield False
             return
 
-        foods = [item for item in self.inventory.items_below_me
-                 if item.shop_status == Item.FOR_SALE and item.category == nh.FOOD_CLASS and
-                 item.is_unambiguous() and not item.is_corpse() and item.status != Item.CURSED and
-                 item.object.name not in ('tin', 'egg', 'tripe ration', 'sprig of wolfsbane') and
-                 not item.object.name.startswith('glob of ') and
-                 item.object.nutrition > 0 and 0 < item.price <= self.blstats.gold]
+        def affordable_foods(items):
+            return [item for item in items
+                    if item.shop_status == Item.FOR_SALE and item.category == nh.FOOD_CLASS and
+                    item.is_unambiguous() and not item.is_corpse() and item.status != Item.CURSED and
+                    item.object.name not in ('tin', 'egg', 'tripe ration', 'sprig of wolfsbane') and
+                    not item.object.name.startswith('glob of ') and
+                    item.object.nutrition > 0 and 0 < item.price <= self.blstats.gold * item.count]
+
+        foods = affordable_foods(self.inventory.items_below_me)
+        target = None
         if not foods:
-            yield False
-            return
+            if self.blstats.hunger_state < Hunger.WEAK:
+                yield False
+                return
+            dis = self.bfs()
+            level = self.current_level()
+            destinations = [(-item.object.nutrition * item.count / item.price, dis[y, x], y, x)
+                            for y, x in zip(*(dis > 0).nonzero())
+                            for item in affordable_foods(level.items[y, x])]
+            if not destinations:
+                yield False
+                return
+            _, _, y, x = min(destinations)
+            target = y, x
+
+        yield True
+        if target is not None:
+            self.go_to(*target)
+            foods = affordable_foods(self.inventory.items_below_me)
+            if not foods:
+                self._last_failed_food_purchase_turn = self.blstats.time
+                return
         food = max(foods, key=lambda item: item.object.nutrition * item.count / item.price)
         food_type = food.object
-        yield True
+        count = min(food.count, self.blstats.gold * food.count // food.price)
 
-        # Buy the whole affordable stack. Keep pickup and payment together so another
+        # Buy the affordable portion. Keep pickup and payment together so another
         # strategy cannot leave the shop or eat the food before it has been paid for.
         with self.atom_operation():
-            self.inventory.pickup(food)
+            self.inventory.pickup(food, count)
             self.step(A.Command.PAY)
             if 'Itemized billing?' in self.single_message:
                 self.step('q')
