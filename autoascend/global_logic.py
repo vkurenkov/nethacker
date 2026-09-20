@@ -629,6 +629,7 @@ class GlobalLogic:
                 self.agent.eat_corpses_from_ground(only_below_me=True).condition(lambda: self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
                 self.agent.eat_corpses_from_ground().every(5).condition(lambda: self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
                 self.agent.eat_from_inventory().every(5),
+                self.agent.buy_food_from_shop().every(5),
             ])
             .preempt(self.agent, [
                 self.follow_guard(),

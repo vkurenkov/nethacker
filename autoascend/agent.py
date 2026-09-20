@@ -58,6 +58,7 @@ class Agent:
         self.last_bfs_dis = None
         self.last_bfs_step = None
         self.last_prayer_turn = None
+        self._last_failed_food_purchase_turn = -float('inf')
         self._previous_glyphs = None
         self._last_turn = -1
         self._inactivity_counter = 0
@@ -1475,6 +1476,51 @@ class Agent:
                 self.inventory.eat(item)
                 return
         yield False
+
+    @utils.debug_log('buy_food_from_shop')
+    @Strategy.wrap
+    def buy_food_from_shop(self):
+        # hypothesis: buying affordable shop food when supplies run out prevents avoidable starvation.
+        if (self.blstats.hunger_state < Hunger.HUNGRY or self.character.prop.hallu or
+                self.character.prop.blind or
+                self.blstats.time - self._last_failed_food_purchase_turn < 100 or
+                self.character.prop.polymorph or self.eat_from_inventory().check_condition() or
+                self.inventory.items.free_slots() <= 0 or
+                any(item.shop_status == Item.UNPAID for item in flatten_items(self.inventory.items))):
+            yield False
+            return
+
+        foods = [item for item in self.inventory.items_below_me
+                 if item.shop_status == Item.FOR_SALE and item.category == nh.FOOD_CLASS and
+                 item.is_unambiguous() and not item.is_corpse() and item.status != Item.CURSED and
+                 item.object.name not in ('tin', 'egg', 'tripe ration', 'sprig of wolfsbane') and
+                 not item.object.name.startswith('glob of ') and
+                 item.object.nutrition > 0 and 0 < item.price <= self.blstats.gold]
+        if not foods:
+            yield False
+            return
+        food = max(foods, key=lambda item: item.object.nutrition * item.count / item.price)
+        food_type = food.object
+        yield True
+
+        # Buy the whole affordable stack. Keep pickup and payment together so another
+        # strategy cannot leave the shop or eat the food before it has been paid for.
+        with self.atom_operation():
+            self.inventory.pickup(food)
+            self.step(A.Command.PAY)
+            if 'Itemized billing?' in self.single_message:
+                self.step('q')
+            elif 'Pay whom?' in self.single_message:
+                self.step(A.Command.ESC)
+            self.inventory.items.update()
+            purchased = next((item for item in self.inventory.items
+                              if item.is_unambiguous() and item.object == food_type), None)
+            if purchased is not None and purchased.shop_status == Item.NOT_SHOP:
+                self.inventory.eat(purchased)
+                return
+            self._last_failed_food_purchase_turn = self.blstats.time
+            if purchased is not None and purchased.shop_status == Item.UNPAID:
+                self.inventory.drop(purchased, smart=False)
 
     @utils.debug_log('cure_disease')
     @Strategy.wrap
