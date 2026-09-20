@@ -234,7 +234,9 @@ def elbereth_action(agent, monsters):
 def wait_action(agent, monsters):
     if agent.inventory.engraving_below_me.lower() == 'elbereth':
         player_hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
-        if player_hp_ratio < 0.85:
+        # hypothesis: finish healing under Elbereth before re-engaging, keeping
+        # a full health buffer against the next monster attack.
+        if player_hp_ratio < 1.0:
             return [(30, ('wait',))]
         priority = 30 - player_hp_ratio * 40
         return [(priority, ('wait',))]
