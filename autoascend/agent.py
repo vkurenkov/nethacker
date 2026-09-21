@@ -766,6 +766,15 @@ class Agent:
             return self.glyphs[y, x] not in G.DOOR_CLOSED
 
     def melee_attack(self, y, x):
+        # hypothesis: disperse gas-spore chains with Elbereth before a melee
+        # attack would expose us to several potentially lethal explosions.
+        if (self.glyphs[y, x] == MON.from_name('gas spore') and self.can_engrave()
+                and self._lethal_spore_chain(self.get_visible_monsters())):
+            if self.inventory.engraving_below_me.lower() == 'elbereth':
+                self.search()
+            else:
+                self.engrave('Elbereth')
+            return True
         with self.panic_if_position_changes():
             assert self.glyphs[y, x] in G.MONS or self.glyphs[y, x] in G.INVISIBLE_MON or \
                    self.glyphs[y, x] in G.SWALLOW
@@ -1140,6 +1149,21 @@ class Agent:
         _, y, x = max(moves)
         yield True
         self.move(y, x)
+
+    def _lethal_spore_chain(self, monsters):
+        if self.character.prop.hallu:
+            return False
+        spores = {(y, x) for _, y, x, mon, _ in monsters if mon.mname == 'gas spore'}
+        while spores:
+            chain = [spores.pop()]
+            for position in chain:
+                connected = {p for p in spores if utils.adjacent(position, p)}
+                chain.extend(connected)
+                spores.difference_update(connected)
+            overlapping = sum(utils.adjacent((self.blstats.y, self.blstats.x), p) for p in chain)
+            if overlapping >= 2 and self.blstats.hitpoints <= 24 * overlapping:  # 4d6 per blast
+                return True
+        return False
 
     @utils.debug_log('fight2')
     @Strategy.wrap
