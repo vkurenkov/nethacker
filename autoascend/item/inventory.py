@@ -630,7 +630,10 @@ class Inventory:
                             moved_items = moved_items.union(its)
                             self.use_container(container, items_to_take=its, items_to_put=[])
 
-                assert moved_items == set(items), ('TODO: nested containers', moved_items, items)
+                # hypothesis: recover from stale item references after interrupted
+                # meals or item loss instead of terminating an otherwise healthy run.
+                if moved_items != set(items):
+                    raise AgentPanic('items to move are no longer available')
 
             # TODO: HACK
             self.agent.last_observation = self.agent.last_observation.copy()
