@@ -12,6 +12,20 @@ from .movement_priority import draw_monster_priority_positive, draw_monster_prio
 from .utils import wielding_ranged_weapon, line_dis_from, inside
 
 
+def elbereth_is_safe(agent, monsters):
+    # hypothesis: only rely on Elbereth when adjacent enemies can be repelled;
+    # otherwise fight or retreat instead of waiting helplessly to heal.
+    if agent.character.prop.hallu:
+        return False
+    for _, y, x, mon, _ in monsters:
+        if not adjacent((y, x), (agent.blstats.y, agent.blstats.x)):
+            continue
+        if (not hasattr(mon, 'mflags1') or ord(mon.mlet) in (MON.S_HUMAN, MON.S_ANGEL)
+                or mon.mname in ('minotaur', 'Death', 'Famine', 'Pestilence')):
+            return False
+    return True
+
+
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
     ret = 1
@@ -192,7 +206,7 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
         if targeted_monsters:
             # priority = priority * (1 - player_hp_ratio) - 10
             priority = priority - 15
-            if agent.inventory.engraving_below_me.lower() == 'elbereth':
+            if agent.inventory.engraving_below_me.lower() == 'elbereth' and elbereth_is_safe(agent, monsters):
                 priority -= 100
             ret.append((priority, ('zap', dy, dx, item, targeted_monsters)))
     return ret
@@ -202,6 +216,8 @@ def elbereth_action(agent, monsters, recent_damage=0):
     if agent.inventory.engraving_below_me.lower() == 'elbereth':
         return []
     if not agent.can_engrave():
+        return []
+    if not elbereth_is_safe(agent, monsters):
         return []
     adj_monsters_count = 0
     damage_can_be_repelled = not agent.character.prop.hallu
@@ -239,7 +255,7 @@ def elbereth_action(agent, monsters, recent_damage=0):
 
 
 def wait_action(agent, monsters):
-    if agent.inventory.engraving_below_me.lower() == 'elbereth':
+    if agent.inventory.engraving_below_me.lower() == 'elbereth' and elbereth_is_safe(agent, monsters):
         player_hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
         # hypothesis: finish healing under Elbereth before re-engaging, keeping
         # a full health buffer against the next monster attack.
@@ -252,13 +268,14 @@ def wait_action(agent, monsters):
 
 def get_available_actions(agent, monsters, recent_damage=0):
     actions = []
+    protected = agent.inventory.engraving_below_me.lower() == 'elbereth' and elbereth_is_safe(agent, monsters)
 
     # melee attack actions
     for monster in monsters:
         _, y, x, mon, _ = monster
         if adjacent((y, x), (agent.blstats.y, agent.blstats.x)):
             priority = melee_monster_priority(agent, monsters, monster)
-            if agent.inventory.engraving_below_me.lower() == 'elbereth':
+            if protected:
                 priority -= 100
             dy = y - agent.blstats.y
             dx = x - agent.blstats.x
@@ -270,7 +287,7 @@ def get_available_actions(agent, monsters, recent_damage=0):
             ranged_pr = ranged_priority(agent, dy, dx, monsters)
             if ranged_pr is not None:
                 pri, y, x, monster = ranged_pr
-                if agent.inventory.engraving_below_me.lower() == 'elbereth':
+                if protected:
                     pri -= 100
                 if all(monster[3].mname in ONLY_RANGED_SLOW_MONSTERS for monster in monsters):
                     pri += 10
