@@ -381,6 +381,15 @@ class GlobalLogic:
         # while retaining an extra level of health for fountain hazards.
         if self.agent.character.alignment != Character.LAWFUL or self.agent.blstats.experience_level < 6:
             yield False
+
+        # hypothesis: reduce early fountain deaths by requiring a health reserve
+        # before the knight gains intrinsic speed at level 7.
+        def ready_for_fountain():
+            return (self.agent.blstats.experience_level >= 7 or
+                    self.agent.blstats.hitpoints >= 0.9 * self.agent.blstats.max_hitpoints)
+
+        if not ready_for_fountain():
+            yield False
         if self.agent.current_level().dungeon_number == Level.GNOMISH_MINES and \
                 (self.minetown_level is None or self.agent.current_level().key() == self.minetown_level):
             yield False
@@ -406,7 +415,7 @@ class GlobalLogic:
         self.agent.go_to(*list(zip(*mask.nonzero()))[0])
 
         candidate = excalibur_candidate()
-        if candidate is None:
+        if candidate is None or not ready_for_fountain():
             return
 
         # TODO: refactor
