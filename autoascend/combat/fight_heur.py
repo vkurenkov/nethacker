@@ -5,6 +5,7 @@ import numpy as np
 from scipy import signal
 
 from ..glyph import G, MON
+from ..item import Item
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
     ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
@@ -289,11 +290,14 @@ def get_available_actions(agent, monsters, recent_damage=0):
 
 
 def decide_what_to_pickup(agent):
+    # hypothesis: avoid accidental theft and lethal shopkeeper retaliation
+    # when recovering combat ammunition that belongs to a shop.
     projectiles_below_me = [i for i in agent.inventory.items_below_me
-                            if i.is_thrown_projectile() or i.is_fired_projectile()]
+                            if i.shop_status == Item.NOT_SHOP and
+                            (i.is_thrown_projectile() or i.is_fired_projectile())]
     my_launcher, ammo = agent.inventory.get_best_ranged_set(additional_ammo=[i for i in projectiles_below_me])
     to_pickup = []
-    for item in agent.inventory.items_below_me:
+    for item in projectiles_below_me:
         if item.is_thrown_projectile() or (my_launcher is not None and item.is_fired_projectile(launcher=my_launcher)):
             to_pickup.append(item)
     return to_pickup
