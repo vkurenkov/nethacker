@@ -61,6 +61,7 @@ class Agent:
         self.last_bfs_step = None
         self.last_prayer_turn = None
         self._failed_dig_escape_positions = set()
+        self._recovering_from_teleport = False
         self._last_failed_food_purchase_turn = -float('inf')
         self._previous_glyphs = None
         self._last_turn = -1
@@ -1524,6 +1525,84 @@ class Agent:
                      and item.comment != 'EMPT' and item.uses != 'no charges'
                      and not (item.uses and item.uses.endswith(':0'))), None)
 
+    def _get_teleport_escape_scroll(self):
+        # hypothesis: teleport away from lethal fast or Elbereth-bypassing
+        # attackers, then recover before returning to combat.
+        if self.blstats.hitpoints >= max(8, self.blstats.max_hitpoints / 3):
+            return None
+        if self.blstats.prop_mask & (nh.BL_MASK_BLIND | nh.BL_MASK_CONF | nh.BL_MASK_HALLU):
+            return None
+        if self.character.prop.polymorph:
+            return None
+        if self.current_level().dungeon_number not in (Level.DUNGEONS_OF_DOOM, Level.GNOMISH_MINES):
+            return None
+        monsters = [monster for monster in self.get_visible_monsters()
+                    if max(abs(monster[1] - self.blstats.y), abs(monster[2] - self.blstats.x)) <= 5]
+        if not monsters:
+            return None
+        immune_threat = any(
+            ord(mon.mlet) in (MON.S_HUMAN, MON.S_ANGEL) or
+            mon.mname in ('minotaur', 'Death', 'Famine', 'Pestilence')
+            for _, _, _, mon, _ in monsters)
+        if not immune_threat and 'You are hit by' not in self.message:
+            if self.inventory.engraving_below_me.lower() == 'elbereth':
+                return None
+            # Fast melee can land several hits while an engraving is repaired.
+            fast_melee = any(getattr(mon, 'mmove', 0) > 12 and
+                             utils.adjacent((self.blstats.y, self.blstats.x), (y, x))
+                             for _, y, x, mon, _ in monsters)
+            if not fast_melee and self.can_engrave():
+                return None
+        return next((item for item in flatten_items(self.inventory.items)
+                     if item.category == nh.SCROLL_CLASS and item.is_unambiguous() and
+                     item.object.name == 'teleportation' and item.status != Item.CURSED and
+                     item.shop_status == Item.NOT_SHOP), None)
+
+    def _read_teleport_escape_scroll(self, scroll):
+        position = (self.blstats.dungeon_number, self.blstats.level_number,
+                    self.blstats.y, self.blstats.x)
+        level = self.current_level()
+        monsters = self.get_visible_monsters()
+        safe = (level.walkable & ~utils.isin(level.objects, G.TRAPS) &
+                ~self.monster_tracker.monster_mask & ~self.monster_tracker.peaceful_monster_mask &
+                ~utils.isin(self.glyphs, G.PETS, G.BOULDER))
+        positions = list(zip(*safe.nonzero()))
+        target = max(positions, key=lambda p: (
+            min((max(abs(p[0] - y), abs(p[1] - x)) for _, y, x, _, _ in monsters), default=0),
+            max(abs(p[0] - self.blstats.y), abs(p[1] - self.blstats.x)))) if positions else None
+
+        with self.atom_operation():
+            scroll = self.inventory.move_to_inventory(scroll)
+
+            def read_actions():
+                if 'What do you want to read?' not in self.single_message:
+                    return
+                yield self.inventory.items.get_letter(scroll)
+                if 'Do you wish to teleport?' in self.single_message:
+                    yield 'y'
+                if 'Where do you want to be teleported?' in self.single_message:
+                    if target is not None:
+                        y, x = target
+                        while self.cursor_pos[1] != x:
+                            yield 'l' if self.cursor_pos[1] < x else 'h'
+                        while self.cursor_pos[0] != y:
+                            yield 'j' if self.cursor_pos[0] < y else 'k'
+                        yield '.'
+                    else:
+                        yield A.Command.ESC
+                    # Do not let the generic handler process a consumed prompt.
+                    self.message = self.message.replace('Where do you want to be teleported?', '')
+                # A completed blessed-scroll question can remain on the tty.
+                # Clear it before the generic prompt handler sends another "y".
+                if (not self._observation['misc'].any() and
+                        b'[yn]' in bytes(self._observation['tty_chars'].reshape(-1))):
+                    yield A.Command.ESC
+
+            self.step(A.Command.READ, read_actions())
+            if position != (self.blstats.dungeon_number, self.blstats.level_number,
+                            self.blstats.y, self.blstats.x):
+                self._recovering_from_teleport = True
+
     @utils.debug_log('emergency_strategy')
     @Strategy.wrap
     def emergency_strategy(self):
@@ -1585,6 +1664,22 @@ class Agent:
                     elif 'Nothing happens.' in self.message:
                         self.inventory.call_item(wand, 'EMPT')
             return
+
+        scroll = self._get_teleport_escape_scroll()
+        if scroll is not None:
+            yield True
+            self._read_teleport_escape_scroll(scroll)
+            return
+
+        if self._recovering_from_teleport:
+            if self.blstats.hitpoints >= 0.9 * self.blstats.max_hitpoints:
+                self._recovering_from_teleport = False
+            elif (self.blstats.hunger_state < Hunger.HUNGRY and
+                  not any(max(abs(y - self.blstats.y), abs(x - self.blstats.x)) <= 7
+                          for _, y, x, _, _ in self.get_visible_monsters())):
+                yield True
+                self.search()
+                return
 
         # if self.inventory.engraving_below_me.lower() != 'elbereth' and self.can_engrave() and \
         #         (self.blstats.hitpoints < 1 / 5 * self.blstats.max_hitpoints or self.blstats.hitpoints < 5):
