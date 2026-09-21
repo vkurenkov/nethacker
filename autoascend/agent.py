@@ -885,7 +885,10 @@ class Agent:
             level = self.current_level()
             with self.atom_operation():
                 self.direction(dir)
-                assert self.current_level().key() != level.key(), self.message
+                # hypothesis: recover from refused stair moves by refreshing and
+                # replanning, rather than terminating an otherwise healthy run.
+                if self.current_level().key() == level.key():
+                    raise AgentPanic(f'Stair move did not change level: {self.message}')
                 level.stair_destination[expected_y, expected_x] = \
                     (self.current_level().key(), (self.blstats.y, self.blstats.x))
                 # TODO: one way portals (elemental and astral planes)
