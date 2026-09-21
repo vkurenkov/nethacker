@@ -267,8 +267,16 @@ class ExplorationLogic:
             # TODO: polymorphed into a handless creature, too heavy load to kick, using lockpicks
 
             yielded = False
+            level = self.agent.current_level()
+            # hypothesis: respect closed-shop warnings instead of kicking the
+            # locked door and provoking a much stronger shopkeeper.
+            closed_shop = 'closed for inventory' in (self.agent.inventory.engraving_below_me or '').lower()
             for py, px in self.agent.neighbors(self.agent.blstats.y, self.agent.blstats.x, diagonal=False):
-                if (self.agent.current_level().door_open_count[py, px] < door_open_count or kick_doors) and \
+                if closed_shop and self.agent.glyphs[py, px] in G.DOOR_CLOSED:
+                    level.closed_shop_doors[py, px] = True
+                if level.closed_shop_doors[py, px]:
+                    continue
+                if (level.door_open_count[py, px] < door_open_count or kick_doors) and \
                         self.agent.glyphs[py, px] in G.DOOR_CLOSED:
                     if not yielded:
                         yielded = True
@@ -296,7 +304,8 @@ class ExplorationLogic:
             level = self.agent.current_level()
 
             stone = ~level.seen & utils.isin(self.agent.glyphs, G.STONE)
-            doors = utils.isin(self.agent.glyphs, G.DOOR_CLOSED) & (level.door_open_count < door_open_count)
+            doors = (utils.isin(self.agent.glyphs, G.DOOR_CLOSED)
+                     & (level.door_open_count < door_open_count) & ~level.closed_shop_doors)
             if not stone.any() and not doors.any():
                 return stone
 
