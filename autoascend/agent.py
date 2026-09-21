@@ -48,6 +48,8 @@ class Agent:
         self.last_observation = None
 
         self._last_pet_seen = 0
+        self._starving_pet_until = -1
+        self._starving_pet_attacked = False
 
         self.inventory = Inventory(self)
         self.character = Character(self)
@@ -593,6 +595,18 @@ class Agent:
         if utils.isin(self.glyphs, G.SWALLOW).any():
             return
 
+        if 'is confused from hunger.' in self.message:
+            self._starving_pet_until = self.blstats.time + 300
+            self._starving_pet_attacked = False
+        pet_attack = re.search(r'\b(pony|horse|warhorse) (?:kicks|bites|hits)!', self.message)
+        if (pet_attack and self.blstats.time <= self._starving_pet_until and
+                self.blstats.hitpoints < 0.8 * self.blstats.max_hitpoints and not self.is_safe_to_pray(500)):
+            for y, x in zip(*utils.isin(self.glyphs, G.PETS).nonzero()):
+                if (MON.permonst(self.glyphs[y, x]).mname == pet_attack.group(1) and
+                        max(abs(y - self.blstats.y), abs(x - self.blstats.x)) <= 2):
+                    self._starving_pet_attacked = True
+                    break
+
         if utils.any_in(self.glyphs, G.PETS):
             self._last_pet_seen = self.blstats.time
 
@@ -1098,6 +1112,34 @@ class Agent:
                     ret.append((dis[y][x], y, x, MON.permonst(self.glyphs[y][x]), self.glyphs[y][x]))
         ret.sort()
         return ret
+
+    @Strategy.wrap
+    def avoid_starving_pet(self):
+        # hypothesis: retreat from an attacking, hunger-confused pet when hurt
+        # and unable to pray; its tame glyph otherwise bypasses ordinary combat.
+        if (not self._starving_pet_attacked or self.blstats.time > self._starving_pet_until or
+                self.get_visible_monsters()):
+            yield False
+        pets = list(zip(*utils.isin(self.glyphs, G.PETS).nonzero()))
+        if not pets:
+            yield False
+
+        def distance(y, x):
+            return min(max(abs(y - py), abs(x - px)) for py, px in pets)
+
+        current_distance = distance(self.blstats.y, self.blstats.x)
+        if current_distance > 2:
+            yield False
+        dis = self.bfs()
+        moves = [(distance(y, x), y, x)
+                 for y, x in self.neighbors(self.blstats.y, self.blstats.x, shuffle=False)
+                 if dis[y, x] == 1 and not self.monster_tracker.monster_mask[y, x]
+                 and self.glyphs[y, x] not in G.PETS]
+        if not moves or max(moves)[0] <= current_distance:
+            yield False
+        _, y, x = max(moves)
+        yield True
+        self.move(y, x)
 
     @utils.debug_log('fight2')
     @Strategy.wrap

@@ -638,6 +638,9 @@ class GlobalLogic:
                 self.agent.fight2(),
             ])
             .preempt(self.agent, [
+                self.agent.avoid_starving_pet(),
+            ])
+            .preempt(self.agent, [
                 self.agent.engulfed_fight(),
             ])
             .preempt(self.agent, [
