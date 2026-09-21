@@ -181,6 +181,21 @@ class GlobalLogic:
     @utils.debug_log('solving sokoban')
     @Strategy.wrap
     def solve_sokoban_strategy(self):
+        solver = self._solve_sokoban_strategy()
+        if not solver.check_condition():
+            yield False
+        yield True
+        try:
+            solver.run()
+        except AssertionError as error:
+            # hypothesis: abandon an unusable Sokoban plan through the existing
+            # fallback, preserving the run and continuing dungeon exploration.
+            self.agent.stats_logger.log_event('sokoban_dropped')
+            self.milestone = Milestone(int(self.milestone) + 1)
+            raise AgentPanic(f'Sokoban plan failed: {error}') from error
+
+    @Strategy.wrap
+    def _solve_sokoban_strategy(self):
         # TODO: refactor
         if not utils.isin(self.agent.current_level().objects, G.TRAPS).any():
             yield False
