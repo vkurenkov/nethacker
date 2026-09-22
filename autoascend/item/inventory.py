@@ -447,7 +447,8 @@ class Inventory:
                     # LOOK is necessary even when 'Things that are here' popup is present for some very rare cases
                     self.agent.step(A.Command.LOOK)
 
-                if 'Something is ' in self.agent.message and 'You read: "' in self.agent.message:
+                if (('Something is ' in self.agent.message or 'Some text has been ' in self.agent.message)
+                        and 'You read: "' in self.agent.message):
                     index = self.agent.message.index('You read: "') + len('You read: "')
                     assert '"' in self.agent.message[index:]
                     engraving = self.agent.message[index: index + self.agent.message[index:].index('"')]

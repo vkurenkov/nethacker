@@ -916,20 +916,45 @@ class Agent:
     def engrave(self, text):
         assert '\r' not in text
         ret = False
+        exhausted = False
+        wand = None
+        # hypothesis: at critical HP, use a durable, reliable Elbereth instead
+        # of risking dust-writing errors and erosion during recovery.
+        if (text.lower() == 'elbereth'
+                and self.blstats.hitpoints < max(10, self.blstats.max_hitpoints / 3)
+                and not self.blstats.prop_mask & (nh.BL_MASK_BLIND | nh.BL_MASK_CONF |
+                                                  nh.BL_MASK_STUN | nh.BL_MASK_HALLU)
+                and self.current_level().objects[self.blstats.y, self.blstats.x]
+                    in G.FLOOR | G.STAIR_UP | G.STAIR_DOWN | G.DOOR_OPENED):
+            wands = [item for item in self.inventory.items
+                     if item.category == nh.WAND_CLASS and item.is_unambiguous()
+                     and item.object.name in ('fire', 'digging')
+                     and item.status != Item.CURSED and item.shop_status == Item.NOT_SHOP
+                     and item.comment != 'EMPT' and item.uses != 'no charges'
+                     and not (item.uses and item.uses.endswith(':0'))]
+            wand = min(wands, key=lambda item: item.object.name != 'fire', default=None)
 
         def gen():
-            nonlocal ret
+            nonlocal ret, exhausted
             if 'What do you want to write with?' not in self.single_message:
                 self._forbidden_engrave_position = (self.blstats.y, self.blstats.x)
                 yield A.Command.ESC
                 return
-            yield '-'
+            yield self.inventory.items.get_letter(wand) if wand is not None else '-'
             if 'Do you want to add to the current engraving?' in self.single_message:
                 yield 'n'
             while self._observation['misc'][2]:
                 yield ' '
-            if 'What do you want to write in the dust here?' not in self.single_message:
-                self._forbidden_engrave_position = (self.blstats.y, self.blstats.x)
+            if wand is not None and 'The wand is too worn out to engrave.' in self.message:
+                exhausted = True
+                return
+            prompt = 'What do you want to write in the dust here?' in self.single_message
+            if wand is not None:
+                prompt |= bool(re.search(r'What do you want to (engrave in|burn into) the (floor|ground) here\?',
+                                         self.single_message))
+            if not prompt:
+                if wand is None:
+                    self._forbidden_engrave_position = (self.blstats.y, self.blstats.x)
                 yield A.Command.ESC
                 return
             yield from text
@@ -938,6 +963,8 @@ class Agent:
 
         with self.atom_operation():
             self.step(A.Command.ENGRAVE, gen())
+            if exhausted:
+                self.inventory.call_item(wand, 'EMPT')
             self.inventory.get_items_below_me()
 
         if ret and text.lower() == 'elbereth':
