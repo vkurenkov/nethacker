@@ -574,7 +574,12 @@ class Agent:
             assert mons.any()
 
             for mname in mnames:
-                glyph = MON.from_name(mname)
+                # hypothesis: nonstandard display names (such as player ranks)
+                # must not terminate a surviving run during corpse tracking.
+                try:
+                    glyph = MON.from_name(mname)
+                except AssertionError:
+                    continue
                 monster_id = glyph - nh.GLYPH_MON_OFF
                 corpse_glyph = MON.body_from_name(mname)
                 for y, x in zip(*utils.isin(mons, [glyph]).nonzero()):
