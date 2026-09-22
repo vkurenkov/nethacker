@@ -1,4 +1,5 @@
 from ..utils import adjacent
+from ..glyph import MON
 from . import utils
 from .monster_utils import WEAK_MONSTERS, ONLY_RANGED_SLOW_MONSTERS, consider_melee_only_ranged_if_hp_full, \
     imminent_death_on_melee, EXPLODING_MONSTERS, WEIRD_MONSTERS
@@ -81,6 +82,15 @@ def draw_monster_priority_positive(agent, monster, priority, walkable):
 
 def draw_monster_priority_negative(agent, monster, priority, walkable):
     _, y, x, mon, _ = monster
+
+    # hypothesis: retreat from living elves before HP becomes critical;
+    # Elbereth cannot stop their attacks, so waiting on it is not safe healing.
+    # Undead elves still fear Elbereth, and hallucinated identities are unreliable.
+    if (not agent.character.prop.hallu and ord(mon.mlet) == MON.S_HUMAN
+            and getattr(mon, 'mflags2', 0) & MON.M2_ELF
+            and agent.blstats.hitpoints < agent.blstats.max_hitpoints / 2):
+        _draw_around(priority, y, x, -40, radius=1)
+        _draw_ranged(priority, y, x, -40, walkable, radius=7)
 
     if imminent_death_on_melee(agent, monster) and not mon.mname in WEAK_MONSTERS \
             and not mon.mname in ONLY_RANGED_SLOW_MONSTERS:
