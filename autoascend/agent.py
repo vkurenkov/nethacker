@@ -49,6 +49,7 @@ class Agent:
 
         self._last_pet_seen = 0
         self._starving_pet_until = -1
+        self._blocked_escape = None
         self._starving_pet_attacked = False
 
         self.inventory = Inventory(self)
@@ -595,6 +596,10 @@ class Agent:
     def update_level(self):
         if utils.isin(self.glyphs, G.SWALLOW).any():
             return
+
+        if 'You cannot escape from ' in self.message:
+            self._blocked_escape = ((self.blstats.dungeon_number, self.blstats.level_number,
+                                     self.blstats.y, self.blstats.x), self.blstats.time)
 
         if 'is confused from hunger.' in self.message:
             self._starving_pet_until = self.blstats.time + 300

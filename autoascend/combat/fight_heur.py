@@ -363,6 +363,14 @@ def get_priorities(agent, recent_damage=0):
 
 def get_move_actions(agent, dis, move_priority_heatmap):
     """ Returns list of tuples (priority, ('move', dy, dx)) """
+    # hypothesis: after a monster prevents escape, give engraving or attacking
+    # a chance instead of repeatedly spending turns on refused movement.
+    if agent._blocked_escape is not None:
+        position, turn = agent._blocked_escape
+        current = (agent.blstats.dungeon_number, agent.blstats.level_number,
+                   agent.blstats.y, agent.blstats.x)
+        if current == position and agent.blstats.time <= turn + 1:
+            return []
     ret = []
     for dy, dx in [(-1, -1), (-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1)]:
         y, x = agent.blstats.y + dy, agent.blstats.x + dx
