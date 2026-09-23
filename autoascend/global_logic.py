@@ -515,7 +515,12 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                condition = lambda: self.agent.blstats.experience_level >= 8
+                # hypothesis: fully healed human rogues can leave dungeon level 1 one
+                # level earlier, avoiding prolonged respawn farming without harming orcs.
+                condition = lambda: self.agent.blstats.experience_level >= 8 or \
+                    (self.agent.character.race == Character.HUMAN and
+                     self.agent.blstats.experience_level >= 7 and
+                     self.agent.blstats.hitpoints == self.agent.blstats.max_hitpoints)
                 # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
                 #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
                 level = (Level.DUNGEONS_OF_DOOM, 1)
