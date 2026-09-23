@@ -233,11 +233,10 @@ def elbereth_action(agent, monsters):
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
         priority = -15 + 20 * adj_monsters_count * (1 - player_hp_ratio)
-        # hypothesis: use low-HP Elbereth protection against common melee
-        # threats, not just coyotes, to recover instead of fleeing until cornered.
+        # hypothesis: at low HP, force Elbereth against a nearby coyote instead
+        # of moving, so pursuit cannot turn into an unsafe melee.
         if agent.blstats.hitpoints <= 20 and any(
-                mon[3].mname not in ONLY_RANGED_SLOW_MONSTERS and
-                (mon[3].mname not in WEAK_MONSTERS or agent.blstats.hitpoints <= 8) and
+                mon[3].mname == 'coyote' and
                 adjacent((mon[1], mon[2]), (agent.blstats.y, agent.blstats.x))
                 for mon in monsters):
             priority = max(priority, 25)
