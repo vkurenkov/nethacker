@@ -15,6 +15,16 @@ from .utils import wielding_ranged_weapon, line_dis_from, inside
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
     ret = 1
+    # hypothesis: at low HP, retreat from any non-weak melee threat so common
+    # early-game monsters (rats, snakes, orcs, and zombies) cannot finish us
+    # before the existing emergency/healing strategies get a turn.
+    if agent.blstats.hitpoints <= 16 and mon.mname not in WEAK_MONSTERS:
+        ret -= 100
+    # hypothesis: an equipped weapon makes melee against petrifiers safe, so
+    # kill them when armed instead of fleeing until a cockatrice corners us.
+    if mon.mname in ('cockatrice', 'Medusa') and agent.inventory.items.gloves is None and \
+            agent.inventory.items.main_hand is None:
+        ret -= 100
     if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
         ret += 15
     if wielding_ranged_weapon(agent) and not is_monster_faster(agent, monster):
@@ -223,9 +233,14 @@ def elbereth_action(agent, monsters):
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
         priority = -15 + 20 * adj_monsters_count * (1 - player_hp_ratio)
-        # hypothesis: below one-third health, engraving against an adjacent threat prevents the next melee exchange from becoming fatal.
-        if 3 * agent.blstats.hitpoints <= agent.blstats.max_hitpoints:
-            priority = max(priority, 20)
+        # hypothesis: use low-HP Elbereth protection against common melee
+        # threats, not just coyotes, to recover instead of fleeing until cornered.
+        if agent.blstats.hitpoints <= 20 and any(
+                mon[3].mname not in ONLY_RANGED_SLOW_MONSTERS and
+                (mon[3].mname not in WEAK_MONSTERS or agent.blstats.hitpoints <= 8) and
+                adjacent((mon[1], mon[2]), (agent.blstats.y, agent.blstats.x))
+                for mon in monsters):
+            priority = max(priority, 25)
         return [(priority, ('elbereth',))]
     return []
 

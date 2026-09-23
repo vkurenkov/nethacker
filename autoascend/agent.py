@@ -1132,11 +1132,30 @@ class Agent:
             move_priority_heatmap, actions = combat.fight_heur.get_priorities(self)
             actions.extend(combat.fight_heur.get_move_actions(self, dis, move_priority_heatmap))
 
+            if self.inventory.items.gloves is None and self.inventory.items.main_hand is None and any(
+                mon[3].mname in ('cockatrice', 'Medusa') for mon in monsters):
+                # Escape until the petrifier is gone instead of attacking it or
+                # generating a corpse the exploration loop could handle bare-handed.
+                non_attack_actions = [a for a in actions if a[1][0] not in ('melee', 'ranged', 'zap')]
+                if non_attack_actions:
+                    actions = non_attack_actions
+
             if self.character.prop.polymorph:
                 actions = list(filter(lambda x: x[1][0] != 'ranged', actions))
 
             if allow_attack_all:
-                attack_actions = [a for a in actions if a[1][0] in ('melee', 'ranged', 'zap')]
+                attack_actions = []
+                for action in actions:
+                    if action[1][0] == 'melee':
+                        _, dy, dx = action[1]
+                        target_y = self.blstats.y + dy
+                        target_x = self.blstats.x + dx
+                        if self.glyphs[target_y, target_x] in G.MONS and \
+                                MON.permonst(self.glyphs[target_y, target_x]).mname in ('cockatrice', 'Medusa') and \
+                                self.inventory.items.gloves is None:
+                            continue
+                    if action[1][0] in ('melee', 'ranged', 'zap'):
+                        attack_actions.append(action)
                 if attack_actions:
                     actions = attack_actions
 
@@ -1434,7 +1453,8 @@ class Agent:
         if (
                 (self.is_safe_to_pray(500) and
                  (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
-                  * self.blstats.max_hitpoints or self.blstats.hitpoints < 6))
+                  * self.blstats.max_hitpoints
+                  or self.blstats.hitpoints < 6))
                 or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.FAINTING)
         ):
             yield True
