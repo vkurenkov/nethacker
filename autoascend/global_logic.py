@@ -515,9 +515,10 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                # hypothesis: leave entrance-level XP farming at level 6 to find
-                # fresh food and equipment before prolonged farming exhausts supplies.
-                condition = lambda: self.agent.blstats.experience_level >= 6
+                # hypothesis: leave entrance-level farming at XP 4, retaining
+                # early training while seeking fresh food and equipment before
+                # the much longer grind to XP 6 exhausts supplies.
+                condition = lambda: self.agent.blstats.experience_level >= 4
                 # hypothesis: when carried food is exhausted, leave the current
                 # level to find fresh food instead of starving while farming XP.
                 explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
