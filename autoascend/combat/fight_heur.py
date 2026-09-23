@@ -48,7 +48,9 @@ def melee_monster_priority(agent, monsters, monster):
 
 
 def ranged_priority(agent, dy, dx, monsters):
-    ret = 11
+    # hypothesis: favor Tourist ranged attacks over closing into melee, reducing
+    # incoming damage while preserving ammunition use for clearly safe shots.
+    ret = 16
 
     closest_mon_dis = float('inf')
     for monster in monsters:
