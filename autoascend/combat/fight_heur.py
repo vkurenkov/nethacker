@@ -15,10 +15,6 @@ from .utils import wielding_ranged_weapon, line_dis_from, inside
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
     ret = 1
-    # hypothesis: avoid trading melee blows with high damage threats while
-    # vulnerable, so both Tourist identities survive their dangerous encounters.
-    if agent.blstats.hitpoints <= 16 and is_dangerous_monster(monster):
-        return -20
     # hypothesis: at critical HP, stop trading melee blows with faster enemies
     # so movement or ranged options can break contact and avoid death.
     if agent.blstats.hitpoints <= 8 and is_monster_faster(agent, monster):
