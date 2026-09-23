@@ -178,7 +178,7 @@ class Item:
 
     def get_ac(self):
         assert self.is_armor()
-        return self.object.ac - (self.modifier if self.modifier is not None else 0)
+        return max(obj.ac for obj in self.objs) - (self.modifier if self.modifier is not None else 0)
 
     ######## WAND
 

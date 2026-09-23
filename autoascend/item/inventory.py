@@ -799,17 +799,26 @@ class Inventory:
         best_items = [None] * O.ARM_NUM
         best_ac = [None] * O.ARM_NUM
         for item in items:
-            if not item.is_armor() or not item.is_unambiguous():
+            if not item.is_armor():
+                continue
+
+            # hypothesis: equip unidentified magical cloaks when their worst
+            # possible AC improves our armor; all four identities are useful,
+            # so waiting for identification needlessly forfeits protection.
+            safe_cloak = all(obj.name in ('cloak of protection', 'cloak of invisibility',
+                                         'cloak of magic resistance', 'cloak of displacement')
+                             for obj in item.objs)
+            if not item.is_unambiguous() and not safe_cloak:
                 continue
 
             # TODO: consider other always allowed items than dragon hide
-            is_dragonscale_armor = item.object.metal == O.DRAGON_HIDE
+            is_dragonscale_armor = all(obj.metal == O.DRAGON_HIDE for obj in item.objs)
 
             allowed_statuses = [Item.UNCURSED, Item.BLESSED] + ([Item.UNKNOWN] if allow_unknown_status else [])
             if item.status not in allowed_statuses and not is_dragonscale_armor:
                 continue
 
-            slot = item.object.sub
+            slot = item.objs[0].sub
             ac = item.get_ac()
 
             if self.agent.character.role == Character.MONK and slot == O.ARM_SUIT:
