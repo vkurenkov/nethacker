@@ -15,9 +15,13 @@ def is_monster_faster(agent, monster):
 
 
 def imminent_death_on_melee(agent, monster):
+    # hypothesis: retreat before melee risk becomes lethal, scaling the cutoff
+    # to current max HP across both dangerous and ordinary threats.
+    hp = agent.blstats.hitpoints
+    retreat_threshold = max(8, agent.blstats.max_hitpoints * 0.65)
     if is_dangerous_monster(monster):
-        return agent.blstats.hitpoints <= 16
-    return agent.blstats.hitpoints <= 8
+        retreat_threshold = max(retreat_threshold, 16)
+    return hp <= retreat_threshold
 
 
 def is_dangerous_monster(monster):
