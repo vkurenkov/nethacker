@@ -44,6 +44,10 @@ def draw_monster_priority_positive(agent, monster, priority, walkable):
     # don't move into the monster
     priority[y, x] = float('nan')
 
+    if mon.mname in ('cockatrice', 'Medusa') and agent.inventory.items.gloves is None and \
+            agent.inventory.items.main_hand is None:
+        return
+
     if mon.mname in WEAK_MONSTERS:
         # weak monster - freely engage in melee
         _draw_around(priority, y, x, 2, radius=1, operation='max')
@@ -81,6 +85,12 @@ def draw_monster_priority_positive(agent, monster, priority, walkable):
 
 def draw_monster_priority_negative(agent, monster, priority, walkable):
     _, y, x, mon, _ = monster
+
+    if mon.mname in ('cockatrice', 'Medusa') and agent.inventory.items.gloves is None and \
+            agent.inventory.items.main_hand is None:
+        _draw_around(priority, y, x, -20, radius=1)
+        _draw_around(priority, y, x, -10, radius=2)
+        return
 
     if imminent_death_on_melee(agent, monster) and not mon.mname in WEAK_MONSTERS \
             and not mon.mname in ONLY_RANGED_SLOW_MONSTERS:
