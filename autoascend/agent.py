@@ -63,6 +63,7 @@ class Agent:
         self.last_prayer_turn = None
         self._failed_dig_escape_positions = set()
         self._recovering_from_teleport = False
+        self._recovering_from_hunger_prayer = False
         self._last_failed_food_purchase_turn = -float('inf')
         self._previous_glyphs = None
         self._last_turn = -1
@@ -764,8 +765,14 @@ class Agent:
         )
 
     def pray(self):
+        # hypothesis: a prayer that cures starvation can leave injuries uncured;
+        # retain ward protection while recovering critical HP after such a prayer.
+        recovering_from_hunger = (
+            self.blstats.hunger_state >= Hunger.FAINTING and
+            self.blstats.hitpoints < self.blstats.max_hitpoints)
         self.step(A.Command.PRAY)
         self.last_prayer_turn = self.blstats.time
+        self._recovering_from_hunger_prayer = recovering_from_hunger
         # TODO: return value
         return True
 
@@ -1714,6 +1721,20 @@ class Agent:
             elif (self.blstats.hunger_state < Hunger.HUNGRY and
                   not any(max(abs(y - self.blstats.y), abs(x - self.blstats.x)) <= 7
                           for _, y, x, _, _ in self.get_visible_monsters())):
+                yield True
+                self.search()
+                return
+
+        if self._recovering_from_hunger_prayer:
+            if (self.blstats.hitpoints >= self.blstats.max_hitpoints or
+                    (self.blstats.time - self.last_prayer_turn > 3 and
+                     self.blstats.hunger_state >= Hunger.HUNGRY)):
+                self._recovering_from_hunger_prayer = False
+            elif (self.blstats.hunger_state < Hunger.HUNGRY and
+                  self.blstats.hitpoints < self.blstats.max_hitpoints / 3 and
+                  self.inventory.engraving_below_me.lower() == 'elbereth' and
+                  not self.avoid_starving_pet().check_condition() and
+                  not self.get_visible_monsters()):
                 yield True
                 self.search()
                 return
