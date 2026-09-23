@@ -515,15 +515,15 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                # hypothesis: level-one human rogues that are weak and out of food
-                # should seek nutrition below instead of starving while XP farming.
+                # hypothesis: a foodless human rogue still far from level 2 is
+                # making too little progress to justify starving on dungeon level
+                # 1, and should seek nutrition below instead.
                 condition = lambda: self.agent.blstats.experience_level >= 8 or \
                     (self.agent.character.race == Character.HUMAN and
                      self.agent.blstats.experience_level == 1 and
+                     self.agent.blstats.experience_points < 15 and
                      self.agent.blstats.hunger_state >= Hunger.WEAK and
                      self.agent.inventory.items.total_nutrition() == 0)
-                # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
-                #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
                 level = (Level.DUNGEONS_OF_DOOM, 1)
 
             elif self.milestone == Milestone.FIND_SOKOBAN:
