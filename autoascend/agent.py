@@ -1404,6 +1404,9 @@ class Agent:
     @Strategy.wrap
     def emergency_strategy(self):
 
+        # hypothesis: trigger healing and prayer with more HP in reserve so
+        # recovery can prevent common early combat deaths for both identities.
+
         # if self.should_cast_extra_heal():
         #     yield True
         #     self.cast('extra healing', direction=(0, 0))
@@ -1417,7 +1420,7 @@ class Agent:
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']]
         if (
-                (self.blstats.hitpoints < 1 / 3 * self.blstats.max_hitpoints
+                (self.blstats.hitpoints < 1 / 2 * self.blstats.max_hitpoints
                  or self.blstats.hitpoints < 8) and items
         ):
             yield True
@@ -1433,7 +1436,7 @@ class Agent:
 
         if (
                 (self.is_safe_to_pray(500) and
-                 (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
+                 (self.blstats.hitpoints < 1 / (3 if self.blstats.experience_level < 6 else 4)
                   * self.blstats.max_hitpoints or self.blstats.hitpoints < 6))
                 or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.FAINTING)
         ):

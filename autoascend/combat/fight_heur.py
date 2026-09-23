@@ -7,8 +7,7 @@ from scipy import signal
 from ..glyph import G
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
-    ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full, \
-    imminent_death_on_melee
+    ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
 from .movement_priority import draw_monster_priority_positive, draw_monster_priority_negative
 from .utils import wielding_ranged_weapon, line_dis_from, inside
 
@@ -22,10 +21,6 @@ def melee_monster_priority(agent, monsters, monster):
         ret -= 6
     if mon.mname in EXPLODING_MONSTERS:
         ret -= 17
-    # hypothesis: when the movement heuristic identifies lethal melee risk,
-    # lower the melee action priority so the bot actually retreats instead.
-    if imminent_death_on_melee(agent, monster):
-        ret -= 30
     if 'were' in mon.mname:
         ret += 1
     # if not wielding_melee_weapon(agent):
