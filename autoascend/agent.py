@@ -1103,6 +1103,19 @@ class Agent:
         yielded = False
         wait_counter = 0
         while 1:
+            # hypothesis: use carried healing during a fight before incoming
+            # attacks can consume the last HP for either Tourist identity.
+            if self.blstats.hitpoints < self.blstats.max_hitpoints / 2 or self.blstats.hitpoints < 8:
+                healing_items = [item for item in flatten_items(self.inventory.items)
+                                 if item.is_unambiguous() and item.category == nh.POTION_CLASS
+                                 and item.object.name in ['healing', 'extra healing', 'full healing']]
+                if healing_items:
+                    if not yielded:
+                        yielded = True
+                        yield True
+                    self.inventory.quaff(healing_items[0])
+                    continue
+
             monsters = self.get_visible_monsters()
             allow_attack_all = self._last_turn - self._allow_attack_all_turn < 3
             only_ranged_slow_monsters = all([monster[3].mname in combat.monster_utils.ONLY_RANGED_SLOW_MONSTERS
