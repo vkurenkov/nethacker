@@ -1458,18 +1458,15 @@ class Agent:
             self.pray()
             return
 
-        # hypothesis: when prayer and healing are unavailable, use Elbereth at
-        # critical HP to buy safer turns against ordinary approaching monsters.
-        if (self.inventory.engraving_below_me.lower() != 'elbereth' and self.can_engrave()
-                and (self.blstats.hitpoints < self.blstats.max_hitpoints / 5
-                     or self.blstats.hitpoints < 5)):
-            yield True
-            self.engrave('Elbereth')
-            for _ in range(8):
-                if self.inventory.engraving_below_me.lower() != 'elbereth':
-                    break
-                self.direction('.')
-            return
+        # if self.inventory.engraving_below_me.lower() != 'elbereth' and self.can_engrave() and \
+        #         (self.blstats.hitpoints < 1 / 5 * self.blstats.max_hitpoints or self.blstats.hitpoints < 5):
+        #     yield True
+        #     self.engrave('Elbereth')
+        #     for _ in range(8):
+        #         if self.inventory.engraving_below_me.lower() != 'elbereth':
+        #             break
+        #         self.direction('.')
+        #     return
 
         yield False
 

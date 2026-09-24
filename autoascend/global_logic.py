@@ -69,14 +69,6 @@ class ItemPriority(ItemPriorityBase):
             if item is not None:
                 add_item(item)
 
-        # hypothesis: when carrying less than one ration of nutrition, reserve
-        # weight for nearby food before adding secondary armor and ranged gear.
-        if self.agent.inventory.items.total_nutrition() < 800:
-            for item in sorted(filter(lambda i: i.is_food() and not i.is_corpse(), items),
-                               key=lambda x: -x.nutrition_per_weight()):
-                add_item(item)
-
-        for allow_unknown_status in [False, True]:
             for item in self.agent.inventory.get_best_armorset(items=forced_items + items,
                                                                allow_unknown_status=allow_unknown_status):
                 if item is not None:
