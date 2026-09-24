@@ -228,9 +228,9 @@ def elbereth_action(agent, monsters):
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
-        # hypothesis: prioritize emergency Elbereth over attacking when an adjacent threat
-        # is present at low HP, preventing early melee deaths across both Tourist genders.
-        return [(25 + 30 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
+        # hypothesis: make emergency Elbereth engraving competitive with attacks
+        # at critical health so the hero can survive multi-turn melee pressure.
+        return [(5 + 20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
     return []
 
 
