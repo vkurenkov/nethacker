@@ -1117,16 +1117,6 @@ class Agent:
                     self.inventory.quaff(healing_items[0])
                     continue
 
-            # hypothesis: use an available emergency prayer at half HP during
-            # combat, before the global emergency strategy can run too late.
-            if (self.is_safe_to_pray(500) and
-                    self.blstats.hitpoints < self.blstats.max_hitpoints / 2):
-                if not yielded:
-                    yielded = True
-                    yield True
-                self.pray()
-                continue
-
             monsters = self.get_visible_monsters()
             allow_attack_all = self._last_turn - self._allow_attack_all_turn < 3
             only_ranged_slow_monsters = all([monster[3].mname in combat.monster_utils.ONLY_RANGED_SLOW_MONSTERS
