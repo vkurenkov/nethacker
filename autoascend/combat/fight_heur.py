@@ -15,10 +15,9 @@ from .utils import wielding_ranged_weapon, line_dis_from, inside
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
     ret = 1
-    # hypothesis: stop trading melee blows with faster enemies below one-third HP,
-    # giving ranged attacks or movement a chance to prevent common pursuit deaths.
-    if (agent.blstats.hitpoints <= max(8, agent.blstats.max_hitpoints / 3)
-            and is_monster_faster(agent, monster)):
+    # hypothesis: at critical HP, stop trading melee blows with faster enemies
+    # so movement or ranged options can break contact and avoid death.
+    if agent.blstats.hitpoints <= 8 and is_monster_faster(agent, monster):
         return -20
     if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
         ret += 15
