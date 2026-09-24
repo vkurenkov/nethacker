@@ -27,7 +27,9 @@ def is_dangerous_monster(monster):
     # 'mumak' in mon.mname or 'orc' in mon.mname or 'rothe' in mon.mname \
     # or 'were' in mon.mname or 'unicorn' in mon.mname or 'elf' in mon.mname or 'leocrotta' in mon.mname \
     # or 'mimic' in mon.mname
-    return is_pet or mon.mname in INSECTS
+    # hypothesis: treat monsters with level 3+ as dangerous so the existing
+    # early retreat and emergency defense logic accounts for real attack power.
+    return is_pet or mon.mname in INSECTS or mon.mlevel >= 3
 
 
 def consider_melee_only_ranged_if_hp_full(agent, monster):

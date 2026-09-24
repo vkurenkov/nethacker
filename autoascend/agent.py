@@ -1103,9 +1103,10 @@ class Agent:
         yielded = False
         wait_counter = 0
         while 1:
-            # hypothesis: heal as soon as combat drops HP below three-quarters,
-            # preventing early low-max-HP characters from reaching lethal health.
-            if self.blstats.hitpoints < 3 * self.blstats.max_hitpoints / 4:
+            # hypothesis: heal at three-quarters HP during combat so early recovery
+            # prevents the low-health melee situations that kill both Tourist identities.
+            if (self.blstats.hitpoints < 3 * self.blstats.max_hitpoints / 4
+                    and self.blstats.max_hitpoints - self.blstats.hitpoints >= 8):
                 healing_items = [item for item in flatten_items(self.inventory.items)
                                  if item.is_unambiguous() and item.category == nh.POTION_CLASS
                                  and item.object.name in ['healing', 'extra healing', 'full healing']]
