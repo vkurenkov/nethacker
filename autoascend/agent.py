@@ -1103,10 +1103,12 @@ class Agent:
         yielded = False
         wait_counter = 0
         while 1:
-            # hypothesis: heal at three-quarters HP during combat so early recovery
-            # prevents the low-health melee situations that kill both Tourist identities.
-            if (self.blstats.hitpoints < 3 * self.blstats.max_hitpoints / 4
-                    and self.blstats.max_hitpoints - self.blstats.hitpoints >= 8):
+            # hypothesis: use healing potions at critical HP when they can restore
+            # at least four HP, preventing early deaths without wasting a turn.
+            if ((self.blstats.hitpoints <= 5
+                 and self.blstats.max_hitpoints - self.blstats.hitpoints >= 4) or
+                    (self.blstats.hitpoints < 3 * self.blstats.max_hitpoints / 4
+                     and self.blstats.max_hitpoints - self.blstats.hitpoints >= 8)):
                 healing_items = [item for item in flatten_items(self.inventory.items)
                                  if item.is_unambiguous() and item.category == nh.POTION_CLASS
                                  and item.object.name in ['healing', 'extra healing', 'full healing']]
@@ -1458,18 +1460,15 @@ class Agent:
             self.pray()
             return
 
-        # hypothesis: when prayer and healing are unavailable, use Elbereth at
-        # critical HP to buy safer turns against ordinary approaching monsters.
-        if (self.inventory.engraving_below_me.lower() != 'elbereth' and self.can_engrave()
-                and (self.blstats.hitpoints < self.blstats.max_hitpoints / 5
-                     or self.blstats.hitpoints < 5)):
-            yield True
-            self.engrave('Elbereth')
-            for _ in range(8):
-                if self.inventory.engraving_below_me.lower() != 'elbereth':
-                    break
-                self.direction('.')
-            return
+        # if self.inventory.engraving_below_me.lower() != 'elbereth' and self.can_engrave() and \
+        #         (self.blstats.hitpoints < 1 / 5 * self.blstats.max_hitpoints or self.blstats.hitpoints < 5):
+        #     yield True
+        #     self.engrave('Elbereth')
+        #     for _ in range(8):
+        #         if self.inventory.engraving_below_me.lower() != 'elbereth':
+        #             break
+        #         self.direction('.')
+        #     return
 
         yield False
 
