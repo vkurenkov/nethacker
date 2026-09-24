@@ -7,8 +7,7 @@ from scipy import signal
 from ..glyph import G
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
-    ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full, \
-    imminent_death_on_melee
+    ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
 from .movement_priority import draw_monster_priority_positive, draw_monster_priority_negative
 from .utils import wielding_ranged_weapon, line_dis_from, inside
 
@@ -16,9 +15,9 @@ from .utils import wielding_ranged_weapon, line_dis_from, inside
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
     ret = 1
-    # hypothesis: when the shared danger estimate says a melee exchange risks
-    # imminent death, favor escape and ranged options over another melee turn.
-    if imminent_death_on_melee(agent, monster):
+    # hypothesis: at critical HP, stop trading melee blows with faster enemies
+    # so movement or ranged options can break contact and avoid death.
+    if agent.blstats.hitpoints <= 8 and is_monster_faster(agent, monster):
         return -20
     if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
         ret += 15
