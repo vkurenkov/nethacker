@@ -219,7 +219,7 @@ def elbereth_action(agent, monsters):
         multiplier = np.clip(20 / agent.blstats.hitpoints, 1.0, 1.5)
         if is_monster_faster(agent, monster):
             multiplier *= 2
-        if mon.mname in WEAK_MONSTERS:
+        if mon in WEAK_MONSTERS:
             adj_monsters_count += 0.1 * multiplier
             continue
         adj_monsters_count += 1 * multiplier
@@ -228,8 +228,8 @@ def elbereth_action(agent, monsters):
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
-        # hypothesis: reserve emergency Elbereth for meaningful melee threats,
-        # avoiding lost turns against only weak adjacent monsters.
+        # hypothesis: make emergency Elbereth engraving competitive with attacks
+        # at critical health so the hero can survive multi-turn melee pressure.
         return [(5 + 20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
     return []
 
