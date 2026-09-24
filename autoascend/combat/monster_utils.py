@@ -15,11 +15,9 @@ def is_monster_faster(agent, monster):
 
 
 def imminent_death_on_melee(agent, monster):
-    # hypothesis: disengage before low-health melee trades across monster types;
-    # scale the danger point with the Tourist's growing HP so later-level hits
-    # do not become survivable only after the old fixed cutoff is crossed.
-    return agent.blstats.hitpoints <= max(8, agent.blstats.max_hitpoints / 3,
-                                          16 if is_dangerous_monster(monster) else 0)
+    if is_dangerous_monster(monster):
+        return agent.blstats.hitpoints <= 16
+    return agent.blstats.hitpoints <= 8
 
 
 def is_dangerous_monster(monster):
