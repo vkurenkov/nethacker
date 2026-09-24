@@ -1117,6 +1117,17 @@ class Agent:
                     self.inventory.quaff(healing_items[0])
                     continue
 
+            # hypothesis: run the emergency prayer policy during combat,
+            # where fight2 otherwise preempts the global emergency strategy.
+            if (self.is_safe_to_pray(500) and
+                    (self.blstats.hitpoints < 1 / (3 if self.blstats.experience_level < 6 else 4)
+                     * self.blstats.max_hitpoints or self.blstats.hitpoints < 6)):
+                if not yielded:
+                    yielded = True
+                    yield True
+                self.pray()
+                continue
+
             monsters = self.get_visible_monsters()
             allow_attack_all = self._last_turn - self._allow_attack_all_turn < 3
             only_ranged_slow_monsters = all([monster[3].mname in combat.monster_utils.ONLY_RANGED_SLOW_MONSTERS
