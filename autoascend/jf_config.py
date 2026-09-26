@@ -34,6 +34,10 @@ SKIP_SOKOBAN = False
 # heal, and a failure if the timeout isn't 0), and allow the first prayer from turn 100 (the timeout
 # starts at 300; major trouble needs <= 200)
 EXACT_PRAYER = False
+# minimum turns since the last prayer for a hunger prayer while Fainting (DT6A: 400). Most first prayer
+# failures were Fainting prayers 900-1100 turns after the last one (rnz(350) timeout: ~6% fail there,
+# ~2% past 1100); a longer gap means fainting longer instead
+FAINT_PRAYER_GAP = 1000
 
 _raw = os.environ.get('JF_CFG')
 if _raw:

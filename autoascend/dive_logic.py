@@ -110,6 +110,12 @@ DIG_STAIRS_RADIUS = 8
 DIG_FIRST = True
 DIG_FIRST_RADIUS = 2
 DIG_FIRST_MIN_HP = 0.35
+# Elbereth before each dig step when hostiles are in view: a monster that respects it neither attacks
+# nor, on first sight, interrupts the dig (monmove.c disturb() checks onscary). Digging the pit wipes it
+# (dig.c del_engr_at), so it is engraved again from inside the pit (can_reach_floor allows it there).
+# The early dig-dive deaths are crowd landings: ogre lord + owlbear, titan + warhorse, soldier ants...
+ELBERETH_DIG = False
+ELBERETH_DIG_RADIUS = 6
 # Resting to 95% on a deep level lets its monsters come to us (an s7 dig-dive rested for 150 turns on
 # Dlvl 15 until a leocrotta took it to 2 HP): with a digging tool, rest only below this.
 DIG_REST_BELOW = 0.6
@@ -1101,8 +1107,11 @@ class DiveLogic:
     def _diggable_spot(self, py, px, max_wet=0):
         agent = self.agent
         level = agent.current_level()
-        if level.objects[py, px] not in PLAIN_FLOOR or level.shop[py, px] or level.shop_interior[py, px] or \
-                (level.key(), (py, px)) in self._bad_dig_spots:
+        # a square always covered by objects (a leprechaun hall is gold wall to wall) never shows its
+        # floor: an s12 digger found no 'floor' there and explored the hall until it starved
+        terrain = level.objects[py, px]
+        if not (terrain in PLAIN_FLOOR or (terrain == -1 and level.walkable[py, px])) or \
+                level.shop[py, px] or level.shop_interior[py, px] or (level.key(), (py, px)) in self._bad_dig_spots:
             return False
         # a hole next to water or lava fills with it (dig.c fillholetyp: n moat squares around fill it
         # with probability n/(n+1)); only islands with no dry square (Medusa variants) accept the risk
@@ -1127,7 +1136,8 @@ class DiveLogic:
             if kind == 'stairs' and d <= DIG_STAIRS_RADIUS:
                 return False
         y, x = agent.blstats.y, agent.blstats.x
-        floor = [p for p in zip(*utils.isin(level.objects, PLAIN_FLOOR).nonzero()) if dis[p] >= 0]
+        candidates = utils.isin(level.objects, PLAIN_FLOOR) | ((level.objects == -1) & level.walkable)
+        floor = [p for p in zip(*candidates.nonzero()) if dis[p] >= 0]
         max_wet = 0
         if not any(self._diggable_spot(*p) for p in floor):
             # all reachable floor borders water: take the square with the fewest wet neighbours
@@ -1157,10 +1167,28 @@ class DiveLogic:
             self.undiggable.add(key)
         return True
 
+    def _elbereth_before_digging(self):
+        agent = self.agent
+        if not ELBERETH_DIG or agent.current_level().dungeon_number == GEHENNOM or \
+                agent.character.prop.blind or agent.character.prop.polymorph:
+            return False
+        if (agent.inventory.engraving_below_me or '').lower() == 'elbereth' or not agent.can_engrave():
+            return False
+        bl = agent.blstats
+        near = [m for m in agent.get_visible_monsters()
+                if max(abs(m[1] - bl.y), abs(m[2] - bl.x)) <= ELBERETH_DIG_RADIUS]
+        if not near or any(self._ignores_elbereth(m[3]) for m in near):
+            return False
+        agent.log(f'DIVE Elbereth before digging: {[m[3].mname for m in near]}')
+        agent.engrave('Elbereth')
+        return True
+
     def dig_with_tool(self, tool):
         agent = self.agent
         key = agent.current_level().key()
         spot = (agent.blstats.y, agent.blstats.x)
+        if self._elbereth_before_digging():
+            return
         shield = agent.inventory.items.off_hand
         if tool.object == O.from_name('dwarvish mattock') and shield is not None:
             # a mattock needs both hands; a digger falls through the floor anyway, so leave the shield
@@ -1190,10 +1218,12 @@ class DiveLogic:
             # can't swap weapons (welded), stuck in a web, ...: try again later
             agent.log(f'DIVE could not dig: {msg!r}')
             self._dig_blocked_until = agent.blstats.time + 100
-        elif "isn't enough room to dig" in msg or 'hole fills with' in msg:
-            self._bad_dig_spots.add((key, spot))   # a flooded hole: we crawled out elsewhere
+        elif "isn't enough room to dig" in msg or 'hole fills with' in msg or \
+                ('too hard to' in msg and 'here is too hard to dig' not in msg):
+            # a flooded hole (we crawled out elsewhere), a boulder, or stairs/altar/throne under objects
+            self._bad_dig_spots.add((key, spot))
             self._dig_tries[key] = tries - 1
-        elif 'too hard to dig' in msg or 'too hard to' in msg or tries >= DIG_MAX_TRIES:
+        elif 'here is too hard to dig' in msg or tries >= DIG_MAX_TRIES:
             agent.log(f'DIVE floor here cannot be dug through ({msg!r})')
             self.undiggable.add(key)
 

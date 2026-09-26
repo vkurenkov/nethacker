@@ -801,14 +801,17 @@ class Agent:
             self.stats_logger.log_event('container_untrap_fail')
             return self.message
 
-    def is_safe_to_pray(self, limit=500):
+    def is_safe_to_pray(self, limit=500, certain_death=False):
+        # certain_death (stoning, sliming, ...): a prayer that may fail beats dying, so the holds below
+        # don't apply (an s10 dive was petrified during its dwarf-hunt hold; half the time the kill
+        # hadn't cost any Luck and the prayer would have worked)
         # the dive's dwarf hunt: a peaceful kill may cost Luck -1, and prayers fail while Luck < 0
-        if self.blstats.time < self.prayer_hold_until:
+        if not certain_death and self.blstats.time < self.prayer_hold_until:
             return False
         # after a failed prayer the god stays angry (pray.c: a too-soon prayer sets ugangr, Luck -3):
         # 45 of 46 prayers made within 500 turns of a failure failed again, some summoning a minion
         # ('Thou durst call upon me? Then die, mortal!'); half of those 2000+ turns later worked
-        if self.prayer_failed and self.last_prayer_turn is not None and \
+        if not certain_death and self.prayer_failed and self.last_prayer_turn is not None and \
                 self.blstats.time - self.last_prayer_turn < self.PRAYER_FAILURE_WAIT:
             return False
         return (
@@ -1584,7 +1587,7 @@ class Agent:
                     self.log('EMERGENCY stoning: eating a lizard corpse')
                     self.inventory.eat(lizards[0])
                     return
-            if self.current_level().dungeon_number != 1 and self.is_safe_to_pray(100):
+            if self.current_level().dungeon_number != 1 and self.is_safe_to_pray(100, certain_death=True):
                 yield True
                 self.log(f'EMERGENCY deadly status {deadly:#x}: praying')
                 self.pray()
@@ -1616,7 +1619,7 @@ class Agent:
                                                 self._monk_meat_meals == 0 else 8))
         if (
                 (self.is_safe_to_pray(500) and low_hp)
-                or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.FAINTING)
+                or (self.is_safe_to_pray(jf_config.FAINT_PRAYER_GAP) and self.blstats.hunger_state >= Hunger.FAINTING)
                 or (not self.prayer_failed and self.blstats.hunger_state >= Hunger.WEAK and
                     self.is_safe_to_pray(self._hunger_prayer_gap()) and not self._eat_before_praying())
         ):
