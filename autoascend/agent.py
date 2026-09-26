@@ -61,6 +61,7 @@ class Agent:
         self.last_prayer_turn = None
         self.prayer_hold_until = -1
         self._fainting_since = None   # turn Fainting was first seen (jf_config.STARVE_CLOCK)
+        self._faint_measure = None    # (turn, uhunger estimate) from the last faint's length
         self._last_resort_stairs_turn = -10 ** 9
         self.prayer_failed = False
         self._monk_meat_meals = 0
@@ -429,6 +430,14 @@ class Agent:
             self.step(A.TextCharacters.SPACE)
             return
 
+        # an unanswered naming prompt ('Your orange potion boils and explodes!  Call an orange potion:')
+        # isn't always flagged as text entry: the bot's keys went into it ('lll...', ':/M', '#te') until a
+        # potion type was called '#te', the item parser choked and the game stalled to the timeout
+        if re.search(r'Call an? [^:]*:\s*$', self.single_message) and self._text_prompt_escapes < 5:
+            self._text_prompt_escapes += 1
+            self.step(A.Command.ESC)
+            return
+
         if observation['misc'][1] and self._text_prompt_escapes < 5:  # entering text
             if "You may wish for an object." in self.message:
                 # TODO: wishing strategy
@@ -688,14 +697,13 @@ class Agent:
         level.walkable[mask] = False
 
         # water and lava are never walkable once seen (a dive on Medusa's level kept walking into the
-        # water: a monster or item glyph first shown there had made the square 'walkable')
-        dive = getattr(self.global_logic, 'dive', None)
-        if dive is not None and dive.diving:
-            mask = utils.isin(self.glyphs, self._wet_glyphs)
-            if mask.any():
-                level.seen[mask] = True
-                level.objects[mask] = self.glyphs[mask]
-                level.walkable[mask] = False
+        # water: a monster or item glyph first shown there had made the square 'walkable'; a jf10 grind
+        # fell into a Dlvl 1 pool 30 times in 500 turns, diluting its potions and fading its scrolls)
+        mask = utils.isin(self.glyphs, self._wet_glyphs)
+        if mask.any():
+            level.seen[mask] = True
+            level.objects[mask] = self.glyphs[mask]
+            level.walkable[mask] = False
 
         self._update_level_items()
         self._update_level_shops()
@@ -842,7 +850,9 @@ class Agent:
 
     # prayer timeout is rnz(350) after a successful prayer and hunger is fixed only if it is below 200,
     # so a hunger prayer fails in ~7% of cases after 900 turns but only in ~2% after 1200 turns
-    SAFE_HUNGER_PRAYER_GAP = 1200
+    @property
+    def SAFE_HUNGER_PRAYER_GAP(self):
+        return jf_config.WEAK_PRAYER_GAP
     PRAYER_FAILURE_WAIT = 2000
     PRAYER_SUCCESS_MESSAGES = ('is well-pleased', 'is pleased.', 'is satisfied', 'hopeful feeling',
                                'You feel much better', 'stomach feels content')
@@ -869,13 +879,27 @@ class Agent:
                  any(m[0] <= 3 or (m[0] <= 5 and dive._ignores_elbereth(m[3])) for m in self.get_visible_monsters())):
             return True
         since = self._fainting_since if self._fainting_since is not None else bl.time
-        deadline = since + 100 + 10 * bl.constitution
-        if bl.time >= deadline - jf_config.STARVE_MARGIN and not self.prayer_failed:
+        death_line = -(100 + 10 * bl.constitution)
+        est = self.uhunger_estimate()
+        if est is not None:
+            near = est <= death_line + jf_config.FAINT_ESTIMATE_MARGIN
+        else:  # no faint measured yet this spell: the worst case, 1 nutrition per turn from 0
+            near = bl.time >= since + (-death_line) - jf_config.STARVE_MARGIN
+        if near and not self.prayer_failed:
             # starving for certain otherwise: a prayer that may fail is the only way out. Once, though:
             # after a failure the god is angry and more prayers only bring his wrath (a clock-jf6 game
             # prayed at gaps of 534, 4, 22, 2 turns and was 'killed by the wrath of Tyr')
             return self.is_safe_to_pray(100, certain_death=True)
         return False
+
+    def uhunger_estimate(self):
+        """From the last measured faint (eat.c: a faint lasts 10 - uhunger/10 moves), decayed by one per
+        turn since (the worst case). None if no faint was measured during this Fainting spell."""
+        m = self._faint_measure
+        if m is None or self._fainting_since is None or m[0] < self._fainting_since:
+            return None
+        turn, est = m
+        return est - (self.blstats.time - turn)
 
     def _critically_low_hp(self):
         """pray.c critically_low_hp(): the only HP level at which prayer fixes anything. DT6A's
@@ -1303,8 +1327,9 @@ class Agent:
             # hallucinating, every monster looks hostile: in the Mines (peaceful to a dwarf; Minetown's Watch)
             # the bot attacked peacefuls and was arrested (~half of 13 angry-Watch games after a yellow light).
             # Only fight back when something is actually hurting us; otherwise wait it out.
+            # (everywhere, not only the Mines: a hallucinating XL9 angered a peaceful on the Oracle's level,
+            # then hit the Oracle and died to her passive magic missiles)
             if monsters and self.character.prop.hallu and \
-                    self.current_level().dungeon_number == Level.GNOMISH_MINES and \
                     (not self._hurt_recently() or
                      self.current_level().key() == self.global_logic.minetown_level):
                 # in Minetown not even when hurt: a hallucinating XL10 hit a peaceful there, killed four

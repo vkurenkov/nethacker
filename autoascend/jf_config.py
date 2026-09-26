@@ -12,7 +12,7 @@ import os
 # EARLY: prayer at pray.c's critically_low_hp instead of 'HP < 12', eat carried food before a
 #   hunger prayer below XL 5 -- these reshuffle games from the first prayer on.
 EARLY_FIXES = False
-LATE_FIXES = False
+LATE_FIXES = True
 # the rarest-hazard subset of LATE_FIXES (gas spore next to the pet, cockatrice-family corpse
 # squares, spotted/ochre jelly and gelatinous cube melee): these first fire close to the deaths
 # they prevent, so they barely perturb the elite's public trajectories
@@ -54,8 +54,14 @@ FAINT_SHELTER = True
 STARVE_CLOCK = True
 # give up looking for the Mines entrance after this many turns and go on to Sokoban (0: never)
 MINES_SEARCH_TURNS = 3500
-FAINT_PRAYER_GAP_LONG = 1200
+FAINT_PRAYER_GAP_LONG = 1400
 STARVE_MARGIN = 60
+# Weak/Fainting hunger prayers wait for a 1400-turn gap: measured over ~2600 prayers, 900-1399-turn
+# gaps failed 3.5-5.4% of the time, 1400-1799 only 1.1% and 1800+ 0.6%. Waiting is survivable because a
+# faint lasts 10 - uhunger/10 moves: the observed faint length tells how close starvation
+# (uhunger < -(100 + 10 * Con)) really is, and deep Fainting burns only ~0.2 nutrition per turn.
+WEAK_PRAYER_GAP = 1400
+FAINT_ESTIMATE_MARGIN = 90
 
 _raw = os.environ.get('JF_CFG')
 if _raw:

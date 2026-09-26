@@ -48,6 +48,8 @@ class Inventory:
 
         self.skip_engrave_counter = 0
         self.empty_wands = set()  # inventory texts of wands that answered "Nothing happens"
+        self.multi_container_squares = set()  # (dungeon, level, y, x) where #loot asks 'Loot which containers?'
+        self.unreachable_items_until = {}     # (dungeon, level, y, x) -> turn: items at a pit bottom out of reach
 
     def is_known_empty(self, item):
         return item.text in self.empty_wands
@@ -223,6 +225,13 @@ class Inventory:
                 yield ' '
             assert 'You have no free hand.' not in self.agent.single_message, 'TODO: handle it'
             assert 'Do what with ' in self.agent.single_popup[0]
+            if items_to_take and any(' is empty' in line for line in self.agent.single_popup[:1] +
+                                     [self.agent.single_message]):
+                # our record of its contents is stale (the menu then has no 'take out' entry and the
+                # prompt loop asserted ~275 times in one run)
+                self.item_manager.container_contents.pop(container.container_id, None)
+                yield A.Command.ESC
+                raise AgentPanic('container is empty')
             if items_to_put and items_to_take:
                 yield 'r'
             elif items_to_put and not items_to_take:
@@ -263,7 +272,7 @@ class Inventory:
             elif container in self.items_below_me:
                 self.agent.step(A.Command.LOOT)
                 while True:
-                    assert 'Loot which containers?' not in self.agent.popup, self.agent.popup
+                    self._escape_multi_container_menu()
                     assert 'Loot in what direction?' not in self.agent.message
                     if "You don't find anything here to loot." in self.agent.message:
                         raise AgentPanic('no container to loot')
@@ -286,6 +295,17 @@ class Inventory:
         for item in chain(self.items.all_items, self.items_below_me):
             if item.is_container() and item.container_id == container.container_id:
                 self.check_container_content(item)
+
+    def _here(self):
+        return (*self.agent.current_level().key(), self.agent.blstats.y, self.agent.blstats.x)
+
+    def _escape_multi_container_menu(self):
+        """With several containers on the square #loot shows a 'Loot which containers?' menu that the
+        prompt loop doesn't handle (one game hit it ~2300 times, 100k wasted steps): leave it alone."""
+        if 'Loot which containers?' in self.agent.popup:
+            self.multi_container_squares.add(self._here())
+            self.agent.step(A.Command.ESC)
+            raise AgentPanic('several containers here')
 
     def check_container_content(self, item):
         assert item.is_possible_container() or item.is_container()
@@ -379,7 +399,7 @@ class Inventory:
                 while True:
                     if "You don't find anything here to loot." in self.agent.message:
                         raise AgentPanic('no container below me')
-                    assert 'Loot which containers?' not in self.agent.popup, self.agent.popup
+                    self._escape_multi_container_menu()
                     assert 'There is ' in self.agent.message and ', loot it?' in self.agent.message, self.agent.message
                     r = re.findall(r'There is ([a-zA-z0-9# ]+) here\, loot it\? \[ynq\] \(q\)', self.agent.message)
                     assert len(r) == 1, self.agent.message
@@ -563,6 +583,11 @@ class Inventory:
             while re.search('You have [a-z ]+ lifting ', self.agent.message) and \
                     'Continue?' in self.agent.message:
                 self.agent.type_text('y')
+            if 'You cannot reach the bottom of the pit' in self.agent.message:
+                # standing at a pit's edge: its items are out of reach until we are in it; the gatherer
+                # retried without the clock moving until the 'turn inactivity' guard fired (54 times)
+                self.unreachable_items_until[self._here()] = self.agent.blstats.time + 300
+                raise AgentPanic('items at the bottom of a pit are out of reach')
             if one_item and drop_count:
                 letter = re.search(r'([a-zA-Z$]) - ', self.agent.message)
                 assert letter is not None, self.agent.message
@@ -1290,6 +1315,8 @@ class Inventory:
         main = self.items.main_hand
         if main is not None and main.status == Item.CURSED and getattr(main.objs[0], 'bi', False):
             yield False
+        if self._here() in self.multi_container_squares:
+            yield False
         bl = self.agent.blstats
         hurt = bl.hitpoints < max(15, bl.max_hitpoints // 2)
         for item in self.agent.inventory.items_below_me:
@@ -1321,6 +1348,9 @@ class Inventory:
             yield False
 
         mask[mask] = self.agent.current_level().item_count[mask] != 0
+        for (dn, ln, uy, ux), until in self.unreachable_items_until.items():
+            if (dn, ln) == level.key() and until > self.agent.blstats.time:
+                mask[uy, ux] = False
 
         items = {}
         for y, x in sorted(zip(*mask.nonzero()), key=lambda p: dis[p]):
@@ -1362,6 +1392,8 @@ class Inventory:
         # TODO: free (no charge) items
         self.item_manager.price_identification()
         if self.agent.current_level().shop_interior[self.agent.blstats.y, self.agent.blstats.x]:
+            yield False
+        if self.unreachable_items_until.get(self._here(), -1) > self.agent.blstats.time:
             yield False
         if len(self.items_below_me) == 0:
             yield False

@@ -1,7 +1,8 @@
 # heuristic monster types lists
 from .. import jf_config
 
-ONLY_RANGED_SLOW_MONSTERS = ['floating eye', 'blue jelly', 'brown mold', 'gas spore', 'acid blob']
+# the Oracle: passive magic missiles on every melee hit (a hallucinating XL9 angered, hit and died to her)
+ONLY_RANGED_SLOW_MONSTERS = ['floating eye', 'blue jelly', 'brown mold', 'gas spore', 'acid blob', 'Oracle']
 if jf_config.HAZARD_FIXES:
     # passive acid / paralysis on touch (astra: no melee); a spotted jelly killed an XL9 elite game
     ONLY_RANGED_SLOW_MONSTERS += ['spotted jelly', 'ochre jelly', 'gelatinous cube']

@@ -220,6 +220,8 @@ class DiveLogic:
         self._hp_history = []              # (turn, hp) of the last few turns
         self._status_logged = -1
         self._murder_turn = -1
+        self._faint_start = None           # turn the current faint began (last awake observation)
+        self._last_update_turn = 0
         self.pet_seen = {}                 # level key -> last turn a pet glyph was in view
         self._last_pos = None              # (level key, (y, x)) at the previous update
         self._arrived = None               # (level key, turn) of the last stairs arrival
@@ -260,6 +262,16 @@ class DiveLogic:
                 agent._fainting_since = turn
         else:
             agent._fainting_since = None
+        # faint length -> hunger: the faint began after the last awake observation and ends with 'You
+        # regain consciousness' (often both messages arrive together after the faint)
+        msg = agent.message
+        if 'You faint from lack of food' in msg and self._faint_start is None:
+            self._faint_start = self._last_update_turn
+        if 'You regain consciousness' in msg and self._faint_start is not None:
+            moves = (turn - self._faint_start) * 4 / 3   # Fast (XL 7+): 4 moves per 3 turns; errs early
+            agent._faint_measure = (turn, (10 - moves) * 10)
+            self._faint_start = None
+        self._last_update_turn = turn
         if turn // 500 != self._status_logged:
             # a heartbeat for stall diagnoses (a jf8 game idled 4850 turns on Dlvl 2 after its grind)
             self._status_logged = turn // 500
@@ -595,6 +607,10 @@ class DiveLogic:
         bl = agent.blstats
         # after a failed prayer no prayer is coming (the god stays angry): waiting only starves, and it
         # blocked the rescue dive (two replays sat on Elbereth until 'died of starvation')
+        # a vault guard (we were teleported into a vault) must be answered and followed out, and guards
+        # ignore Elbereth: a sheltering XL7 ignored "Please drop that gold and follow me" and was killed
+        if utils.isin(agent.glyphs, G.GUARD).any():
+            yield False
         if not jf_config.FAINT_SHELTER or bl.hunger_state < Hunger.WEAK or agent.prayer_failed or \
                 agent.current_level().dungeon_number == GEHENNOM or agent.character.prop.blind or \
                 agent.edible_carried_food():
