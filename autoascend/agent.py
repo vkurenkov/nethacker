@@ -76,6 +76,7 @@ class Agent:
         self._random_walk_steps = 0
         self.resumed_game = False  # set by the driver when a fresh agent takes over a running game
         self._petrifying_bodies = frozenset(MON.body_from_name(n) for n in ('cockatrice', 'chickatrice'))
+        self._petrifying_bodies_mons = frozenset(MON.from_name(n) for n in ('cockatrice', 'chickatrice'))
         self._wet_glyphs = frozenset({SS.S_pool, SS.S_water, SS.S_lava})
         self._is_updating_state = False
 
@@ -789,6 +790,8 @@ class Agent:
                 self.type_text('n')
             if 'You cannot disable this trap.' in self.single_message:
                 return
+            if 'seem to be too busy' in self.single_message:  # held, or a welded two-hander
+                return self.single_message
             assert 'Check it for traps?' in self.single_message, self.single_message
             self.type_text('y')
             if self.message.startswith('You find no traps on the'):
@@ -1240,6 +1243,12 @@ class Agent:
         ret.sort()
         return ret
 
+    def _hurt_recently(self, turns=3):
+        hist = self.global_logic.dive._hp_history
+        now = self.blstats.time
+        recent = [hp for t, hp in hist if t >= now - turns]
+        return bool(recent) and max(recent) > self.blstats.hitpoints
+
     @utils.debug_log('fight2')
     @Strategy.wrap
     def fight2(self):
@@ -1247,6 +1256,12 @@ class Agent:
         wait_counter = 0
         while 1:
             monsters = self.get_visible_monsters()
+            # hallucinating, every monster looks hostile: in the Mines (peaceful to a dwarf; Minetown's Watch)
+            # the bot attacked peacefuls and was arrested (~half of 13 angry-Watch games after a yellow light).
+            # Only fight back when something is actually hurting us; otherwise wait it out.
+            if monsters and self.character.prop.hallu and \
+                    self.current_level().dungeon_number == Level.GNOMISH_MINES and not self._hurt_recently():
+                monsters = []
             allow_attack_all = self._last_turn - self._allow_attack_all_turn < 3
             only_ranged_slow_monsters = all([monster[3].mname in combat.monster_utils.ONLY_RANGED_SLOW_MONSTERS
                                              and not combat.monster_utils.consider_melee_only_ranged_if_hp_full(self,

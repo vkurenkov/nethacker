@@ -38,6 +38,10 @@ EXACT_PRAYER = False
 # failures were Fainting prayers 900-1100 turns after the last one (rnz(350) timeout: ~6% fail there,
 # ~2% past 1100); a longer gap means fainting longer instead
 FAINT_PRAYER_GAP = 1000
+# AutoAscend's periodic 'eat corpses' preempt was meant to walk to edible corpses on the level, but
+# only_below_me defaults to True, so it only ever eats what lies underfoot; the kills' corpses beside
+# us go to the pet (it ate ~40% of the grind's corpses)
+EAT_NEARBY_CORPSES = False
 
 _raw = os.environ.get('JF_CFG')
 if _raw:

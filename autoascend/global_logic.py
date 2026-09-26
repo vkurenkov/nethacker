@@ -423,12 +423,20 @@ class GlobalLogic:
     def can_sacrify(self, item):
         if not item.is_corpse() or item.comment == 'old':
             return False
+        # picking up a cockatrice-family corpse bare-handed is instant stoning: two unseen-seed games died
+        # taking their thrown daggers back from a chickatrice's pile ('Touching a chickatrice corpse is a
+        # fatal mistake.'), the corpse selected to carry to an altar
+        if self.agent.inventory.items.gloves is None and \
+                item.monster_id + nh.GLYPH_MON_OFF in self.agent._petrifying_bodies_mons:
+            return False
 
         mname = MON.permonst(item.monster_id + nh.GLYPH_MON_OFF).mname
-        if (mname == 'pony' and self.agent.character.role in [Character.KNIGHT, Character.BARBARIAN]) or \
-                (mname == 'kitten' and self.agent.character.role == [Character.BARBARIAN, Character.WIZARD]) or \
-                (mname == 'little dog' and item.naming):  # little dogs are always named
-            # sufficient condition for being an initial pet
+        # sacrificing a former pet: "So this is how you repay loyalty?", the god gets angry (an unseen
+        # Valkyrie offered her kitten, then again: an Angel of Tyr killed her at T2197). The old check here
+        # compared role == [list] (never true) and missed the Valkyrie's kitten; any grown-up pet species
+        # may be ours, so none of them is offered
+        if mname in ('kitten', 'housecat', 'large cat', 'little dog', 'dog', 'large dog', 'pony', 'horse',
+                     'warhorse'):
             return False
 
         if self.agent.character.alignment != Character.CHAOTIC:
@@ -664,6 +672,7 @@ class GlobalLogic:
             # lowest priority: a peaceful dwarf's pick-axe while in the Mines (dive_logic.DWARF_HUNT)
             .preempt(self.agent, [
                 self.dive.hunt_strategy(),
+                self.dive.ditch_pet_strategy(),
             ])
             .preempt(self.agent, [
                 self.solve_sokoban_strategy()
@@ -683,7 +692,8 @@ class GlobalLogic:
             ])
             .preempt(self.agent, [
                 self.agent.eat_corpses_from_ground(only_below_me=True).condition(lambda: self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
-                self.agent.eat_corpses_from_ground().every(5).condition(lambda: self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
+                self.agent.eat_corpses_from_ground(only_below_me=not jf_config.EAT_NEARBY_CORPSES).every(5)
+                .condition(lambda: self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
                 self.agent.eat_from_inventory().every(5),
             ])
             .preempt(self.agent, [

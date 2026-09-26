@@ -146,6 +146,13 @@ TOOL_RUN_XL = None
 # hunting dwarves on the way, digging in the main dungeon if it gets a pick-axe. Fires only in games
 # that are otherwise lost.
 RESCUE_DIVE = True
+# Ditch the pet for the Dlvl 1 grind (off: experiment). On 15 unseen grinds the pet ate ~40% of the
+# corpses (497 meals vs our 732) and made ~10% of the kills (no XP for us); food is what the grind runs
+# out of (hunger prayers, their failures, starvation). Take it down to Dlvl 2 and come back up alone
+# (a pet only follows when adjacent, and can't climb stairs on its own).
+DITCH_PET = False
+DITCH_PET_AFTER = 300          # turns into the game (Dlvl 1 explored, its '>' known)
+DITCH_PET_BUDGET = 300
 DWARF_HUNT_TURNS = 400         # per level
 # a dive leaving the Mines without a digging tool explores each Mines level (not Minetown) this long
 # looking for dwarves before climbing on (about 2 dwarves per Mines filler level, 37.5% armed with one)
@@ -214,6 +221,9 @@ class DiveLogic:
         self.tool_spots = set()            # (level key, (y, x)) where a pick-axe was dropped or seen
         self._dwarves_killed = 0
         self._spot_visits = {}             # (level key, (y, x)) -> go_to attempts
+        self._climb_trap_tries = {}        # level key -> times traps were opened for a climb
+        self._ditch_state = 0              # pet ditch: 0 idle, 1 down with it, 2 up without it, 3 over
+        self._ditch_started = None
         self._hunting = False              # our last attack was on a peaceful dwarf
         self._hunt_started = {}            # level key -> turn the hunt began there
         self._search_started = {}          # level key -> turn the dwarf search began there
@@ -961,6 +971,72 @@ class DiveLogic:
     def _min_xl(self, default):
         return default if TOOL_RUN_XL is None else min(default, TOOL_RUN_XL)
 
+    @Strategy.wrap
+    def ditch_pet_strategy(self):
+        agent = self.agent
+        from .global_logic import Milestone
+        if not DITCH_PET or self._ditch_state == 3 or self.diving or \
+                agent.global_logic.milestone != Milestone.BE_ON_FIRST_LEVEL:
+            yield False
+        bl = agent.blstats
+        level = agent.current_level()
+        first = (Level.DUNGEONS_OF_DOOM, 1)
+        if self._ditch_state == 0:
+            if level.key() != first or not agent.has_pet or bl.time < DITCH_PET_AFTER or \
+                    agent.get_visible_monsters() or bl.hitpoints < 0.8 * bl.max_hitpoints:
+                yield False
+            dis = agent.bfs()
+            if not any(dis[p] != -1 for p in self._stairs_down(level)):
+                yield False
+            agent.log('DITCH pet: taking it down to Dlvl 2')
+            self._ditch_state = 1
+            self._ditch_started = bl.time
+        if bl.time - self._ditch_started > DITCH_PET_BUDGET:
+            agent.log(f'DITCH pet: out of time (state {self._ditch_state})')
+            self._ditch_state = 3
+            yield False
+        yield True
+        pos = (bl.y, bl.x)
+        pet_adjacent = any(utils.adjacent(pos, (int(y), int(x)))
+                           for y, x in zip(*utils.isin(agent.glyphs, G.PETS).nonzero()))
+        key = level.key()
+        if self._ditch_state == 1:
+            if key == (Level.DUNGEONS_OF_DOOM, 2):
+                self._ditch_state = 2
+                return
+            if key != first:
+                self._ditch_state = 3
+                return
+            dis = agent.bfs()
+            downs = [p for p in self._stairs_down(level) if dis[p] != -1]
+            if not downs:
+                self._ditch_state = 3
+                return
+            y, x = min(downs, key=lambda p: dis[p])
+            if pos != (y, x):
+                agent.go_to(y, x)
+            elif pet_adjacent:
+                agent.move('>')
+            else:
+                agent.search()   # wait for the pet to come close enough to follow
+            return
+        # state 2: on Dlvl 2 with the pet; climb back when it is not adjacent
+        if key == first:
+            agent.log(f'DITCH pet: back on Dlvl 1, pet left behind: {not agent.has_pet}')
+            self._ditch_state = 3
+            return
+        ups = [p for p in zip(*utils.isin(level.objects, G.STAIR_UP).nonzero())]
+        if not ups:
+            self._ditch_state = 3
+            return
+        y, x = ups[0]
+        if pos != (y, x):
+            agent.go_to(y, x)
+        elif not pet_adjacent:
+            agent.move('<')
+        else:
+            agent.search()   # let it wander off
+
     def should_hunt_dwarf(self):
         agent = self.agent
         if not DWARF_HUNT or self._dwarves_killed >= DWARF_HUNT_MAX_KILLS:
@@ -1226,12 +1302,20 @@ class DiveLogic:
         elif 'here is too hard to dig' in msg or tries >= DIG_MAX_TRIES:
             agent.log(f'DIVE floor here cannot be dug through ({msg!r})')
             self.undiggable.add(key)
+            if agent.blstats.depth >= 20:
+                # the Castle (or another bottom level): what could still get us further?
+                inv = '; '.join(f'{agent.inventory.items.get_letter(i)} - {i.text}'
+                                for i in agent.inventory.items.all_items)
+                agent.log(f'DIVE bottom reached at depth {agent.blstats.depth}; inventory: {inv}')
 
     def descend(self):
         agent = self.agent
         if self.try_dig_down():
             return
         targets = self.down_targets()
+        if not targets and utils.isin(agent.current_level().objects, G.STAIR_DOWN).any() and \
+                self._walk_through_traps():
+            targets = self.down_targets()
         if not targets:
             self.exploration(None).until(agent, lambda: bool(self.down_targets())).run()
             return
@@ -1270,6 +1354,30 @@ class DiveLogic:
 
     # ------------------------------------------------------------- branches
 
+    def _walk_through_traps(self, climbing=False):
+        """AutoAscend's BFS treats every known trap as a wall (exploration relents only after thousands
+        of turns of searching). A dive whose staircase is walled off only by a trap walks through it: an
+        s13 dive spent 5,000 turns on Mines level 1 whose '<' lay behind a trap in a 1-wide corridor."""
+        agent = self.agent
+        if agent._last_turn - agent._allow_walking_through_traps_turn <= 50:
+            return False   # already allowed: the traps are not what blocks us
+        if climbing:
+            # a known trap door is escaped only 1 time in 5 (trap.c): climbing through one dropped that
+            # dive back down the Mines twice. First try the way up without trap doors and holes; if that
+            # is still cut off next time, the trap door is the only way: take the 1-in-5 chances
+            level = agent.current_level()
+            falls = utils.isin(level.objects, FALL_TRAPS)
+            tries = self._climb_trap_tries.get(level.key(), 0)
+            self._climb_trap_tries[level.key()] = tries + 1
+            if tries == 0:
+                level.forbidden |= falls
+            else:
+                level.forbidden &= ~falls
+        agent.log('DIVE stairs cut off: walking through known traps')
+        agent._allow_walking_through_traps_turn = agent._last_turn
+        agent.last_bfs_step = -1   # the BFS cache ignores the flag
+        return True
+
     def _take_stairs(self, stairs, direction):
         """Reach one of `stairs` and climb it. A peaceful standing on (or next to) the staircase
         makes it 'unreachable' for AutoAscend's BFS; in the peaceful Mines that stranded a dive for
@@ -1289,6 +1397,8 @@ class DiveLogic:
         near = [(self._neighbour_distance(dis, *p), p) for p in stairs]
         near = [(d, p) for d, p in near if d is not None]
         if not near:
+            if self._walk_through_traps(climbing=direction == '<'):
+                return self._take_stairs(stairs, direction)
             return False
         d, (y, x) = min(near)
         if not utils.adjacent(pos, (y, x)):

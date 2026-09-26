@@ -6,6 +6,7 @@ from scipy import signal
 
 from ..glyph import G, MON
 from .. import jf_config, utils
+from ..item import Item
 from ..utils import adjacent
 from .monster_utils import is_monster_faster, is_dangerous_monster, \
     ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
@@ -100,6 +101,18 @@ def ranged_priority(agent, dy, dx, monsters):
             if jf_config.HAZARD_FIXES and mon.mname == 'gas spore' and \
                     utils.any_in(agent.glyphs[max(y - 1, 0):y + 2, max(x - 1, 0):x + 2], G.PETS):
                 return None
+            # a miss, or the rest of a multishot volley, flies on past the target: never with a pet or a
+            # peaceful behind it (two unseen games hit Minetown gnomes that way: the Watch killed them)
+            by, bx, reach = y, x, agent.character.get_range(launcher, ammo)
+            for _ in range(max(reach - dis, 0)):
+                by += dy
+                bx += dx
+                if not 0 <= by < agent.glyphs.shape[0] or not 0 <= bx < agent.glyphs.shape[1] or \
+                        not agent.current_level().walkable[by, bx]:
+                    break
+                if agent.glyphs[by, bx] in G.PETS or \
+                        (agent.glyphs[by, bx] in G.MONS and not any(m[1] == by and m[2] == bx for m in monsters)):
+                    return None
             return ret, y, x, monster[0]
 
 
@@ -290,11 +303,16 @@ def get_available_actions(agent, monsters):
 
 
 def decide_what_to_pickup(agent):
+    # never a shop's goods: an unseen game picked up a for-sale dagger (Grimtooth), threw it, owed 2204
+    # zorkmids and was killed by the shopkeeper
     projectiles_below_me = [i for i in agent.inventory.items_below_me
-                            if i.is_thrown_projectile() or i.is_fired_projectile()]
+                            if (i.is_thrown_projectile() or i.is_fired_projectile()) and
+                            i.shop_status == Item.NOT_SHOP]
     my_launcher, ammo = agent.inventory.get_best_ranged_set(additional_ammo=[i for i in projectiles_below_me])
     to_pickup = []
     for item in agent.inventory.items_below_me:
+        if item.shop_status != Item.NOT_SHOP:
+            continue
         if item.is_thrown_projectile() or (my_launcher is not None and item.is_fired_projectile(launcher=my_launcher)):
             to_pickup.append(item)
     return to_pickup

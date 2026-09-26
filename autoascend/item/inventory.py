@@ -796,7 +796,8 @@ class Inventory:
                             return_dps=False, allow_unknown_status=False, additional_ammo=[]):
         if items is None:
             items = self.items
-        items = flatten_items(items)
+        # never throw unpaid goods (you owe for them, and a shopkeeper kills a thief)
+        items = [i for i in flatten_items(items) if i.shop_status != Item.UNPAID]
 
         best_launcher, best_ammo = None, None
         best_dps = -float('inf')
@@ -1284,6 +1285,11 @@ class Inventory:
     @Strategy.wrap
     def check_containers(self):
         yielded = False
+        # a welded two-hander (a cursed dwarvish mattock the dive dug with) leaves no free hand for
+        # #untrap or #loot: 450 'Your hands seem to be too busy' panics in the s10-s13 runs
+        main = self.items.main_hand
+        if main is not None and main.status == Item.CURSED and getattr(main.objs[0], 'bi', False):
+            yield False
         for item in self.agent.inventory.items_below_me:
             if item.is_possible_container():
                 if not yielded:
