@@ -45,6 +45,10 @@ class Level:
 
         # e.g. ad aerarium -- avoid valut entrance
         self.forbidden = np.zeros((C.SIZE_Y, C.SIZE_X), bool)
+        # squares holding a cockatrice-family corpse: turn until which stepping there is unsafe
+        self.petrify_until = np.zeros((C.SIZE_Y, C.SIZE_X), np.int32)
+        # doorways the game refused diagonal moves through ("intact doorway")
+        self.intact_doors = np.zeros((C.SIZE_Y, C.SIZE_X), bool)
 
     def key(self):
         return (self.dungeon_number, self.level_number)

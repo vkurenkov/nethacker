@@ -64,21 +64,26 @@ class Property:
     def __init__(self, agent):
         self.agent = agent
 
+    # The tty status line abbreviates conditions when it gets long (e.g. 'Hallu' -> 'Hl'),
+    # so read them from the blstats condition bitmask instead.
+    def _condition(self, mask):
+        return bool(self.agent.last_observation['blstats'][nh.NLE_BL_CONDITION] & mask)
+
     @property
     def confusion(self):
-        return 'Conf' in bytes(self.agent.last_observation['tty_chars'][-1]).decode()
+        return self._condition(nh.BL_MASK_CONF)
 
     @property
     def stun(self):
-        return 'Stun' in bytes(self.agent.last_observation['tty_chars'][-1]).decode()
+        return self._condition(nh.BL_MASK_STUN)
 
     @property
     def hallu(self):
-        return 'Hallu' in bytes(self.agent.last_observation['tty_chars'][-1]).decode()
+        return self._condition(nh.BL_MASK_HALLU)
 
     @property
     def blind(self):
-        return 'Blind' in bytes(self.agent.last_observation['tty_chars'][-1]).decode()
+        return self._condition(nh.BL_MASK_BLIND)
 
     @property
     def polymorph(self):
@@ -299,7 +304,8 @@ class Character:
             alignment, _, gender, race, role = matches[0]
         else:
             matches = re.findall(
-                'You are an? ([a-zA-Z ]+), a level (\d+) (([a-z]+) )?([a-z]+) ([A-Z][a-z]+). *You are ([a-z]+)',
+                # rank titles can contain hyphens (a Valkyrie at XL 10-13 is a "Woman-at-arms")
+                'You are an? ([a-zA-Z -]+), a level (\d+) (([a-z]+) )?([a-z]+) ([A-Z][a-z]+). *You are ([a-z]+)',
                 text)
             assert len(matches) == 1, repr(text)
             _, _, _, gender, race, role, alignment = matches[0]

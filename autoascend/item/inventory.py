@@ -10,7 +10,7 @@ from nle.nethack import actions as A
 from autoascend import objects as O, utils
 from autoascend.character import Character
 from autoascend.exceptions import AgentPanic
-from autoascend.glyph import G
+from autoascend.glyph import G, MON
 from autoascend.item import ItemManager, Item, ContainerContent, check_if_triggered_container_trap, \
     find_equivalent_item, flatten_items
 from autoascend.item.inventory_items import InventoryItems
@@ -47,6 +47,18 @@ class Inventory:
         self.engraving_below_me = None
 
         self.skip_engrave_counter = 0
+        self.empty_wands = set()  # inventory texts of wands that answered "Nothing happens"
+
+    def is_known_empty(self, item):
+        return item.text in self.empty_wands
+
+    def set_unknown_below_me(self):
+        """Stand-in when the square can't be parsed: pretend nothing useful is here."""
+        if self.items_below_me is None:
+            self.items_below_me = []
+            self.letters_below_me = []
+        if self.engraving_below_me is None:
+            self.engraving_below_me = ''
 
     def on_panic(self):
         self.items_below_me = None
@@ -484,6 +496,13 @@ class Inventory:
                                 "You don't feel anything in here to pick up." in self.agent.message:
                             items = []
                             letters = []
+                        elif re.search('You have [a-z ]+ lifting ', self.agent.message) and \
+                                'Continue?' in self.agent.message:
+                            # only one object here can be picked up (e.g. the iron chain attached to the
+                            # ball is skipped), so PICKUP tries to lift it at once. It is too heavy anyway.
+                            self.agent.step(A.Command.ESC)
+                            items = []
+                            letters = []
                         else:
                             assert 0, (self.agent.message, self.agent.popup)
                     else:
@@ -660,6 +679,10 @@ class Inventory:
         return self.eat(item, quaff=True, smart=smart)
 
     def eat(self, item, quaff=False, smart=True):
+        if not quaff and item.is_corpse() and self.agent.character.role == Character.MONK and \
+                ord(MON.permonst(item.monster_id).mlet) not in \
+                [MON.S_BLOB, MON.S_JELLY, MON.S_FUNGUS]:
+            self.agent._monk_meat_meals += 1
         if smart:
             if not quaff and item in self.items_below_me:
                 with self.agent.atom_operation():
@@ -961,7 +984,7 @@ class Inventory:
             f"This {wand_regex} is a wand of digging!": ['digging'],
             "Gravel flies up from the floor!": ['digging'],
             f"This {wand_regex} is a wand of fire!": ['fire'],
-            "Lightning arcs from the wand. You are blinded by the flash!": ['lighting'],
+            "Lightning arcs from the wand. You are blinded by the flash!": ['lightning'],
             f"This {wand_regex} is a wand of lightning!": ['lightning'],
             f"The {floor_regex} is riddled by bullet holes!": ['magic missile'],
             f'The engraving now reads:': ['polymorph'],
