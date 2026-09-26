@@ -59,6 +59,7 @@ class Agent:
         self.last_bfs_dis = None
         self.last_bfs_step = None
         self.last_prayer_turn = None
+        self.prayer_hold_until = -1
         self.prayer_failed = False
         self._monk_meat_meals = 0
         self._previous_glyphs = None
@@ -74,6 +75,7 @@ class Agent:
         self._random_walk_steps = 0
         self.resumed_game = False  # set by the driver when a fresh agent takes over a running game
         self._petrifying_bodies = frozenset(MON.body_from_name(n) for n in ('cockatrice', 'chickatrice'))
+        self._wet_glyphs = frozenset({SS.S_pool, SS.S_water, SS.S_lava})
         self._is_updating_state = False
 
         self._no_step_calls = False
@@ -448,6 +450,10 @@ class Agent:
         self._teleport_prompt_escapes = 0
 
         if b'[yn]' in bytes(observation['tty_chars'].reshape(-1)):
+            # a foocubus: don't let it put a (maybe cursed: levitation strands a dive) ring on us
+            if 'Would you wear it for me?' in self.single_message:
+                self.type_text('n')
+                return
             self.type_text('y')
             return
 
@@ -665,6 +671,16 @@ class Agent:
         level.objects[mask] = self.glyphs[mask]
         level.walkable[mask] = False
 
+        # water and lava are never walkable once seen (a dive on Medusa's level kept walking into the
+        # water: a monster or item glyph first shown there had made the square 'walkable')
+        dive = getattr(self.global_logic, 'dive', None)
+        if dive is not None and dive.diving:
+            mask = utils.isin(self.glyphs, self._wet_glyphs)
+            if mask.any():
+                level.seen[mask] = True
+                level.objects[mask] = self.glyphs[mask]
+                level.walkable[mask] = False
+
         self._update_level_items()
         self._update_level_shops()
         self._update_level_corpses()
@@ -785,6 +801,9 @@ class Agent:
             return self.message
 
     def is_safe_to_pray(self, limit=500):
+        # the dive's dwarf hunt: a peaceful kill may cost Luck -1, and prayers fail while Luck < 0
+        if self.blstats.time < self.prayer_hold_until:
+            return False
         return (
                 (self.last_prayer_turn is None and self.blstats.time > 300) or
                 (self.last_prayer_turn is not None and self.blstats.time - self.last_prayer_turn > limit)
@@ -1051,7 +1070,7 @@ class Agent:
         walkable = level.walkable & ~utils.isin(self.glyphs, G.BOULDER) & \
                    ~self.monster_tracker.peaceful_monster_mask & \
                    ~level.forbidden
-        if jf_config.LATE_FIXES and self.inventory.items.gloves is None:
+        if jf_config.HAZARD_FIXES and self.inventory.items.gloves is None:
             walkable &= ~(level.petrify_until > self.blstats.time)
 
         if self._last_turn - self._allow_walking_through_traps_turn > 50:
@@ -1250,7 +1269,10 @@ class Agent:
                     actions = attack_actions
 
             if not actions:
-                assert 0, 'No possible action available during fight2'
+                # nothing possible (cornered, inventory unknown): let a turn pass instead of a panic loop
+                # that freezes the game clock until the no-progress timeout (an s6 dive, T38441)
+                self.search()
+                continue
 
             priority, best_action = max(actions, key=lambda x: x[0]) if actions else None
 
@@ -1655,7 +1677,10 @@ class Agent:
         # so the character usually starves or dies while fainting (a common cause of early deaths); keeping
         # the stored food as a reserve that is eaten only when a prayer would be risky (and praying already
         # when Weak if it is safe) should make those failures rarer and raise progression for every character
-        if not self.prayer_failed and self.blstats.hunger_state < Hunger.FAINTING and \
+        # the dive eats what it carries as soon as it is Hungry: its prayers are for HP emergencies
+        # (a dive fainted at Dlvl 6 and died fighting); the tour keeps DT6A's hoard-and-pray policy
+        diving = self.global_logic.dive.diving
+        if not diving and not self.prayer_failed and self.blstats.hunger_state < Hunger.FAINTING and \
                 (self.blstats.hunger_state == Hunger.HUNGRY or self.is_safe_to_pray(self.SAFE_HUNGER_PRAYER_GAP)) \
                 and not (self.blstats.hunger_state >= Hunger.WEAK and self._eat_before_praying()):
             yield False

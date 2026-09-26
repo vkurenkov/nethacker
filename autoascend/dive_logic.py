@@ -15,6 +15,8 @@ The plan is a restartable loop of short tasks: fights, eating, prayer etc.
 preempt it at any step, so all decisions are re-derived from game state.
 """
 
+import re
+
 import nle.nethack as nh
 import numpy as np
 from nle.nethack import actions as A
@@ -27,7 +29,7 @@ from .character import Character
 from .exceptions import AgentPanic
 from .glyph import G, MON, SS, Hunger
 from .level import Level
-from .item import flatten_items
+from .item import Item, flatten_items
 from .strategy import Strategy
 
 ROOM_FLOOR = frozenset({SS.S_room, SS.S_darkroom})
@@ -63,7 +65,7 @@ MINES_MIN_LEVELS = 8           # dungeon.def: the Mines have 8-9 levels, Mines' 
 MINES_REQUIRED_XL = {}
 # astra: retreat onto Elbereth at 45-65% HP, rest there with searches, never attack from it
 # hand-over from AutoAscend's levelling tour to the dive
-DIVE_XL = 11
+DIVE_XL = 10
 DIVE_TURN = 10 ** 9
 ELBERETH_REST_BELOW = 0.4
 ELBERETH_REST_UNTIL = 0.85
@@ -97,6 +99,37 @@ ARRIVAL_RETREAT_REST = 150     # turns to wait upstairs before trying that stair
 FULL_EXPLORE_TURNS = 2500      # per level, while under-levelled
 PORTAL_SWEEP_TURNS = 3000      # per portal level visit
 STUCK_EXPLORE_TURNS = 4000     # searching for a hidden way down before trying other things
+# Digging down (pick-axe, or a wand of digging): a few turns per level instead of hundreds spent
+# finding the '>', and the only way past Medusa's island without levitation (4 of 8 s4 dives ended
+# on her level, walking into the water). A '>' this close is still taken (it keeps an up staircase
+# under us on arrival).
+DIG_STAIRS_RADIUS = 8
+# Resting to 95% on a deep level lets its monsters come to us (an s7 dig-dive rested for 150 turns on
+# Dlvl 15 until a leocrotta took it to 2 HP): with a digging tool, rest only below this.
+DIG_REST_BELOW = 0.6
+DIG_MAX_TRIES = 6              # applies on one level without falling through: floor can't be holed
+FETCH_TOOL_TURNS = 3000        # budget for walking back to a pick-axe the tour dropped
+# Dwarves carry a pick-axe or a mattock 37.5% of the time (makemon.c) and are peaceful to a dwarf:
+# with no digging tool yet, the dive kills the peaceful dwarves it meets in the Mines (never in
+# Minetown: the Watch). Each kill costs Luck -1 half of the time, so prayer waits 600 turns per kill.
+DWARF_HUNT = True
+DWARF_HUNT_MAX_KILLS = 4
+HUNT_IN_TOUR = False           # the tour hunts too (in the Mines) from HUNT_MIN_XL
+HUNT_MIN_XL = 8
+# With a digging tool the dive is a few turns per level and XL matters much less (s7 public seed 10:
+# Dlvl 4 -> 26 in ~200 turns of digging, past Medusa): dive as soon as one is in hand from this XL,
+# and keep one during the tour (it drops them for lighter loot).
+DIG_DIVE_XL = 10
+KEEP_TOOL_IN_TOUR = False
+# The portal sweep (Home 1 = 0.366) costs ~1500 turns of exploring the level; digging reaches
+# Dlvl 20+ (0.38+) within a few hundred turns, so no sweep while holding a digging tool.
+SWEEP_WITH_TOOL = False
+# Tool run (off: None): end the tour's Dlvl 1 grind at this XL instead of XL 8 and head for the Mines
+# to take a dwarf's pick-axe (HUNT_MIN_XL / DIG_DIVE_XL follow it). The XL 5-8 grind is where unseen
+# games starve (9 of 30 died on Dlvl 1 at XL 3-7).
+TOOL_RUN_XL = None
+DWARF_HUNT_TURNS = 400         # per level
+DWARF_NAMES = ('dwarf', 'dwarf lord', 'dwarf king')
 
 
 def _apply_dev_overrides():
@@ -137,6 +170,18 @@ class DiveLogic:
         self._last_pos = None              # (level key, (y, x)) at the previous update
         self._arrived = None               # (level key, turn) of the last stairs arrival
         self._avoid_stairs_until = {}      # (level key, (y, x)) -> turn: don't take this '>' before
+        self._retreat_blocked_until = -1   # turn until which a failed retreat isn't retried
+        self._dig_tries = {}               # level key -> pick-axe applies without falling through
+        self._dig_blocked_until = -1       # turn until which applying the pick-axe isn't retried
+        self._fetch = None                 # (level key, (y, x), turn started) of a known pick-axe
+        self._fetch_given_up = set()       # (level key, (y, x)) of pick-axes not worth another trip
+        self._fetch_scan_turn = -10 ** 9   # last turn the levels were scanned for pick-axes
+        self._bad_dig_spots = set()        # (level key, (y, x)) where a boulder etc. blocks digging
+        self.tool_spots = set()            # (level key, (y, x)) where a pick-axe was dropped or seen
+        self._dwarves_killed = 0
+        self._spot_visits = {}             # (level key, (y, x)) -> go_to attempts
+        self._hunting = False              # our last attack was on a peaceful dwarf
+        self._hunt_started = {}            # level key -> turn the hunt began there
 
     # ------------------------------------------------------------------ state
 
@@ -161,6 +206,20 @@ class DiveLogic:
                     old_level.objects[prev[1]] = SS.S_trap_door
                     agent.log(f'DIVE fell through a trap door at {prev[1]} on {prev[0]}; remembered')
         self._last_pos = (key, pos)
+        self._note_digging_tools(key, pos)
+        if self._hunting and self._DWARF_KILLED.search(agent.message):
+            self._hunting = False
+            self._dwarves_killed += 1
+            agent.prayer_hold_until = max(getattr(agent, 'prayer_hold_until', -1), turn) + 600
+            # its things lie under its corpse (so the pile shows a corpse glyph), and fight2 may have
+            # killed it with a thrown dagger: check every pile within 2 squares
+            y0, x0 = pos
+            area = agent.glyphs[max(y0 - 2, 0):y0 + 3, max(x0 - 2, 0):x0 + 3]
+            piles = [(int(py) + max(y0 - 2, 0), int(px) + max(x0 - 2, 0))
+                     for py, px in zip(*utils.isin(area, G.OBJECTS, G.BODIES).nonzero())]
+            for p in piles:
+                self.tool_spots.add((key, p))
+            agent.log(f'DIVE killed a dwarf ({self._dwarves_killed}); piles to check: {piles}')
         if key not in self.level_first_turn:
             self.level_first_turn[key] = turn
         if key != self._last_key:
@@ -178,14 +237,38 @@ class DiveLogic:
             self.quest_arrival = (agent.blstats.y, agent.blstats.x)
             agent.log(f'DIVE entered the Quest home at {self.quest_arrival}')
 
+    _DWARF_KILLED = re.compile(r"You kill (the|a|an) (poor )?dwarf( lord| king)?!")
+    _TOOL_PICKED_UP = re.compile(r"\b[a-zA-Z] - (an?|\d+) [^.]*(pick-axe|dwarvish mattock)")
+
+    def _note_digging_tools(self, key, pos):
+        """Remember where pick-axes lie. The tour picks them up and drops them again for lighter loot
+        (s4 public seed 9: 7 times), and the level item memory doesn't keep a big drop reliably.
+        Drops happen inside atomic operations, so read every message since the last update."""
+        history = self.agent._message_history
+        start = getattr(self, '_history_seen', 0)
+        if start > len(history):   # a fresh agent after a driver restart
+            start = 0
+        self._history_seen = len(history)
+        msg = ' '.join(history[start:] + [self.agent.message])
+        if 'pick-axe' not in msg and 'dwarvish mattock' not in msg:
+            return
+        picked = max((m.start() for m in self._TOOL_PICKED_UP.finditer(msg)), default=-1)
+        dropped = max((msg.rfind(f'{verb} {tool}') for verb in ('You drop a', 'You see here a')
+                       for tool in ('pick-axe', 'dwarvish mattock')), default=-1)
+        if picked > dropped:
+            self.tool_spots.discard((key, pos))
+        elif dropped > picked and not self.agent.current_level().shop_interior[pos]:
+            self.tool_spots.add((key, pos))
+
     def should_dive(self):
         if self.diving:
             return True
         agent = self.agent
         gl = agent.global_logic
         from .global_logic import Milestone
-        if agent.blstats.experience_level >= DIVE_XL or gl.milestone >= Milestone.GO_DOWN or \
-                agent.blstats.time >= DIVE_TURN:
+        xl = agent.blstats.experience_level
+        if xl >= DIVE_XL or gl.milestone >= Milestone.GO_DOWN or agent.blstats.time >= DIVE_TURN or \
+                (xl >= self._min_xl(DIG_DIVE_XL) and self.digging_tool() is not None):
             agent.log(f'DIVE phase starts (milestone {gl.milestone.name})')
             self.diving = True
             self.mines_done = True  # the tour handled the Mines; from here it's the main dungeon
@@ -290,6 +373,14 @@ class DiveLogic:
         if dnum == Level.QUEST:
             self._task('leave quest')
             return self.leave_quest()
+
+        if self.should_fetch_digging_tool():
+            self._task('fetch digging tool')
+            return self.fetch_digging_tool()
+
+        if self.should_hunt_dwarf():
+            self._task('hunt dwarf')
+            return self.hunt_dwarf()
 
         if dnum == Level.GNOMISH_MINES and self.use_mines():
             self._task('mines descent')
@@ -401,6 +492,10 @@ class DiveLogic:
         """Low or fast-falling HP (or a crowded arrival): take the up stairs if they are close."""
         agent = self.agent
         bl = agent.blstats
+        # a retreat that can't move (a Grey-elf in the way) must not keep pre-empting the fight: an
+        # s4 dive 'retreated' 9 times in 2 turns without fighting back and died
+        if bl.time < self._retreat_blocked_until:
+            yield False
         crowd = self._crowded_arrival()
         in_trouble = bl.hitpoints < RETREAT_BELOW * bl.max_hitpoints or self._fast_hp_loss()
         if crowd is None and (RETREAT_BELOW <= 0 or not in_trouble or not self._near_hostiles(radius=3)):
@@ -426,10 +521,15 @@ class DiveLogic:
         # don't come straight back down the same staircase into the same fight
         if self._arrived is not None and self._arrived[0] == level.key():
             self._avoid_stairs_until[self._arrived[2]] = bl.time + ARRIVAL_RETREAT_REST
-        if (bl.y, bl.x) != (y, x):
-            agent.go_to(y, x)
-        if (agent.blstats.y, agent.blstats.x) == (y, x):
-            agent.move('<')
+        start = (bl.y, bl.x, level.key())
+        try:
+            if (bl.y, bl.x) != (y, x):
+                agent.go_to(y, x, max_steps=1)
+            if (agent.blstats.y, agent.blstats.x) == (y, x):
+                agent.move('<')
+        finally:
+            if (agent.blstats.y, agent.blstats.x, agent.current_level().key()) == start:
+                self._retreat_blocked_until = agent.blstats.time + 15
 
     # ---------------------------------------------------------------- mines
 
@@ -536,6 +636,10 @@ class DiveLogic:
         key = agent.current_level().key()
         if key in self.fully_explored:
             return False
+        # the XP gate is for the stairs dive: a digger spends a few turns per level (an XL9 s7 dig-dive
+        # explored Dlvl 16 'to level up' and met an umber hulk)
+        if self.digging_tool() is not None:
+            return False
         if agent.blstats.hunger_state >= Hunger.HUNGRY and agent.inventory.items.total_nutrition() == 0:
             return False  # corpses and food are deeper
         if self.turns_on_level() > FULL_EXPLORE_TURNS:
@@ -572,41 +676,302 @@ class DiveLogic:
                 return item
         return None
 
-    def try_dig_down(self):
-        """Astra's shortcut: zap a wand of digging down (one level per charge; on Medusa's level it
-        skips the water). Dig from plain floor with no water around (a hole beside water floods)."""
+    @staticmethod
+    def is_digging_tool(item, shield_worn):
+        """A pick-axe, or a dwarvish mattock when no shield is worn (it needs both hands)."""
+        if not item.is_unambiguous() or item.status == Item.CURSED:
+            return False
+        if item.object == O.from_name('pick-axe'):
+            return True
+        return item.object == O.from_name('dwarvish mattock') and not shield_worn
+
+    def best_digging_tool(self, items):
+        shield_worn = self.agent.inventory.items.off_hand is not None
+        tools = [i for i in flatten_items(items) if self.is_digging_tool(i, shield_worn)]
+        # the pick-axe first: it is lighter and one-handed
+        tools.sort(key=lambda i: i.object != O.from_name('pick-axe'))
+        return tools[0] if tools else None
+
+    def digging_tool(self):
+        inv = self.agent.inventory.items
+        tool = self.best_digging_tool(inv)
+        if tool is None:
+            return None
+        # a cursed weapon welded to the hand can't be swapped for the pick-axe
+        main = inv.main_hand
+        if main is not None and main is not tool and main.status == Item.CURSED:
+            return None
+        return tool
+
+    def _known_digging_tools(self):
+        """Pick-axes lying where we have seen them (the tour picks them up and drops them again)."""
+        found = []
+        shield_worn = self.agent.inventory.items.off_hand is not None
+        for key, level in self.agent.levels.items():
+            if key[0] not in (Level.DUNGEONS_OF_DOOM, Level.GNOMISH_MINES):
+                continue
+            for y, x in zip(*(level.item_count > 0).nonzero()):
+                if (key, (y, x)) in self._fetch_given_up or level.shop_interior[y, x]:
+                    continue
+                if any(self.is_digging_tool(i, shield_worn) for i in flatten_items(level.items[y, x])):
+                    found.append((key, (int(y), int(x))))
+        for key, (y, x) in self.tool_spots:
+            if (key, (y, x)) not in self._fetch_given_up and (key, (int(y), int(x))) not in found and \
+                    (key[0] in (Level.DUNGEONS_OF_DOOM, Level.GNOMISH_MINES)):
+                found.append((key, (int(y), int(x))))
+        return found
+
+    def should_fetch_digging_tool(self):
+        if self.digging_tool() is not None:
+            self._fetch = None
+            return False
+        if self._fetch is not None:
+            return True
+        agent = self.agent
+        if agent.blstats.time - self._fetch_scan_turn < 50:
+            return False
+        self._fetch_scan_turn = agent.blstats.time
+        here = agent.current_level().key()
+        best = None
+        for key, pos in self._known_digging_tools():
+            if key == here:
+                if agent.bfs()[pos] == -1:
+                    continue
+                cost = 0
+            else:
+                path = agent.exploration.get_path_to_level(*key)
+                if path is None:
+                    continue
+                cost = len(path)
+            if best is None or cost < best[0]:
+                best = (cost, key, pos)
+        if best is None:
+            return False
+        _, key, pos = best
+        agent.log(f'DIVE fetching the digging tool at {pos} on {key}')
+        self._fetch = (key, pos, agent.blstats.time)
+        return True
+
+    def fetch_digging_tool(self):
+        agent = self.agent
+        key, (y, x), started = self._fetch
+        if agent.blstats.time - started > FETCH_TOOL_TURNS:
+            agent.log(f'DIVE digging tool at {(y, x)} on {key}: out of time')
+            self._fetch_given_up.add((key, (y, x)))
+            self._fetch = None
+            return
+        if agent.current_level().key() != key:
+            # one staircase at a time: follow_level_path_strategy asserts when a peaceful blocks the
+            # stairs (an s7 dive panicked on a Mines '<' for turns); _take_stairs waits it out
+            path = agent.exploration.get_path_to_level(*key)
+            if not path:
+                agent.log(f'DIVE digging tool at {(y, x)} on {key}: no way there')
+                self._fetch_given_up.add((key, (y, x)))
+                self._fetch = None
+                return
+            (sy, sx), _, direction = path[0]
+            if not self._take_stairs([(sy, sx)], direction):
+                # cut off (peacefuls, boulders): explore for a way to it, within FETCH_TOOL_TURNS
+                self.exploration(None).until(agent, lambda: agent.bfs()[sy, sx] != -1).run()
+            return
+        if (agent.blstats.y, agent.blstats.x) != (y, x):
+            if agent.bfs()[y, x] == -1:
+                self._fetch_given_up.add((key, (y, x)))
+                self._fetch = None
+                return
+            agent.go_to(y, x)
+            return
+        agent.inventory.pickup_and_drop_items().run()
+        if self.digging_tool() is None:
+            agent.log(f'DIVE no usable digging tool at {(y, x)} on {key}')
+        else:
+            agent.log(f'DIVE picked up {self.digging_tool().text!r}')
+        self._fetch_given_up.add((key, (y, x)))
+        self.tool_spots.discard((key, (y, x)))
+        self._fetch = None
+
+    def _peaceful_dwarves(self):
+        agent = self.agent
+        glyphs = [MON.from_name(n) for n in DWARF_NAMES]
+        mask = agent.monster_tracker.peaceful_monster_mask & utils.isin(agent.glyphs, glyphs)
+        if not mask.any():
+            return []
+        dis = agent.bfs()
+        found = []
+        for y, x in zip(*mask.nonzero()):
+            d = self._neighbour_distance(dis, y, x)
+            if d is not None:
+                found.append((d, int(y), int(x)))
+        return sorted(found)
+
+    def keep_digging_tool(self):
+        return self.diving or KEEP_TOOL_IN_TOUR
+
+    @Strategy.wrap
+    def hunt_strategy(self):
+        """The tour's Mines visit hunts too, and checks the piles a killed dwarf left (the dive does
+        both from plan_step)."""
+        if self.diving or not DWARF_HUNT or not HUNT_IN_TOUR:
+            yield False
+        spot = self._local_tool_spot() if self.digging_tool() is None else None
+        if spot is None and not self.should_hunt_dwarf():
+            yield False
+        yield True
+        if spot is not None:
+            self._visit_tool_spot(spot)
+        else:
+            self.hunt_dwarf()
+
+    def _local_tool_spot(self):
+        agent = self.agent
+        here = agent.current_level().key()
+        dis = agent.bfs()
+        spots = [(dis[p], p) for k, p in self.tool_spots
+                 if k == here and (k, p) not in self._fetch_given_up and dis[p] != -1]
+        return min(spots)[1] if spots else None
+
+    def _visit_tool_spot(self, spot):
+        agent = self.agent
+        key = agent.current_level().key()
+        if (agent.blstats.y, agent.blstats.x) != spot:
+            tries = self._spot_visits.get((key, spot), 0) + 1
+            self._spot_visits[(key, spot)] = tries
+            if tries > 20:
+                self._fetch_given_up.add((key, spot))
+                return
+            agent.go_to(*spot)
+            return
+        agent.inventory.pickup_and_drop_items().run()
+        agent.log(f'DIVE checked the pile at {spot}: tool {self.digging_tool()!r}')
+        self._fetch_given_up.add((key, spot))
+        self.tool_spots.discard((key, spot))
+
+    def first_level_done(self):
+        """The tour's Dlvl 1 grind ends at XL 8 (DT6A), or earlier for a tool run."""
+        xl = self.agent.blstats.experience_level
+        return xl >= 8 or (TOOL_RUN_XL is not None and xl >= TOOL_RUN_XL)
+
+    def _min_xl(self, default):
+        return default if TOOL_RUN_XL is None else min(default, TOOL_RUN_XL)
+
+    def should_hunt_dwarf(self):
+        agent = self.agent
+        if not DWARF_HUNT or self._dwarves_killed >= DWARF_HUNT_MAX_KILLS:
+            return False
+        if not self.diving and (not HUNT_IN_TOUR or agent.blstats.experience_level < self._min_xl(HUNT_MIN_XL)):
+            return False
+        if self.digging_tool() is not None or self._fetch is not None:
+            return False
+        level = agent.current_level()
+        if level.dungeon_number != Level.GNOMISH_MINES or level.key() == agent.global_logic.minetown_level:
+            return False
+        bl = agent.blstats
+        if bl.hitpoints < 0.7 * bl.max_hitpoints or bl.hunger_state >= Hunger.WEAK:
+            return False
+        started = self._hunt_started.setdefault(level.key(), bl.time)
+        if bl.time - started > DWARF_HUNT_TURNS:
+            return False
+        return bool(self._peaceful_dwarves())
+
+    def hunt_dwarf(self):
+        agent = self.agent
+        targets = self._peaceful_dwarves()
+        if not targets:
+            return
+        _, y, x = targets[0]
+        pos = (agent.blstats.y, agent.blstats.x)
+        if not utils.adjacent(pos, (y, x)):
+            agent.go_to(y, x, stop_one_before=True, max_steps=2)
+            return
+        agent.log(f'DIVE attacking a peaceful dwarf at {(y, x)} for its digging tool')
+        self._hunting = True
+        with agent.atom_operation():
+            agent.step(A.Command.FIGHT)
+            agent.direction(agent.calc_direction(pos[0], pos[1], y, x))
+        # it is hostile now: re-list the monsters so the fight logic takes over
+        agent.monster_tracker.on_panic()
+
+    def _diggable_spot(self, py, px):
         agent = self.agent
         level = agent.current_level()
-        if level.key() in self.undiggable or level.dungeon_number not in MAIN_LINE:
+        if level.objects[py, px] not in PLAIN_FLOOR or level.shop[py, px] or level.shop_interior[py, px] or \
+                (level.key(), (py, px)) in self._bad_dig_spots:
             return False
-        wand = self.digging_wand()
-        if wand is None:
-            return False
-        y, x = agent.blstats.y, agent.blstats.x
+        # a hole next to water or lava fills with it (dig.c fillholetyp looks at the 3x3 square)
+        around = agent.glyphs[max(py - 1, 0):py + 2, max(px - 1, 0):px + 2]
+        around_known = level.objects[max(py - 1, 0):py + 2, max(px - 1, 0):px + 2]
+        return not utils.isin(around, WET).any() and not utils.isin(around_known, WET).any()
 
-        def diggable_spot(py, px):
-            if level.objects[py, px] not in PLAIN_FLOOR:
+    def try_dig_down(self):
+        """Dig down with a pick-axe (or zap a wand of digging down): one level per hole, and on
+        Medusa's level it skips the water. Dig from plain floor with no water around (a hole beside
+        water floods) and outside shops (the shopkeeper grabs the pack of a customer falling through)."""
+        agent = self.agent
+        level = agent.current_level()
+        key = level.key()
+        if key in self.undiggable or level.dungeon_number not in MAIN_LINE:
+            return False
+        tool = self.digging_tool() if agent.blstats.time >= self._dig_blocked_until else None
+        wand = self.digging_wand() if tool is None else None
+        if tool is None and wand is None:
+            return False
+        # a '>' a few steps away is as fast, and arriving on the up stairs keeps a way back
+        dis = agent.bfs()
+        for d, _, _, kind in self.down_targets():
+            if kind == 'stairs' and d <= DIG_STAIRS_RADIUS:
                 return False
-            around = agent.glyphs[max(py - 1, 0):py + 2, max(px - 1, 0):px + 2]
-            return not utils.isin(around, WET).any()
-
-        if not diggable_spot(y, x):
-            dis = agent.bfs()
+        y, x = agent.blstats.y, agent.blstats.x
+        if not self._diggable_spot(y, x):
             spots = [(dis[p], p) for p in zip(*utils.isin(level.objects, PLAIN_FLOOR).nonzero())
-                     if dis[p] > 0 and diggable_spot(*p)]
+                     if dis[p] > 0 and self._diggable_spot(*p)]
             if not spots:
                 return False
             agent.go_to(*min(spots)[1])
             return True
+        if tool is not None:
+            if agent.blstats.hitpoints < DIG_REST_BELOW * agent.blstats.max_hitpoints:
+                self._task('rest before digging')
+                agent.search(1 if agent.get_visible_monsters() else 20)
+                return True
+            self.dig_with_tool(tool)
+            return True
         if self.rest_if_hurt():
             return True
-        key = level.key()
         agent.log(f'DIVE zapping {wand.text!r} down')
         agent.zap(wand, '>')
         if agent.current_level().key() == key and ('too hard to dig' in agent.message or
                                                     'here is too hard' in agent.message):
             self.undiggable.add(key)
         return True
+
+    def dig_with_tool(self, tool):
+        agent = self.agent
+        key = agent.current_level().key()
+        tries = self._dig_tries.get(key, 0) + 1
+        self._dig_tries[key] = tries
+        agent.log(f'DIVE digging down with {tool.text!r} (try {tries})')
+        with agent.atom_operation():
+            tool = agent.inventory.move_to_inventory(tool)
+            agent.step(A.Command.APPLY)
+            agent.type_text(agent.inventory.items.get_letter(tool))
+            prompted = 'In what direction do you want to dig?' in agent.single_message
+            if prompted:
+                agent.direction('>')
+            elif agent.single_message.startswith('In what direction'):
+                agent.step(A.Command.ESC)
+        msg = agent.message
+        if agent.current_level().key() != key:
+            return
+        if not prompted:
+            # can't swap weapons (welded), stuck in a web, ...: try again later
+            agent.log(f'DIVE could not dig: {msg!r}')
+            self._dig_blocked_until = agent.blstats.time + 100
+        elif "isn't enough room to dig" in msg:
+            self._bad_dig_spots.add((key, (agent.blstats.y, agent.blstats.x)))
+            self._dig_tries[key] = tries - 1
+        elif 'too hard to dig' in msg or 'too hard to' in msg or tries >= DIG_MAX_TRIES:
+            agent.log(f'DIVE floor here cannot be dug through ({msg!r})')
+            self.undiggable.add(key)
 
     def descend(self):
         agent = self.agent
@@ -728,6 +1093,8 @@ class DiveLogic:
         agent = self.agent
         key = agent.current_level().key()
         if self.visited_quest or self.portal_level != key or key in self.sweep_given_up:
+            return False
+        if not SWEEP_WITH_TOOL and self.digging_tool() is not None:
             return False
         if self.sweep_started is None:
             self.sweep_started = agent.blstats.time

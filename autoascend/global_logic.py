@@ -78,6 +78,13 @@ class ItemPriority(ItemPriorityBase):
                 if item is not None:
                     add_item(item)
 
+        # the dive digs down with a pick-axe: keep one (the tour drops them for lighter loot)
+        dive = getattr(self.agent.global_logic, 'dive', None)
+        if dive is not None and dive.keep_digging_tool():
+            tool = dive.best_digging_tool(forced_items + items)
+            if tool is not None:
+                add_item(tool)
+
         for item in items:
             if item.is_unambiguous():
                 if item.object in [
@@ -557,7 +564,7 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                condition = lambda: self.agent.blstats.experience_level >= 8
+                condition = self.dive.first_level_done
                 # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
                 #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
                 level = (Level.DUNGEONS_OF_DOOM, 1)
@@ -649,6 +656,10 @@ class GlobalLogic:
     def global_strategy(self):
         return (
             self.current_strategy().repeat()
+            # lowest priority: a peaceful dwarf's pick-axe while in the Mines (dive_logic.DWARF_HUNT)
+            .preempt(self.agent, [
+                self.dive.hunt_strategy(),
+            ])
             .preempt(self.agent, [
                 self.solve_sokoban_strategy()
                 .condition(lambda: self.milestone == Milestone.SOLVE_SOKOBAN and

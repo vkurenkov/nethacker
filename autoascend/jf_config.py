@@ -13,6 +13,10 @@ import os
 #   hunger prayer below XL 5 -- these reshuffle games from the first prayer on.
 EARLY_FIXES = False
 LATE_FIXES = False
+# the rarest-hazard subset of LATE_FIXES (gas spore next to the pet, cockatrice-family corpse
+# squares, spotted/ochre jelly and gelatinous cube melee): these first fire close to the deaths
+# they prevent, so they barely perturb the elite's public trajectories
+HAZARD_FIXES = False
 # master switch kept for older experiment configs: sets both
 TOUR_FIXES = None
 # Excalibur dips only at >= 90% HP with a prayer ready (astra); changes the tour
@@ -32,3 +36,5 @@ if _raw:
 
 if TOUR_FIXES is not None:
     EARLY_FIXES = LATE_FIXES = bool(TOUR_FIXES)
+if LATE_FIXES:
+    HAZARD_FIXES = True

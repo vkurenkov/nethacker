@@ -285,7 +285,9 @@ class ItemManager:
         ) = matches[0]
         # TODO: effects, uses
 
-        if info in {'being worn', 'being worn; slippery', 'wielded', 'chained to you'} or info.startswith(
+        # rings: a foocubus puts one on (s6 dive): an unparsed '(on right hand)' blinded the whole inventory
+        if info in {'being worn', 'being worn; slippery', 'wielded', 'chained to you',
+                    'on right hand', 'on left hand'} or info.startswith(
                 'weapon in ') or \
                 info.startswith('tethered weapon in '):
             equipped = True

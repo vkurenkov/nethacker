@@ -97,7 +97,7 @@ def ranged_priority(agent, dy, dx, monsters):
             # hypothesis: a gas spore's explosion (radius 1) that kills the pet costs -15 alignment
             # ("rumble of distant thunder"), after which every prayer fails and the character
             # starves (DT6A seed 1). Astra: kill spores from range only, away from pets.
-            if jf_config.LATE_FIXES and mon.mname == 'gas spore' and \
+            if jf_config.HAZARD_FIXES and mon.mname == 'gas spore' and \
                     utils.any_in(agent.glyphs[max(y - 1, 0):y + 2, max(x - 1, 0):x + 2], G.PETS):
                 return None
             return ret, y, x, monster[0]
@@ -318,7 +318,8 @@ def goto_action(agent, priority, monsters):
         if not adjacent((agent.blstats.y, agent.blstats.x), (my, mx)):
             # and not mon.mname in ONLY_RANGED_SLOW_MONSTERS:
             return [(1, ('go_to', my, mx))]
-    assert 0, monsters
+    # every monster adjacent and nothing to do (e.g. no weapon known): fight2 falls back to moving/waiting
+    return []
 
 
 def get_corridors_priority_map(walkable):
