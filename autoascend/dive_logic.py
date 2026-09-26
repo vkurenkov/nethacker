@@ -220,6 +220,7 @@ class DiveLogic:
         self._hp_history = []              # (turn, hp) of the last few turns
         self._status_logged = -1
         self._murder_turn = -1
+        self._demon_vigil_until = -1       # turn until which a released water demon is kept off with Elbereth
         self._faint_start = None           # turn the current faint began (last awake observation)
         self._last_update_turn = 0
         self.pet_seen = {}                 # level key -> last turn a pet glyph was in view
@@ -581,6 +582,36 @@ class DiveLogic:
             agent.engrave('Elbereth')
             return
         agent.search()
+
+    WATER_DEMON = None
+
+    @Strategy.wrap
+    def water_demon_vigil(self):
+        """A water demon released by a fountain dip summons other demons whenever it attacks in melee
+        (mhitu.c, 1 in 13): one fetched Yeenoghu within two turns. Demons respect Elbereth and a scared
+        monster doesn't melee, so stand on Elbereth (never attacking from it) while one is close."""
+        agent = self.agent
+        turn = agent.blstats.time
+        if 'You unleash a water demon' in agent.message:
+            self._demon_vigil_until = turn + 150
+        if turn > self._demon_vigil_until or agent.current_level().dungeon_number == GEHENNOM:
+            yield False
+        if DiveLogic.WATER_DEMON is None:
+            DiveLogic.WATER_DEMON = MON.from_name('water demon')
+        y0, x0 = agent.blstats.y, agent.blstats.x
+        demons = [p for p in zip(*utils.isin(agent.glyphs, [DiveLogic.WATER_DEMON]).nonzero())
+                  if max(abs(p[0] - y0), abs(p[1] - x0)) <= 2]
+        if not demons:
+            yield False
+        engraving = (agent.inventory.engraving_below_me or '').lower()
+        if engraving != 'elbereth' and not agent.can_engrave():
+            yield False
+        yield True
+        if engraving != 'elbereth':
+            agent.log('DEMON vigil: Elbereth against the water demon')
+            agent.engrave('Elbereth')
+            return
+        agent.search(1)
 
     @Strategy.wrap
     def leave_minetown_hallucinating(self):

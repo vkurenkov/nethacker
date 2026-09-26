@@ -63,6 +63,7 @@ class Agent:
         self._fainting_since = None   # turn Fainting was first seen (jf_config.STARVE_CLOCK)
         self._faint_measure = None    # (turn, uhunger estimate) from the last faint's length
         self._pray_reason = None      # which rule asked for the next prayer (logged)
+        self._no_kick_until = -1      # wounded legs: no kicking until this turn
         self._last_resort_stairs_turn = -10 ** 9
         self.prayer_failed = False
         self._monk_meat_meals = 0
@@ -1023,9 +1024,15 @@ class Agent:
                 self.stats_logger.log_event(f'cast_fail_{spell_name}')
 
     def kick(self, y, x=None):
+        if self.blstats.time < self._no_kick_until:
+            raise AgentPanic('legs too wounded to kick')
         with self.panic_if_position_changes():
             with self.atom_operation():
                 self.step(A.Command.KICK)
+                if 'no shape for kicking' in self.message or 'cannot kick effectively' in self.message:
+                    # wounded legs: the door-kicking loop retried until the turn-inactivity guard fired
+                    self._no_kick_until = self.blstats.time + 100
+                    raise AgentPanic('legs too wounded to kick')
                 self.direction(self.calc_direction(self.blstats.y, self.blstats.x, y, x))
 
     def search(self, max_count=1):
@@ -1719,10 +1726,14 @@ class Agent:
         if jf_config.EARLY_FIXES or jf_config.EXACT_PRAYER:
             low_hp = self._critically_low_hp()
         else:
+            # DT6A's absolute 'HP < 12' never at full HP or polymorphed: turned into a wererat (8 max HP), an
+            # XL6 prayed at 8/8 -- no trouble per pray.c, 538 turns after its last prayer: failed, god angry
             low_hp = (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
                       * self.blstats.max_hitpoints or
-                      self.blstats.hitpoints < (12 if self.character.role != Character.MONK or
-                                                self._monk_meat_meals == 0 else 8))
+                      (self.blstats.hitpoints < (12 if self.character.role != Character.MONK or
+                                                 self._monk_meat_meals == 0 else 8) and
+                       self.blstats.hitpoints < self.blstats.max_hitpoints and
+                       not self.character.prop.polymorph))
         if (
                 (self.is_safe_to_pray(500) and low_hp)
                 or self.fainting_prayer_due()
@@ -1762,8 +1773,11 @@ class Agent:
                     return
                 items = flatten_items(self.inventory.items)
                 _, my, mx, _, _ = adjacent[0]
+                # in Minetown (or with the Watch in view) a ray or an area scroll can hit the Watch (a
+                # scroll of earth dropped a boulder on a watch captain): only the potions, which touch us
+                watch = combat.fight_heur.missiles_risk_the_watch(self)
                 for item in items:
-                    if item.category == nh.WAND_CLASS and not item.is_unambiguous() and \
+                    if item.category == nh.WAND_CLASS and not item.is_unambiguous() and not watch and \
                             not self.inventory.is_known_empty(item) and item.comment != 'EMPT':
                         yield True
                         self.log(f'LAST RESORT: zapping unknown {item.text!r}')
@@ -1776,7 +1790,7 @@ class Agent:
                         self.inventory.quaff(item)
                         return
                 for item in items:
-                    if item.category == nh.SCROLL_CLASS and not item.is_unambiguous():
+                    if item.category == nh.SCROLL_CLASS and not item.is_unambiguous() and not watch:
                         yield True
                         self.log(f'LAST RESORT: reading unknown {item.text!r}')
                         with self.atom_operation():
@@ -1862,8 +1876,9 @@ class Agent:
                     self.inventory.quaff(item)
                     return
 
-            # pray
-            if self.is_safe_to_pray():
+            # pray: lycanthropy is a nuisance, not an emergency -- wait for the gap where prayers fail ~1%
+            # (at the old 500-turn gap rnz(350) leaves ~12% of these too soon)
+            if self.is_safe_to_pray(jf_config.WEAK_PRAYER_GAP):
                 yield True
                 self.pray()
                 return

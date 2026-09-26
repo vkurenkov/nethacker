@@ -291,11 +291,11 @@ class ExplorationLogic:
                                     if self.agent.open_door(py, px):
                                         break
                                 else:
-                                    if kick_doors and not closed_shop:
+                                    if kick_doors and not closed_shop and self.agent.blstats.time >= self.agent._no_kick_until:
                                         while self.agent.glyphs[py, px] in G.DOOR_CLOSED:
                                             self.agent.kick(py, px)
                             else:
-                                if kick_doors and not closed_shop:
+                                if kick_doors and not closed_shop and self.agent.blstats.time >= self.agent._no_kick_until:
                                     while self.agent.glyphs[py, px] in G.DOOR_CLOSED:
                                         self.agent.kick(py, px)
                     break

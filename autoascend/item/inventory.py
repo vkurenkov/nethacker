@@ -398,6 +398,9 @@ class Inventory:
                 self.agent.step(A.Command.LOOT)
                 while True:
                     if "You don't find anything here to loot." in self.agent.message:
+                        # a 'possible container' that isn't one: skip the square (a jf21 game retried the
+                        # #loot here until the turn-inactivity guard fired, 31 times)
+                        self.multi_container_squares.add(self._here())
                         raise AgentPanic('no container below me')
                     self._escape_multi_container_menu()
                     assert 'There is ' in self.agent.message and ', loot it?' in self.agent.message, self.agent.message
