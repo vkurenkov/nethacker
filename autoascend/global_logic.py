@@ -543,7 +543,10 @@ class GlobalLogic:
         # SAFE_DIPS (full HP + prayer ready, astra) changes the tour; off until tested on its own
         bl = self.agent.blstats
         if not jf_config.SAFE_DIPS:
-            return bl.experience_level >= 7
+            # a released water demon (1 dip in ~40) is deadlier to a starving or hurt character; dipping
+            # can wait for a healthy moment (SAFE_DIPS' prayer-ready rule halved the Excaliburs)
+            return bl.experience_level >= 7 and bl.hunger_state < Hunger.WEAK and \
+                bl.hitpoints >= 0.7 * bl.max_hitpoints
         return bl.experience_level >= 7 and bl.hitpoints >= 0.9 * bl.max_hitpoints and \
             self.agent.is_safe_to_pray(800)
 

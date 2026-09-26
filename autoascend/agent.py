@@ -62,6 +62,7 @@ class Agent:
         self.prayer_hold_until = -1
         self._fainting_since = None   # turn Fainting was first seen (jf_config.STARVE_CLOCK)
         self._faint_measure = None    # (turn, uhunger estimate) from the last faint's length
+        self._pray_reason = None      # which rule asked for the next prayer (logged)
         self._last_resort_stairs_turn = -10 ** 9
         self.prayer_failed = False
         self._monk_meat_meals = 0
@@ -865,6 +866,7 @@ class Agent:
         if not jf_config.STARVE_CLOCK:
             return self.is_safe_to_pray(jf_config.FAINT_PRAYER_GAP)
         if self.is_safe_to_pray(jf_config.FAINT_PRAYER_GAP_LONG):
+            self._pray_reason = 'faint-gap'
             return True
         # waiting out the clock is for quiet moments: a Fainting character wakes up to free hits (a jf8
         # grind fainted on a worn Elbereth next to a pony and a rothe at a 1021-turn gap and died 25
@@ -873,10 +875,18 @@ class Agent:
         # at 1002-1019-turn gaps three times, where rnz(350) fails ~5.5% of the time.)
         # A hostile within 3 counts too: faints are helpless and a dust Elbereth wears (a jf8 grind
         # fainted next to giant ants on a smudged one).
+        # Only real threats count: with any hostile within 3 this rule made 122 of ~480 prayers in jf14/jf16
+        # at 1000-1399-turn gaps (3.5-5.4% failure); a newt or jackal can't kill a sheltering character.
         dive = self.global_logic.dive
+
+        def threat(m):
+            if m[0] <= 5 and dive._ignores_elbereth(m[3]):
+                return True
+            return m[0] <= 2 and (combat.monster_utils.is_dangerous_monster(m) or getattr(m[3], 'mlevel', 0) >= 4)
+
         if self.is_safe_to_pray(jf_config.FAINT_PRAYER_GAP) and \
-                (bl.hitpoints < 0.5 * bl.max_hitpoints or
-                 any(m[0] <= 3 or (m[0] <= 5 and dive._ignores_elbereth(m[3])) for m in self.get_visible_monsters())):
+                (bl.hitpoints < 0.5 * bl.max_hitpoints or any(threat(m) for m in self.get_visible_monsters())):
+            self._pray_reason = 'faint-danger'
             return True
         since = self._fainting_since if self._fainting_since is not None else bl.time
         death_line = -(100 + 10 * bl.constitution)
@@ -886,6 +896,7 @@ class Agent:
         else:  # no faint measured yet this spell: the worst case, 1 nutrition per turn from 0
             near = bl.time >= since + (-death_line) - jf_config.STARVE_MARGIN
         if near and not self.prayer_failed:
+            self._pray_reason = f'faint-deadline est={est}'
             # starving for certain otherwise: a prayer that may fail is the only way out. Once, though:
             # after a failure the god is angry and more prayers only bring his wrath (a clock-jf6 game
             # prayed at gaps of 534, 4, 22, 2 turns and was 'killed by the wrath of Tyr')
@@ -928,7 +939,10 @@ class Agent:
                    not item.is_corpse() for item in flatten_items(self.inventory.items))
 
     def pray(self):
-        self.log(f'PRAY hp={self.blstats.hitpoints}/{self.blstats.max_hitpoints} hunger={self.blstats.hunger_state}')
+        gap = None if self.last_prayer_turn is None else self.blstats.time - self.last_prayer_turn
+        self.log(f'PRAY hp={self.blstats.hitpoints}/{self.blstats.max_hitpoints} hunger={self.blstats.hunger_state} '
+                 f'gap={gap} reason={self._pray_reason}')
+        self._pray_reason = None
         history_len = len(self._message_history)
         self.step(A.Command.PRAY)
         self.last_prayer_turn = self.blstats.time

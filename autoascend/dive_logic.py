@@ -268,7 +268,10 @@ class DiveLogic:
         if 'You faint from lack of food' in msg and self._faint_start is None:
             self._faint_start = self._last_update_turn
         if 'You regain consciousness' in msg and self._faint_start is not None:
-            moves = (turn - self._faint_start) * 4 / 3   # Fast (XL 7+): 4 moves per 3 turns; errs early
+            # moves per turn: a Valkyrie is intrinsically Fast from XL 7 (16 speed on average, 4/3), not before
+            # (counting 4/3 at XL 1-6 read hunger 1.3x too low and fired deadline prayers ~800 turns early)
+            speed = 4 / 3 if agent.blstats.experience_level >= 7 else 1
+            moves = (turn - self._faint_start) * speed
             agent._faint_measure = (turn, (10 - moves) * 10)
             self._faint_start = None
         self._last_update_turn = turn
@@ -1460,9 +1463,22 @@ class DiveLogic:
     def step_onto(self, y, x, what):
         agent = self.agent
         key = agent.current_level().key()
+        level = agent.current_level()
+        y0, x0 = agent.blstats.y, agent.blstats.x
+        if y != y0 and x != x0 and level.intact_doors[y0, x0]:
+            # no diagonal step out of a doorway: sidestep to a square orthogonal to both first
+            for my, mx in ((y0, x), (y, x0)):
+                if level.walkable[my, mx] and not level.intact_doors[my, mx] and \
+                        level.objects[my, mx] not in G.DOORS and level.objects[my, mx] not in FALL_TRAPS:
+                    agent.move(my, mx)
+                    return
         agent.log(f'DIVE stepping onto {what} at {(y, x)}')
         with agent.atom_operation():
-            agent.direction(agent.calc_direction(agent.blstats.y, agent.blstats.x, y, x))
+            agent.direction(agent.calc_direction(y0, x0, y, x))
+        if 'diagonally out of an intact doorway' in agent.message:
+            # the portal sweep looped on this 51 times without the clock moving
+            level.intact_doors[y0, x0] = True
+            raise AgentPanic('diagonal step out of a doorway')
         if agent.current_level().key() == key and (agent.blstats.y, agent.blstats.x) == (y, x):
             # didn't fall (e.g. "You escape a trap door."): step off so the next try steps on again
             agent.log(f'DIVE {what} did not trigger')
@@ -1614,6 +1630,15 @@ class DiveLogic:
         if portals:
             y, x = portals[0]
             if not utils.adjacent((agent.blstats.y, agent.blstats.x), (y, x)):
+                dis = agent.bfs()
+                if not any(dis[ny, nx] != -1 for ny, nx in agent.neighbors(y, x)):
+                    # seen but walled off for now (a jf18 dive asserted 'no reachable neighbor' 3486
+                    # times): uncover a way there, or give the sweep up on this level
+                    if self.exploration(0).run(return_condition=True):
+                        return
+                    agent.log('DIVE portal in view but unreachable: sweep given up here')
+                    self.sweep_given_up.add(level.key())
+                    return
                 agent.go_to(y, x, stop_one_before=True)
                 return
             self.step_onto(y, x, 'magic portal')
