@@ -73,9 +73,11 @@ class ItemPriority(ItemPriorityBase):
             if item is not None:
                 add_item(item)
 
+            dive_ = getattr(self.agent.global_logic, 'dive', None)
+            no_shield = dive_ is not None and dive_.mattock_digger()
             for item in self.agent.inventory.get_best_armorset(items=forced_items + items,
                                                                allow_unknown_status=allow_unknown_status):
-                if item is not None:
+                if item is not None and not (no_shield and getattr(item.objs[0], 'sub', None) == O.ARM_SHIELD):
                     add_item(item)
 
         # the dive digs down with a pick-axe: keep one (the tour drops them for lighter loot)
@@ -607,6 +609,9 @@ class GlobalLogic:
 
             if condition():
                 self.milestone = Milestone(int(self.milestone) + 1)
+                if jf_config.SKIP_SOKOBAN and self.milestone in (Milestone.FIND_SOKOBAN, Milestone.SOLVE_SOKOBAN) \
+                        and self.agent.character.race in (Character.DWARF, Character.GNOME):
+                    self.milestone = Milestone.FIND_MINES_END
                 continue
 
 
@@ -686,6 +691,10 @@ class GlobalLogic:
             ])
             .preempt(self.agent, [
                 self.agent.fight2(),
+            ])
+            # a digger with room to dig finishes the hole instead of walking to a fight
+            .preempt(self.agent, [
+                self.dive.dig_first(),
             ])
             # astra's survival layer, only once diving (the tour keeps the elite's proven behaviour)
             .preempt(self.agent, [

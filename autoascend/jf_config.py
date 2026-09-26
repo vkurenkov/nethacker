@@ -27,6 +27,13 @@ STARVING_EATS = True
 SURVIVAL_IN_TOUR = False
 # at critically low HP with no safe prayer and a hostile adjacent: stairs, unknown wands/potions/scrolls
 LAST_RESORT = True
+# Komershan's verified leader (0.2033 on hidden seeds): dwarves and gnomes skip Sokoban and walk the
+# peaceful Mines from Minetown straight to Mines' End (Dlvl 10-13: 0.126-0.26 banked early)
+SKIP_SOKOBAN = False
+# pray for HP only at pray.c's critically_low_hp (DT6A's 'HP < 12' prays with no trouble to fix: no
+# heal, and a failure if the timeout isn't 0), and allow the first prayer from turn 100 (the timeout
+# starts at 300; major trouble needs <= 200)
+EXACT_PRAYER = False
 
 _raw = os.environ.get('JF_CFG')
 if _raw:

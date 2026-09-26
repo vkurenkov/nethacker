@@ -60,6 +60,7 @@ class Agent:
         self.last_bfs_step = None
         self.last_prayer_turn = None
         self.prayer_hold_until = -1
+        self._last_resort_stairs_turn = -10 ** 9
         self.prayer_failed = False
         self._monk_meat_meals = 0
         self._previous_glyphs = None
@@ -804,8 +805,14 @@ class Agent:
         # the dive's dwarf hunt: a peaceful kill may cost Luck -1, and prayers fail while Luck < 0
         if self.blstats.time < self.prayer_hold_until:
             return False
+        # after a failed prayer the god stays angry (pray.c: a too-soon prayer sets ugangr, Luck -3):
+        # 45 of 46 prayers made within 500 turns of a failure failed again, some summoning a minion
+        # ('Thou durst call upon me? Then die, mortal!'); half of those 2000+ turns later worked
+        if self.prayer_failed and self.last_prayer_turn is not None and \
+                self.blstats.time - self.last_prayer_turn < self.PRAYER_FAILURE_WAIT:
+            return False
         return (
-                (self.last_prayer_turn is None and self.blstats.time > 300) or
+                (self.last_prayer_turn is None and self.blstats.time > (100 if jf_config.EXACT_PRAYER else 300)) or
                 (self.last_prayer_turn is not None and self.blstats.time - self.last_prayer_turn > limit)
         )
 
@@ -816,6 +823,9 @@ class Agent:
     # prayer timeout is rnz(350) after a successful prayer and hunger is fixed only if it is below 200,
     # so a hunger prayer fails in ~7% of cases after 900 turns but only in ~2% after 1200 turns
     SAFE_HUNGER_PRAYER_GAP = 1200
+    PRAYER_FAILURE_WAIT = 2000
+    PRAYER_SUCCESS_MESSAGES = ('is well-pleased', 'is pleased.', 'is satisfied', 'hopeful feeling',
+                               'You feel much better', 'stomach feels content')
 
     def _critically_low_hp(self):
         """pray.c critically_low_hp(): the only HP level at which prayer fixes anything. DT6A's
@@ -851,6 +861,8 @@ class Agent:
         messages = ' '.join(self._message_history[history_len:] + [self.message])
         if any(msg in messages for msg in self.PRAYER_FAILURE_MESSAGES):
             self.prayer_failed = True
+        elif any(msg in messages for msg in self.PRAYER_SUCCESS_MESSAGES):
+            self.prayer_failed = False  # pleased() only runs with the god appeased and Luck >= 0
         # TODO: return value
         return True
 
@@ -1595,7 +1607,7 @@ class Agent:
             self.inventory.quaff(items[0])
             return
 
-        if jf_config.EARLY_FIXES:
+        if jf_config.EARLY_FIXES or jf_config.EXACT_PRAYER:
             low_hp = self._critically_low_hp()
         else:
             low_hp = (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
@@ -1621,14 +1633,22 @@ class Agent:
             if adjacent:
                 level = self.current_level()
                 here = level.objects[y, x]
-                if here in G.STAIR_DOWN and level.dungeon_number != Level.SOKOBAN:
+                # the stairs once: after that the same crowd followed us (an s9 rescue dive ping-ponged
+                # down/retreat-up at 15 HP until it died, never trying its wands or potions)
+                stairs_ok = self.blstats.time - self._last_resort_stairs_turn > 20
+                dive = self.global_logic.dive
+                if stairs_ok and here in G.STAIR_DOWN and level.dungeon_number != Level.SOKOBAN:
                     yield True
                     self.log('LAST RESORT: down the stairs')
+                    self._last_resort_stairs_turn = self.blstats.time
+                    dive._retreat_blocked_until = self.blstats.time + 20
                     self.move('>')
                     return
-                if here in G.STAIR_UP and self.blstats.depth > 1 and level.dungeon_number != Level.SOKOBAN:
+                if stairs_ok and here in G.STAIR_UP and self.blstats.depth > 1 and \
+                        level.dungeon_number != Level.SOKOBAN:
                     yield True
                     self.log('LAST RESORT: up the stairs')
+                    self._last_resort_stairs_turn = self.blstats.time
                     self.move('<')
                     return
                 items = flatten_items(self.inventory.items)
