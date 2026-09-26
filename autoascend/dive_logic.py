@@ -150,6 +150,12 @@ RESCUE_DIVE = True
 # and the character is Weak with nothing to eat. The tour would starve on the spot (a clock-jf6 XL8
 # starved in the Mines 1700 turns after an unlucky prayer); the dive at least banks depth on the way.
 LATE_RESCUE = True
+# Experiment: skip the Dlvl 1 grind altogether (38% of unseen games are lost there: prayer failures,
+# fainting deaths) and dive from EARLY_DIVE_TURN on the rescue route -- down the Mines (peaceful to a
+# dwarf), hunting dwarves for a pick-axe, digging the main dungeon once one is in hand. Even a failed
+# early dive that reaches Dlvl 10-12 scores 0.13-0.21, above a grind death (0.02-0.07).
+EARLY_DIVE = False
+EARLY_DIVE_TURN = 1
 # Ditch the pet for the Dlvl 1 grind (off: experiment). On 15 unseen grinds the pet ate ~40% of the
 # corpses (497 meals vs our 732) and made ~10% of the kills (no XP for us); food is what the grind runs
 # out of (hunger prayers, their failures, starvation). Take it down to Dlvl 2 and come back up alone
@@ -213,6 +219,8 @@ class DiveLogic:
         self.undiggable = set()            # level keys where the floor is too hard to dig
         self._hp_history = []              # (turn, hp) of the last few turns
         self._status_logged = -1
+        self._murder_turn = -1
+        self.pet_seen = {}                 # level key -> last turn a pet glyph was in view
         self._last_pos = None              # (level key, (y, x)) at the previous update
         self._arrived = None               # (level key, turn) of the last stairs arrival
         self._avoid_stairs_until = {}      # (level key, (y, x)) -> turn: don't take this '>' before
@@ -271,6 +279,14 @@ class DiveLogic:
                     agent.log(f'DIVE fell through a trap door at {prev[1]} on {prev[0]}; remembered')
         self._last_pos = (key, pos)
         self._note_digging_tools(key, pos)
+        if utils.any_in(agent.glyphs, G.PETS):
+            self.pet_seen[key] = turn
+        if 'You murderer!' in agent.message and self._murder_turn != turn:
+            # mon.c: killing a peaceful human (even a watchman the Watch set hostile) is Luck -2, and a
+            # prayer with Luck < 0 fails; Luck recovers 1 per 600 turns
+            self._murder_turn = turn
+            agent.prayer_hold_until = max(getattr(agent, 'prayer_hold_until', -1), turn) + 1200
+            agent.log('MURDER: Luck -2, prayers held 1200 turns')
         if self._hunting and self._DWARF_KILLED.search(agent.message):
             self._hunting = False
             self._dwarves_killed += 1
@@ -334,6 +350,8 @@ class DiveLogic:
         rescue = RESCUE_DIVE and agent.prayer_failed and gl.milestone == Milestone.BE_ON_FIRST_LEVEL
         late_rescue = LATE_RESCUE and agent.prayer_failed and gl.milestone != Milestone.BE_ON_FIRST_LEVEL and \
             agent.blstats.hunger_state >= Hunger.WEAK and not agent.edible_carried_food()
+        rescue = rescue or (EARLY_DIVE and gl.milestone == Milestone.BE_ON_FIRST_LEVEL and
+                            agent.blstats.time >= EARLY_DIVE_TURN)
         if xl >= DIVE_XL or gl.milestone >= Milestone.GO_DOWN or agent.blstats.time >= DIVE_TURN or \
                 (xl >= self._min_xl(DIG_DIVE_XL) and self.digging_tool() is not None) or rescue or late_rescue:
             tag = ', rescue' if rescue else ', late rescue' if late_rescue else ''
@@ -548,6 +566,27 @@ class DiveLogic:
             agent.engrave('Elbereth')
             return
         agent.search()
+
+    @Strategy.wrap
+    def leave_minetown_hallucinating(self):
+        """Hallucinating in Minetown every monster looks random, so any fight may hit a peaceful and bring
+        the Watch (killing even an angry watchman is murder: Luck -2). Take the nearest stairs out."""
+        agent = self.agent
+        level = agent.current_level()
+        if not agent.character.prop.hallu or level.key() != agent.global_logic.minetown_level:
+            yield False
+        dis = agent.bfs()
+        stairs = [(dis[y, x], y, x) for y, x in zip(*utils.isin(level.objects, G.STAIR_UP, G.STAIR_DOWN).nonzero())
+                  if dis[y, x] != -1]
+        if not stairs:
+            yield False
+        yield True
+        _, y, x = min(stairs)
+        if (agent.blstats.y, agent.blstats.x) != (y, x):
+            agent.go_to(y, x)
+            return
+        agent.log('HALLU leaving Minetown')
+        agent.move('<' if level.objects[y, x] in G.STAIR_UP else '>')
 
     @Strategy.wrap
     def faint_shelter(self):

@@ -18,7 +18,13 @@ def spore_blast_hits_friend(agent, y, x):
     """A gas spore killed at (y, x) explodes over its 3x3 square: a pet or peaceful there gets hurt and
     the hero gets the blame (a shopkeeper next to a spore turned hostile and killed an XL8 Valkyrie)."""
     sl = np.s_[max(y - 1, 0):y + 2, max(x - 1, 0):x + 2]
-    return bool(agent.monster_tracker.peaceful_monster_mask[sl].any()) or utils.any_in(agent.glyphs[sl], G.PETS)
+    if agent.monster_tracker.peaceful_monster_mask[sl].any() or utils.any_in(agent.glyphs[sl], G.PETS):
+        return True
+    # a pet seen here lately but out of view now may be right behind the spore: a thrown dagger's blast
+    # killed an unseen kitten ('You kill it!', 'rumble of distant thunder': -15 alignment on a Valkyrie's
+    # record that starts at 0, so the first grind prayer failed at T1364)
+    seen = agent.global_logic.dive.pet_seen.get(agent.current_level().key())
+    return seen is not None and agent.blstats.time - seen < 100 and not utils.any_in(agent.glyphs, G.PETS)
 
 
 def melee_monster_priority(agent, monsters, monster):

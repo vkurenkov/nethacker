@@ -52,6 +52,8 @@ FAINT_SHELTER = True
 # the gap (the fixed 1000-turn gap could starve a character whose last prayer was an HP one, and it
 # prays where rnz(350) still fails ~5.5% of the time; ~2.3% at 1200).
 STARVE_CLOCK = True
+# give up looking for the Mines entrance after this many turns and go on to Sokoban (0: never)
+MINES_SEARCH_TURNS = 3500
 FAINT_PRAYER_GAP_LONG = 1200
 STARVE_MARGIN = 60
 

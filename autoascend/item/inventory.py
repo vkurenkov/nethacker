@@ -1290,8 +1290,14 @@ class Inventory:
         main = self.items.main_hand
         if main is not None and main.status == Item.CURSED and getattr(main.objs[0], 'bi', False):
             yield False
+        bl = self.agent.blstats
+        hurt = bl.hitpoints < max(15, bl.max_hitpoints // 2)
         for item in self.agent.inventory.items_below_me:
             if item.is_possible_container():
+                # an unidentified bag may be a bag of tricks: 'It develops a huge set of teeth and bites
+                # you!' (d10) killed an XL1 that had just prayed out of a bear trap
+                if hurt and any(o.name == 'bag of tricks' for o in item.objs):
+                    continue
                 if not yielded:
                     yielded = True
                     yield True

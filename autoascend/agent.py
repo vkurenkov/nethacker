@@ -457,6 +457,19 @@ class Agent:
             if 'Would you wear it for me?' in self.single_message:
                 self.type_text('n')
                 return
+            # Dlvl 1's up stairs leave the dungeon and end the game (a jf11 agent that took over mid-game
+            # hadn't recorded them, explored them as unknown stairs and said 'y': score 0.018 at T875)
+            if 'Still climb?' in self.single_message:
+                self.type_text('n')
+                if hasattr(self, 'blstats'):
+                    self.current_level().stair_destination[self.blstats.y, self.blstats.x] = \
+                        ((Level.PLANE, 1), (None, None))
+                return
+            # an opened tin: 'It smells like dwarves. Eat it?' was answered 'y' -- 'You consume pureed
+            # dwarf. You cannibal! You will regret this!' (Luck -2..-5, and prayers fail with Luck < 0)
+            if 'Eat it?' in self.single_message and self._bad_tin(self.message):
+                self.type_text('n')
+                return
             self.type_text('y')
             return
 
@@ -845,9 +858,15 @@ class Agent:
             return True
         # waiting out the clock is for quiet moments: a Fainting character wakes up to free hits (a jf8
         # grind fainted on a worn Elbereth next to a pony and a rothe at a 1021-turn gap and died 25
-        # turns before its deadline prayer). With a hostile in view or HP down, the old rule applies.
+        # turns before its deadline prayer). When actually hurt, or with a monster that Elbereth doesn't
+        # stop close by, the old 1000-turn rule applies. (Any hostile in view was too broad: jf9 prayed
+        # at 1002-1019-turn gaps three times, where rnz(350) fails ~5.5% of the time.)
+        # A hostile within 3 counts too: faints are helpless and a dust Elbereth wears (a jf8 grind
+        # fainted next to giant ants on a smudged one).
+        dive = self.global_logic.dive
         if self.is_safe_to_pray(jf_config.FAINT_PRAYER_GAP) and \
-                (self.get_visible_monsters() or bl.hitpoints < 0.7 * bl.max_hitpoints):
+                (bl.hitpoints < 0.5 * bl.max_hitpoints or
+                 any(m[0] <= 3 or (m[0] <= 5 and dive._ignores_elbereth(m[3])) for m in self.get_visible_monsters())):
             return True
         since = self._fainting_since if self._fainting_since is not None else bl.time
         deadline = since + 100 + 10 * bl.constitution
@@ -1285,7 +1304,12 @@ class Agent:
             # the bot attacked peacefuls and was arrested (~half of 13 angry-Watch games after a yellow light).
             # Only fight back when something is actually hurting us; otherwise wait it out.
             if monsters and self.character.prop.hallu and \
-                    self.current_level().dungeon_number == Level.GNOMISH_MINES and not self._hurt_recently():
+                    self.current_level().dungeon_number == Level.GNOMISH_MINES and \
+                    (not self._hurt_recently() or
+                     self.current_level().key() == self.global_logic.minetown_level):
+                # in Minetown not even when hurt: a hallucinating XL10 hit a peaceful there, killed four
+                # angry watchmen ('You murderer!' x4 = Luck -8, every later prayer failed) and starved;
+                # dive_logic.leave_minetown_hallucinating takes the stairs out instead
                 monsters = []
             allow_attack_all = self._last_turn - self._allow_attack_all_turn < 3
             only_ranged_slow_monsters = all([monster[3].mname in combat.monster_utils.ONLY_RANGED_SLOW_MONSTERS
@@ -1499,8 +1523,9 @@ class Agent:
         if permonst.mflags2 & race_flag:
             return False
 
-        # corpse aging
-        if self.blstats.time - age_turn >= 50 and \
+        # corpse aging: eat.c taints at rotted = age / (10 + rn2(20)) > 5 (a cursed corpse gets +2) and
+        # "rotten" (vomiting, passing out) from rotted > 3 -- 30 turns keeps clear of both
+        if self.blstats.time - age_turn >= 30 and \
                 monster_id not in [MON.id_from_name('lizard'), MON.id_from_name('lichen')]:
             return False
 
@@ -1555,7 +1580,9 @@ class Agent:
                 del level.corpses_to_eat[target_y, target_x]
                 return
             for item in self.inventory.items_below_me:
-                if item.is_corpse() and item.monster_id == monster_id:
+                # a stack of same-kind corpses has one merged (averaged) age we can't know: 'There are 2
+                # raven corpses here; eat one?' -> 'Ulch - that meat was tainted!', dead at Dlvl 22
+                if item.is_corpse() and item.monster_id == monster_id and item.count == 1:
                     if self._is_corpse_editable(monster_id, corpse_age):
                         if not yielded:
                             yielded = True
@@ -1752,6 +1779,24 @@ class Agent:
             self.inventory.eat(item)
             return
         yield False
+
+    _TIN_SMELL = re.compile(r'It smells like (?:the )?([A-Za-z -]+?)\.')
+    _BAD_TIN_WORDS = ('cockatrice', 'chickatrice', 'Medusa', 'green slime', 'were', 'little dog', 'large dog',
+                      'dogs', 'kitten', 'housecat', 'large cat', 'chameleon', 'doppelganger', 'sandestin',
+                      'genetic engineer')
+    _CANNIBAL_WORDS = {Character.HUMAN: ('human',),
+                       Character.DWARF: ('dwar',), Character.ELF: ('elf', 'elves', 'Woodland-el', 'Green-el',
+                                                                    'Grey-el', 'Elvenking'),
+                       Character.GNOME: ('gnom',), Character.ORC: ()}
+
+    def _bad_tin(self, message):
+        m = self._TIN_SMELL.search(message)
+        if m is None:
+            return False
+        what = m.group(1)
+        if any(w in what for w in self._BAD_TIN_WORDS):
+            return True
+        return any(w in what for w in self._CANNIBAL_WORDS.get(self.character.race, ()))
 
     def edible_carried_food(self):
         """What eat_from_inventory eats: food, but not wolfsbane or corpses other than lizard/lichen."""

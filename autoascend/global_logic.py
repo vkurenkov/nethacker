@@ -177,6 +177,8 @@ class GlobalLogic:
         self.minetown_level = None
 
         self._got_artifact = False
+        self._milestone_since = {}   # milestone -> turn it began (jf_config.MINES_SEARCH_TURNS)
+        self.mines_not_found = False
 
         self.dive = DiveLogic(agent)
 
@@ -584,7 +586,12 @@ class GlobalLogic:
                 level = (Level.SOKOBAN, 4)
 
             elif self.milestone == Milestone.FIND_GNOMISH_MINES:
-                condition = lambda: self.agent.current_level().dungeon_number == Level.GNOMISH_MINES
+                since = self._milestone_since.setdefault(self.milestone, self.agent.blstats.time)
+                # the branch hides behind unexplored rock on some Dlvl 2-4s: a jf9 game stood searching at
+                # one Dlvl 4 spot for 1000+ turns, hunger-praying until a prayer failed (35 of 118 games
+                # that left Dlvl 1 never reached the Mines; 14 of 83 that did needed 4000+ turns)
+                condition = lambda: self.agent.current_level().dungeon_number == Level.GNOMISH_MINES or \
+                    (jf_config.MINES_SEARCH_TURNS and self.agent.blstats.time - since > jf_config.MINES_SEARCH_TURNS)
                 level = (Level.GNOMISH_MINES, 1)
 
             # elif self.milestone == Milestone.FIND_LIGHT_GNOMISH_MINES:
@@ -607,7 +614,8 @@ class GlobalLogic:
                 level = (Level.SOKOBAN, 1)
 
             elif self.milestone == Milestone.FIND_MINES_END:
-                condition = lambda: self.agent.current_level().key() == (Level.GNOMISH_MINES, 9)  # TODO
+                condition = lambda: self.agent.current_level().key() == (Level.GNOMISH_MINES, 9) or \
+                    self.mines_not_found  # TODO
                 level = (Level.GNOMISH_MINES, 9)  # TODO
 
             else:
@@ -616,6 +624,13 @@ class GlobalLogic:
                 level = (Level.DUNGEONS_OF_DOOM, 100)
 
             if condition():
+                if self.milestone == Milestone.FIND_GNOMISH_MINES and \
+                        self.agent.current_level().dungeon_number != Level.GNOMISH_MINES:
+                    self.agent.log(f'TOUR no Mines entrance after {jf_config.MINES_SEARCH_TURNS} turns: '
+                                   f'skipping Minetown, on to Sokoban')
+                    self.mines_not_found = True
+                    self.milestone = Milestone.FIND_SOKOBAN
+                    continue
                 self.milestone = Milestone(int(self.milestone) + 1)
                 if jf_config.SKIP_SOKOBAN and self.milestone in (Milestone.FIND_SOKOBAN, Milestone.SOLVE_SOKOBAN) \
                         and self.agent.character.race in (Character.DWARF, Character.GNOME):
@@ -704,6 +719,9 @@ class GlobalLogic:
             ])
             .preempt(self.agent, [
                 self.dive.faint_shelter(),
+            ])
+            .preempt(self.agent, [
+                self.dive.leave_minetown_hallucinating(),
             ])
             # a digger with room to dig finishes the hole instead of walking to a fight
             .preempt(self.agent, [
