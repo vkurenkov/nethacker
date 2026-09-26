@@ -1070,7 +1070,7 @@ class Inventory:
             yield False  # TODO: only for handless monsters (which cannot write)
 
         self.skip_engrave_counter -= 1
-        if self.agent.character.prop.blind or self.skip_engrave_counter > 0:
+        if self.agent.character.prop.blind or self.skip_engrave_counter > 0 or self.agent.hands_welded():
             yield False
             return
         yielded = False
@@ -1213,6 +1213,9 @@ class Inventory:
     @utils.debug_log('inventory.wear_best_stuff')
     @Strategy.wrap
     def wear_best_stuff(self):
+        if self.agent.hands_welded():
+            yield False   # armor can't come off (or go on over it) with the hands welded
+            return
         yielded = False
         while 1:
             best_armorset = self.get_best_armorset()

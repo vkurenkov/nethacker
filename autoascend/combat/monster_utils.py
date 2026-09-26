@@ -41,5 +41,30 @@ def is_dangerous_monster(monster):
     return is_pet or mon.mname in INSECTS
 
 
+def _adjacent_turns(agent, monster):
+    """Turns this monster has stayed adjacent to us (a gap of more than 3 turns resets it)."""
+    _, y, x, mon, _ = monster
+    bl = agent.blstats
+    rec = agent.__dict__.setdefault('_adjacent_since', {})
+    key = mon.mname
+    if max(abs(int(y) - bl.y), abs(int(x) - bl.x)) > 1:
+        return 0
+    first, last = rec.get(key, (bl.time, bl.time))
+    if bl.time - last > 3:
+        first = bl.time
+    rec[key] = (first, bl.time)
+    return bl.time - first
+
+
 def consider_melee_only_ranged_if_hp_full(agent, monster):
-    return monster[3].mname in ('brown mold', 'blue jelly') and agent.blstats.hitpoints == agent.blstats.max_hitpoints
+    name = monster[3].mname
+    bl = agent.blstats
+    # cornered by a gelatinous cube (a tiny Minetown shop, no throwing near the Watch): stepping away
+    # failed, and standing still let its paralysing touches kill an XL9 from 90 HP -- hit it instead
+    if name == 'gelatinous cube':
+        return _adjacent_turns(agent, monster) >= 6 and bl.hitpoints >= 0.4 * bl.max_hitpoints
+    # their passive cold does nothing to a cold-resistant Valkyrie
+    if name in ('brown mold', 'blue jelly') and \
+            (bl.hitpoints == bl.max_hitpoints or agent.character.role == agent.character.VALKYRIE):
+        return True
+    return False

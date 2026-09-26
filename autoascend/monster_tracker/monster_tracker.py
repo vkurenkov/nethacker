@@ -1,5 +1,6 @@
 import re
 
+import nle.nethack as nh
 import numpy as np
 from nle.nethack import actions as A
 
@@ -10,8 +11,13 @@ from ..glyph import C, G
 
 
 class MonsterTracker:
+    _UNSEEN_ATTACK = re.compile(r"\bIt (?:hits|bites|misses|just misses|stings|touches|butts|kicks|claws|"
+                                r"thrusts|swings|lashes|squeezes|gores|pummels|scratches|stabs|zaps|casts|spits)")
+
     def __init__(self, agent):
         self.agent = agent
+        self._unseen_attack_turn = -10 ** 6
+        self._shk_seen = {}   # (level key, y, x) -> last turn a shopkeeper stood there
         self.on_panic()
 
     def on_panic(self):
@@ -81,6 +87,27 @@ class MonsterTracker:
             else:
                 self.peaceful_monster_mask = new_peaceful_mons
         # TODO: on hallu no monsters are peaceful
+
+        # an unseen monster ('I': felt while blind, or an invisible one) next to where a shopkeeper stood in
+        # the last 30 turns is presumed to be him -- neither attacked nor walked into (a move into an 'I'
+        # attacks it). A yellow light blinded an XL8 in a shop doorway; it swung at the 'I' next to it:
+        # 'It gets angry!', and the shopkeeper's magic missiles killed it. Never once an unseen monster
+        # attacks us: presuming every 'I' near a recently seen peaceful (Mines gnomes are everywhere) left
+        # five of 60 games answering 'It hits!' / 'It bites!' with nothing (invisible centaurs, blinding ravens).
+        t = self.agent.blstats.time
+        key = self.agent.current_level().key()
+        for y, x in zip(*utils.isin(self.agent.glyphs, G.SHOPKEEPER).nonzero()):
+            self._shk_seen[(key, int(y), int(x))] = t
+        unseen = self.agent.glyphs == nh.GLYPH_INVISIBLE
+        if self._UNSEEN_ATTACK.search(self.agent.message):
+            self._unseen_attack_turn = t
+        if t - self._unseen_attack_turn <= 20:
+            self.peaceful_monster_mask &= ~unseen
+        elif unseen.any():
+            for (k, sy, sx), st in self._shk_seen.items():
+                if k == key and t - st <= 30:
+                    near = np.s_[max(sy - 1, 0):sy + 2, max(sx - 1, 0):sx + 2]
+                    self.peaceful_monster_mask[near] |= unseen[near] & self.monster_mask[near]
 
         assert (~self.peaceful_monster_mask | self.monster_mask).all()
         self._last_glyphs = self.agent.glyphs.copy()

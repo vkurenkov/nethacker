@@ -1,5 +1,6 @@
 import contextlib
 import re
+import sys
 from collections import namedtuple, Counter, defaultdict
 from functools import partial
 
@@ -96,6 +97,8 @@ class Agent:
         # when (number of turn) there was last decision about allowing these actions (e.g. agent is somewhat stuck)
         self._allow_walking_through_traps_turn = -float('inf')
         self._allow_attack_all_turn = -float('inf')
+        self._hb_actions = Counter()   # actions and go_to targets since the last STATUS heartbeat
+        self._hb_gotos = Counter()
 
         self.last_cast_fail_turn = defaultdict(lambda: -float('inf'))
 
@@ -394,6 +397,7 @@ class Agent:
         observation, reward, done, info = self.env.step(action)
         observation = {k: v.copy() for k, v in observation.items()}
         self.step_count += 1
+        self._hb_actions[getattr(action, 'name', str(action))] += 1
         self.score += reward
 
         self.cursor_pos = (observation['tty_cursor'][0] - 1, observation['tty_cursor'][1])
@@ -596,8 +600,25 @@ class Agent:
                 level.items[y, x] = ()
                 level.item_count[y, x] = 0
 
+    _DIG_TOOL_REFUSED = re.compile(r'leave (?:your|the) (?:pick-axe|mattock|digging tool)s? outside|'
+                                   r'to let you in with your (?:pick-axe|mattock|digging tool)')
+
+    def _carries_digging_tool(self):
+        return any(o.name in ('pick-axe', 'dwarvish mattock')
+                   for item in flatten_items(self.inventory.items) for o in item.objs)
+
     def _update_level_shops(self):
         level = self.current_level()
+
+        if self._DIG_TOOL_REFUSED.search(self.message):
+            # the refusal comes as we step into the doorway, the shopkeeper standing just inside it
+            y0, x0 = self.blstats.y, self.blstats.x
+            inside = [(y, x) for y, x in self.neighbors(y0, x0, shuffle=False)
+                      if self.glyphs[y, x] in G.SHOPKEEPER]
+            if inside:
+                sy, sx = inside[0]
+                level.refused_doors[(y0, x0)] = (sy - y0, sx - x0)
+                level.dig_tool_refused = self.blstats.time
 
         shop_type = None
         matches = re.search(f"Welcome( again)? to [a-zA-Z' ]*({'|'.join(SHOP.name2id.keys())})!", self.message)
@@ -883,6 +904,11 @@ class Agent:
         def threat(m):
             if m[0] <= 5 and dive._ignores_elbereth(m[3]):
                 return True
+            # anything adjacent: a dust Elbereth can vanish during a long faint, and then even a bat or a
+            # jackal has 15-30 free turns (all 10 tour deaths while fainted in six runs came at 961-1396-turn
+            # gaps with a weak monster next to us)
+            if m[0] <= 1:
+                return True
             return m[0] <= 2 and (combat.monster_utils.is_dangerous_monster(m) or getattr(m[3], 'mlevel', 0) >= 4)
 
         if self.is_safe_to_pray(jf_config.FAINT_PRAYER_GAP) and \
@@ -975,7 +1001,12 @@ class Agent:
         # there, and remember wands that turned out empty.
         with self.atom_operation():
             self.step(A.Command.ZAP)
+            if 'carrying so much stuff' in self.message:
+                raise AgentPanic('zap: too heavily loaded')
             self.type_text(self.inventory.items.get_letter(item))
+            if 'What do you want to zap?' in self.single_message or "You don't have that object" in self.message:
+                self.step(A.Command.ESC)
+                raise AgentPanic('zap: no such wand in the inventory')
             if not jf_config.LATE_FIXES or 'In what direction?' in self.message:
                 self.direction(direction)
             elif 'Nothing happens' in self.message or 'You wrest' in self.message:
@@ -1106,9 +1137,20 @@ class Agent:
                 raise AgentPanic(f'agent position do not match after "move": '
                                  f'expected ({expected_y}, {expected_x}), got ({self.blstats.y}, {self.blstats.x})')
 
+    def hands_welded(self):
+        """engrave.c/do_wear.c freehand(): a cursed (welded) two-hander, or a cursed weapon with a shield,
+        leaves no free hand -- engraving, taking armor off, #untrap and #loot then fail without a turn
+        (a welded dwarvish mattock: 2703 'cannot release your weapon' and 270 'no free hand' asserts)."""
+        main = self.inventory.items.main_hand
+        if main is None or main.status != Item.CURSED:
+            return False
+        return bool(getattr(main.objs[0], 'bi', False)) or self.inventory.items.off_hand is not None
+
     def can_engrave(self):
         if self.character.prop.polymorph:
             return False  # TODO: only for handless monsters (which cannot write)
+        if self.hands_welded():
+            return False
         return (self.blstats.y, self.blstats.x) != self._forbidden_engrave_position
 
     def engrave(self, text):
@@ -1183,6 +1225,25 @@ class Agent:
         if self._last_turn - self._allow_walking_through_traps_turn > 50:
             walkable &= ~utils.isin(level.objects, G.TRAPS)
 
+        # a shopkeeper blocks the door to anyone carrying a pick-axe or mattock ('Will you please leave
+        # your pick-axe outside?'): walking to the goods (check_items) looped at shop doors for 3000-16000
+        # turns in 25 of ~330 games, fainting through hunger prayers. While we carry one, the refusing door
+        # is closed to us -- when standing in it, the squares on the shopkeeper's side of it.
+        # (Only the door: AutoAscend's shop mask can leak through a door into the corridors.)
+        if level.dig_tool_refused is not None and self.blstats.time - level.dig_tool_refused < 5000 and \
+                self._carries_digging_tool():
+            for (dy, dx), (iy, ix) in level.refused_doors.items():
+                if (dy, dx) != (y, x):
+                    walkable[dy, dx] = False
+                    continue
+                # the inward direction, and its two neighbours along the wall side
+                for ny, nx in {(dy + iy, dx + ix), (dy + iy, dx + (ix or 1)), (dy + iy, dx - (ix or 1)),
+                               (dy + (iy or 1), dx + ix), (dy - (iy or 1), dx + ix)}:
+                    if (ny, nx) != (dy, dx) and 0 <= ny < walkable.shape[0] and 0 <= nx < walkable.shape[1] and \
+                            max(abs(ny - dy - iy), abs(nx - dx - ix)) <= 1 and \
+                            (ny - dy) * iy + (nx - dx) * ix > 0:
+                        walkable[ny, nx] = False
+
         for my, mx in list(zip(*np.nonzero(utils.isin(self.glyphs, G.MONS)))):
             mon = MON.permonst(self.glyphs[my][mx])
             if mon.mname in combat.monster_utils.ONLY_RANGED_SLOW_MONSTERS:
@@ -1250,6 +1311,8 @@ class Agent:
 
     def go_to(self, y, x, stop_one_before=False, max_steps=None,
               debug_tiles_args=None, callback=lambda: False, fast=False):
+        # STATUS heartbeat: which strategy keeps walking where (stall diagnoses)
+        self._hb_gotos[(y, x, sys._getframe(1).f_code.co_name)] += 1
         assert not stop_one_before or (self.blstats.y != y or self.blstats.x != x)
         assert max_steps is None or not fast
 
@@ -1358,9 +1421,11 @@ class Agent:
                 # dive_logic.leave_minetown_hallucinating takes the stairs out instead
                 monsters = []
             allow_attack_all = self._last_turn - self._allow_attack_all_turn < 3
+            # a gelatinous cube close by keeps the fight on, to step out of its paralysing reach
             only_ranged_slow_monsters = all([monster[3].mname in combat.monster_utils.ONLY_RANGED_SLOW_MONSTERS
                                              and not combat.monster_utils.consider_melee_only_ranged_if_hp_full(self,
                                                                                                                 monster)
+                                             and not (monster[3].mname == 'gelatinous cube' and monster[0] <= 3)
                                              for monster in monsters])
 
             dis = self.bfs()
@@ -1571,7 +1636,7 @@ class Agent:
 
         # corpse aging: eat.c taints at rotted = age / (10 + rn2(20)) > 5 (a cursed corpse gets +2) and
         # "rotten" (vomiting, passing out) from rotted > 3 -- 30 turns keeps clear of both
-        if self.blstats.time - age_turn >= 30 and \
+        if self.blstats.time - age_turn >= jf_config.CORPSE_MAX_AGE and \
                 monster_id not in [MON.id_from_name('lizard'), MON.id_from_name('lichen')]:
             return False
 
@@ -1747,7 +1812,9 @@ class Agent:
         # Last resort (LAST_RESORT): about to die, no safe prayer, a hostile adjacent. The game is
         # usually lost here, so gambles have positive value for a max-progress score: stairs (down
         # also banks depth), unknown wands at the attacker, unknown potions, unknown scrolls.
-        if jf_config.LAST_RESORT and self._critically_low_hp():
+        # Overtaxed or worse: NetHack refuses zapping, reading and quaffing without using a turn, and the last
+        # resort looped on it (330 turn-inactivity asserts in one jf24 game)
+        if jf_config.LAST_RESORT and self._critically_low_hp() and self.blstats.carrying_capacity < 4:
             y, x = self.blstats.y, self.blstats.x
             adjacent = [m for m in self.get_visible_monsters() if utils.adjacent((m[1], m[2]), (y, x))]
             if adjacent:
@@ -1771,7 +1838,9 @@ class Agent:
                     self._last_resort_stairs_turn = self.blstats.time
                     self.move('<')
                     return
-                items = flatten_items(self.inventory.items)
+                # top-level items only: a wand inside a bag has no inventory letter, and zapping one left the
+                # 'What do you want to zap?' prompt looping at 9 HP until a goblin finished the XL6
+                items = list(self.inventory.items)
                 _, my, mx, _, _ = adjacent[0]
                 # in Minetown (or with the Watch in view) a ray or an area scroll can hit the Watch (a
                 # scroll of earth dropped a boulder on a watch captain): only the potions, which touch us

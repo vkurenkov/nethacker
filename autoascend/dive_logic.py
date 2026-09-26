@@ -150,6 +150,8 @@ RESCUE_DIVE = True
 # and the character is Weak with nothing to eat. The tour would starve on the spot (a clock-jf6 XL8
 # starved in the Mines 1700 turns after an unlucky prayer); the dive at least banks depth on the way.
 LATE_RESCUE = True
+# rescue dives take the main-dungeon stairs (not the Mines route): see should_dive
+RESCUE_MAIN_DUNGEON = True
 # Experiment: skip the Dlvl 1 grind altogether (38% of unseen games are lost there: prayer failures,
 # fainting deaths) and dive from EARLY_DIVE_TURN on the rescue route -- down the Mines (peaceful to a
 # dwarf), hunting dwarves for a pick-axe, digging the main dungeon once one is in hand. Even a failed
@@ -279,8 +281,24 @@ class DiveLogic:
         if turn // 500 != self._status_logged:
             # a heartbeat for stall diagnoses (a jf8 game idled 4850 turns on Dlvl 2 after its grind)
             self._status_logged = turn // 500
+            top = agent._hb_gotos.most_common(1)
+            if top and top[0][1] >= 50 and top[0][0][:2] == (agent.blstats.y, agent.blstats.x):
+                # the same go_to target (our own square) all along: log what the BFS sees around us
+                dis = agent.bfs()
+                lv = agent.current_level()
+                y0, x0 = agent.blstats.y, agent.blstats.x
+                nb = [(int(y), int(x), int(lv.walkable[y, x]), int(lv.objects[y, x]), int(agent.glyphs[y, x]),
+                       int(lv.shop[y, x]), int(lv.forbidden[y, x]))
+                      for y, x in agent.neighbors(y0, x0, shuffle=False)]
+                agent.log(f'STALL reachable={(dis != -1).sum()} here_obj={int(lv.objects[y0, x0])} '
+                          f'shop_here={int(lv.shop[y0, x0])} refused={lv.dig_tool_refused} nb={nb}')
+            acts = ' '.join(f'{a}:{n}' for a, n in agent._hb_actions.most_common(5))
+            gotos = ' '.join(f'{c}{(int(y), int(x))}:{n}' for (y, x, c), n in agent._hb_gotos.most_common(3))
+            agent._hb_actions.clear()
+            agent._hb_gotos.clear()
             agent.log(f'STATUS milestone={agent.global_logic.milestone.name} diving={self.diving} '
-                      f'hunger={agent.blstats.hunger_state} pos={(agent.blstats.y, agent.blstats.x)}')
+                      f'hunger={agent.blstats.hunger_state} pos={(agent.blstats.y, agent.blstats.x)} '
+                      f'acts=[{acts}] gotos=[{gotos}]')
         # A fall is instant, so the trap door's glyph is never seen and the map forgets it: a dive
         # climbing out of the Mines fell through the same trap door twice. Remember where we fell.
         pos = (agent.blstats.y, agent.blstats.x)
@@ -374,8 +392,11 @@ class DiveLogic:
             agent.log(f'DIVE phase starts (milestone {gl.milestone.name}{tag})')
             self.diving = True
             self.rescue = rescue or late_rescue
-            # the tour handled the Mines; from here it's the main dungeon (a rescue takes the Mines route)
-            self.mines_done = not rescue
+            # the tour handled the Mines; from here it's the main dungeon. A rescue used to take the Mines
+            # route, but none of 21 rescue dives (abP/abPF) ever reached the Mines: they searched Dlvl 2
+            # for the branch while fainting (11-72 faints) and died on Dlvl 1-2, while the two that took
+            # the main stairs reached Dlvl 12 and 28. The Mines are peaceful to a dwarf: no corpses to eat.
+            self.mines_done = not rescue or RESCUE_MAIN_DUNGEON
         return self.diving
 
     def turns_on_level(self):
@@ -825,11 +846,20 @@ class DiveLogic:
         agent = self.agent
         if agent.blstats.hitpoints >= REST_BEFORE_DESCEND * agent.blstats.max_hitpoints:
             return False
+        # starving with no prayer left: resting only faints the time away (rescue dives rested at the stairs
+        # of Dlvl 1-2 until they starved); go on unless badly hurt
+        if self.starving() and agent.blstats.hitpoints >= 0.4 * agent.blstats.max_hitpoints:
+            return False
         self._task('rest before descending')
         agent.search(1 if agent.get_visible_monsters() else 20)
         return True
 
     # ------------------------------------------------------------- descend
+
+    def starving(self):
+        """Weak or worse after a failed prayer (the god stays angry) with nothing edible carried."""
+        agent = self.agent
+        return agent.prayer_failed and agent.blstats.hunger_state >= Hunger.WEAK and not agent.edible_carried_food()
 
     def required_xl(self, depth):
         return REQUIRED_XL.get(depth, REQUIRED_XL[max(REQUIRED_XL)])

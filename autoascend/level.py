@@ -49,6 +49,10 @@ class Level:
         self.petrify_until = np.zeros((C.SIZE_Y, C.SIZE_X), np.int32)
         # doorways the game refused diagonal moves through ("intact doorway")
         self.intact_doors = np.zeros((C.SIZE_Y, C.SIZE_X), bool)
+        # turn a shopkeeper last blocked the door because we carry a pick-axe or mattock, and those doors
+        # {(y, x) -> (dy, dx) toward the shopkeeper inside}
+        self.dig_tool_refused = None
+        self.refused_doors = {}
 
     def key(self):
         return (self.dungeon_number, self.level_number)

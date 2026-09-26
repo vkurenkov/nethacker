@@ -121,6 +121,11 @@ def draw_monster_priority_negative(agent, monster, priority, walkable):
         # prioritize staying in ranged weapons line of fire
         if len(agent.inventory.get_ranged_combinations()):
             _draw_ranged(priority, y, x, 6, walkable, radius=7)
+    elif mon.mname == 'gelatinous cube':
+        # its touch paralyses (and it engulfs): keep out of reach -- it is slow (6), walking away always
+        # works (14 games stood next to one on an item pile until 'You are frozen by the gelatinous cube!')
+        _draw_around(priority, y, x, -10, radius=1)
+        _draw_around(priority, y, x, -3, radius=2)
     elif mon.mname in ONLY_RANGED_SLOW_MONSTERS:  # and agent.inventory.get_ranged_combinations():
         # ignore
         pass

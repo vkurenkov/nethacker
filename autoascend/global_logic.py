@@ -178,6 +178,7 @@ class GlobalLogic:
 
         self._got_artifact = False
         self._milestone_since = {}   # milestone -> turn it began (jf_config.MINES_SEARCH_TURNS)
+        self._stall_anchor = None    # (level key, (y, x), turn, milestone) the tour has kept close to
         self.mines_not_found = False
 
         self.dive = DiveLogic(agent)
@@ -567,6 +568,24 @@ class GlobalLogic:
             ])
         )
 
+    def _tour_stalled(self):
+        """The tour has kept within 8 squares of one spot on one level, same milestone, TOUR_STALL_TURNS turns."""
+        bl = self.agent.blstats
+        key = self.agent.current_level().key()
+        a = self._stall_anchor
+        if a is None or a[0] != key or a[3] != self.milestone or \
+                max(abs(bl.y - a[1][0]), abs(bl.x - a[1][1])) > 8:
+            self._stall_anchor = (key, (bl.y, bl.x), bl.time, self.milestone)
+            return False
+        return bl.time - a[2] >= jf_config.TOUR_STALL_TURNS
+
+    @staticmethod
+    def _stall_goal_met(goal):
+        try:
+            return goal()
+        except Exception:
+            return False
+
     def current_strategy(self):
         # hypothesis: AutoAscend's levelling tour keeps the character alive to XL 10-13 (the elite's
         # recipe); once it is strong, the depth-first dive with the Quest-portal sweep is worth more
@@ -626,7 +645,27 @@ class GlobalLogic:
                 condition = lambda: False
                 level = (Level.DUNGEONS_OF_DOOM, 100)
 
+            goal = condition
+            watch_stall = Milestone.BE_ON_FIRST_LEVEL < self.milestone < Milestone.GO_DOWN and \
+                bool(jf_config.TOUR_STALL_TURNS)
+            if watch_stall:
+                condition = lambda: goal() or self._tour_stalled()
+
             if condition():
+                if watch_stall and not self._stall_goal_met(goal) and self._tour_stalled():
+                    # held in one spot for TOUR_STALL_TURNS (a pocket we are too heavy to squeeze out of, a
+                    # passage a jelly blocks, a shop door...): the next milestone takes us somewhere else, the
+                    # last one (GO_DOWN) is the dive
+                    skip = Milestone.FIND_MINES_END if self.milestone in (Milestone.FIND_SOKOBAN,
+                                                                           Milestone.SOLVE_SOKOBAN) \
+                        else Milestone(int(self.milestone) + 1)
+                    self.agent.log(f'TOUR stalled {jf_config.TOUR_STALL_TURNS} turns at {self._stall_anchor[:2]} '
+                                   f'in {self.milestone.name}: on to {skip.name}')
+                    if self.milestone == Milestone.FIND_GNOMISH_MINES:
+                        self.mines_not_found = True
+                    self.milestone = skip
+                    self._stall_anchor = None
+                    continue
                 if self.milestone == Milestone.FIND_GNOMISH_MINES and \
                         self.agent.current_level().dungeon_number != Level.GNOMISH_MINES:
                     self.agent.log(f'TOUR no Mines entrance after {jf_config.MINES_SEARCH_TURNS} turns: '
@@ -712,6 +751,9 @@ class GlobalLogic:
                 self.agent.eat_corpses_from_ground(only_below_me=True).condition(lambda: self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
                 self.agent.eat_corpses_from_ground(only_below_me=not jf_config.EAT_NEARBY_CORPSES).every(5)
                 .condition(lambda: self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
+                # after a failed prayer corpses are the only food left: walk to the ones nearby
+                self.agent.eat_corpses_from_ground(only_below_me=False).every(3)
+                .condition(lambda: self.agent.prayer_failed and self.agent.blstats.hunger_state >= Hunger.HUNGRY),
                 self.agent.eat_from_inventory().every(5),
             ])
             .preempt(self.agent, [

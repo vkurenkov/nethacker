@@ -43,24 +43,31 @@ FAINT_PRAYER_GAP = 1000
 # us go to the pet (it ate ~40% of the grind's corpses)
 EAT_NEARBY_CORPSES = False
 # Weak/Fainting with nothing to eat and no safe prayer yet: wait on Elbereth instead of wandering (many
-# grind deaths came while fainted: rats, bats, ants; nearly everything on Dlvl 1 respects Elbereth)
-FAINT_SHELTER = True
+# grind deaths came while fainted: rats, bats, ants; nearly everything on Dlvl 1 respects Elbereth).
+# OFF: calibrated against the frozen s13 on the same 60 games (jf14/jf16/jf25/jf26) the shelter +
+# starvation clock + 1400-turn Weak gap regime scored 0.207 vs s13's 0.251; with the three reverted
+# (the other fixes kept) 0.252. Sheltering stops the hunt/eat loop that keeps the grind fed.
+FAINT_SHELTER = False
 # Fainting prayers by the starvation clock instead of a fixed gap: eat.c kills at uhunger <
 # -(100 + 10 * Con) and uhunger drops at most 1 per turn once Fainting (almost not at all while
 # fainted), so death is at least 100 + 10 * Con turns after Fainting begins. Pray once the gap is
 # FAINT_PRAYER_GAP_LONG (= the Weak rule's gap), or STARVE_MARGIN turns before that deadline whatever
 # the gap (the fixed 1000-turn gap could starve a character whose last prayer was an HP one, and it
 # prays where rnz(350) still fails ~5.5% of the time; ~2.3% at 1200).
-STARVE_CLOCK = True
+STARVE_CLOCK = False
 # give up looking for the Mines entrance after this many turns and go on to Sokoban (0: never)
 MINES_SEARCH_TURNS = 3500
+# the tour skips to its next milestone after this many turns within 8 squares of one spot on one level
+# (0: never). Stalls held 12 of 90 games for 1500-14000 turns, fainting through hunger prayers.
+TOUR_STALL_TURNS = 1500
 FAINT_PRAYER_GAP_LONG = 1400
 STARVE_MARGIN = 60
-# Weak/Fainting hunger prayers wait for a 1400-turn gap: measured over ~2600 prayers, 900-1399-turn
-# gaps failed 3.5-5.4% of the time, 1400-1799 only 1.1% and 1800+ 0.6%. Waiting is survivable because a
-# faint lasts 10 - uhunger/10 moves: the observed faint length tells how close starvation
-# (uhunger < -(100 + 10 * Con)) really is, and deep Fainting burns only ~0.2 nutrition per turn.
-WEAK_PRAYER_GAP = 1400
+# Weak hunger prayers wait for this gap (DT6A/s13: 1200). Measured over ~2600 prayers, 900-1399-turn
+# gaps failed 3.5-5.4% of the time, 1400-1799 only 1.1% and 1800+ 0.6% -- but 1400 lost more games
+# to fainting than it saved from failed prayers (see FAINT_SHELTER).
+WEAK_PRAYER_GAP = 1200
+# corpses older than this (turns since the kill) are not eaten (AutoAscend: 50; tainting starts above 50)
+CORPSE_MAX_AGE = 30
 FAINT_ESTIMATE_MARGIN = 90
 
 _raw = os.environ.get('JF_CFG')

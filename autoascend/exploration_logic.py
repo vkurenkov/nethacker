@@ -10,6 +10,7 @@ from . import utils
 from .character import Character
 from .exceptions import AgentPanic
 from .glyph import G, C, SS
+from .item import Item
 from .level import Level
 from .strategy import Strategy
 
@@ -477,6 +478,12 @@ class ExplorationLogic:
     def untrap_traps(self):
         if self.agent.blstats.hitpoints < 10 or (self.agent.blstats.hitpoints / self.agent.blstats.max_hitpoints) < 0.5:
             # not enough HP to risk untrapping at all
+            yield False
+            return
+        # a welded cursed two-hander leaves no hand free: '#untrap' says 'Your hands seem to be too busy
+        # for that.' without using a turn (159 such asserts in one jf23 game)
+        main = self.agent.inventory.items.main_hand
+        if main is not None and main.status == Item.CURSED and getattr(main.objs[0], 'bi', False):
             yield False
             return
 
