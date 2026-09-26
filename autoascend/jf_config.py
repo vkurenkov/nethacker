@@ -42,6 +42,18 @@ FAINT_PRAYER_GAP = 1000
 # only_below_me defaults to True, so it only ever eats what lies underfoot; the kills' corpses beside
 # us go to the pet (it ate ~40% of the grind's corpses)
 EAT_NEARBY_CORPSES = False
+# Weak/Fainting with nothing to eat and no safe prayer yet: wait on Elbereth instead of wandering (many
+# grind deaths came while fainted: rats, bats, ants; nearly everything on Dlvl 1 respects Elbereth)
+FAINT_SHELTER = True
+# Fainting prayers by the starvation clock instead of a fixed gap: eat.c kills at uhunger <
+# -(100 + 10 * Con) and uhunger drops at most 1 per turn once Fainting (almost not at all while
+# fainted), so death is at least 100 + 10 * Con turns after Fainting begins. Pray once the gap is
+# FAINT_PRAYER_GAP_LONG (= the Weak rule's gap), or STARVE_MARGIN turns before that deadline whatever
+# the gap (the fixed 1000-turn gap could starve a character whose last prayer was an HP one, and it
+# prays where rnz(350) still fails ~5.5% of the time; ~2.3% at 1200).
+STARVE_CLOCK = True
+FAINT_PRAYER_GAP_LONG = 1200
+STARVE_MARGIN = 60
 
 _raw = os.environ.get('JF_CFG')
 if _raw:

@@ -60,6 +60,7 @@ class Agent:
         self.last_bfs_step = None
         self.last_prayer_turn = None
         self.prayer_hold_until = -1
+        self._fainting_since = None   # turn Fainting was first seen (jf_config.STARVE_CLOCK)
         self._last_resort_stairs_turn = -10 ** 9
         self.prayer_failed = False
         self._monk_meat_meals = 0
@@ -832,6 +833,30 @@ class Agent:
     PRAYER_FAILURE_WAIT = 2000
     PRAYER_SUCCESS_MESSAGES = ('is well-pleased', 'is pleased.', 'is satisfied', 'hopeful feeling',
                                'You feel much better', 'stomach feels content')
+
+    def fainting_prayer_due(self):
+        """A hunger prayer while Fainting: DT6A/s13 rule (a fixed gap) or the starvation clock."""
+        bl = self.blstats
+        if bl.hunger_state < Hunger.FAINTING:
+            return False
+        if not jf_config.STARVE_CLOCK:
+            return self.is_safe_to_pray(jf_config.FAINT_PRAYER_GAP)
+        if self.is_safe_to_pray(jf_config.FAINT_PRAYER_GAP_LONG):
+            return True
+        # waiting out the clock is for quiet moments: a Fainting character wakes up to free hits (a jf8
+        # grind fainted on a worn Elbereth next to a pony and a rothe at a 1021-turn gap and died 25
+        # turns before its deadline prayer). With a hostile in view or HP down, the old rule applies.
+        if self.is_safe_to_pray(jf_config.FAINT_PRAYER_GAP) and \
+                (self.get_visible_monsters() or bl.hitpoints < 0.7 * bl.max_hitpoints):
+            return True
+        since = self._fainting_since if self._fainting_since is not None else bl.time
+        deadline = since + 100 + 10 * bl.constitution
+        if bl.time >= deadline - jf_config.STARVE_MARGIN and not self.prayer_failed:
+            # starving for certain otherwise: a prayer that may fail is the only way out. Once, though:
+            # after a failure the god is angry and more prayers only bring his wrath (a clock-jf6 game
+            # prayed at gaps of 534, 4, 22, 2 turns and was 'killed by the wrath of Tyr')
+            return self.is_safe_to_pray(100, certain_death=True)
+        return False
 
     def _critically_low_hp(self):
         """pray.c critically_low_hp(): the only HP level at which prayer fixes anything. DT6A's
@@ -1634,7 +1659,7 @@ class Agent:
                                                 self._monk_meat_meals == 0 else 8))
         if (
                 (self.is_safe_to_pray(500) and low_hp)
-                or (self.is_safe_to_pray(jf_config.FAINT_PRAYER_GAP) and self.blstats.hunger_state >= Hunger.FAINTING)
+                or self.fainting_prayer_due()
                 or (not self.prayer_failed and self.blstats.hunger_state >= Hunger.WEAK and
                     self.is_safe_to_pray(self._hunger_prayer_gap()) and not self._eat_before_praying())
         ):
@@ -1722,15 +1747,18 @@ class Agent:
                 (self.blstats.hunger_state == Hunger.HUNGRY or self.is_safe_to_pray(self.SAFE_HUNGER_PRAYER_GAP)) \
                 and not (self.blstats.hunger_state >= Hunger.WEAK and self._eat_before_praying()):
             yield False
-        for item in flatten_items(self.inventory.items):
-            if item.category == nh.FOOD_CLASS and \
-                    item.objs[0].name != 'sprig of wolfsbane' and \
-                    (not item.is_corpse() or
-                     item.monster_id in [MON.from_name(n) - nh.GLYPH_MON_OFF for n in ['lizard', 'lichen']]):
-                yield True
-                self.inventory.eat(item)
-                return
+        for item in self.edible_carried_food():
+            yield True
+            self.inventory.eat(item)
+            return
         yield False
+
+    def edible_carried_food(self):
+        """What eat_from_inventory eats: food, but not wolfsbane or corpses other than lizard/lichen."""
+        return [item for item in flatten_items(self.inventory.items)
+                if item.category == nh.FOOD_CLASS and item.objs[0].name != 'sprig of wolfsbane' and
+                (not item.is_corpse() or
+                 item.monster_id in [MON.from_name(n) - nh.GLYPH_MON_OFF for n in ['lizard', 'lichen']])]
 
     @utils.debug_log('cure_disease')
     @Strategy.wrap

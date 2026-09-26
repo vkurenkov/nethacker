@@ -702,6 +702,9 @@ class GlobalLogic:
             .preempt(self.agent, [
                 self.agent.fight2(),
             ])
+            .preempt(self.agent, [
+                self.dive.faint_shelter(),
+            ])
             # a digger with room to dig finishes the hole instead of walking to a fight
             .preempt(self.agent, [
                 self.dive.dig_first(),

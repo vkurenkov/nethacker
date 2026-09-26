@@ -14,6 +14,13 @@ from .movement_priority import draw_monster_priority_positive, draw_monster_prio
 from .utils import wielding_ranged_weapon, line_dis_from, inside
 
 
+def spore_blast_hits_friend(agent, y, x):
+    """A gas spore killed at (y, x) explodes over its 3x3 square: a pet or peaceful there gets hurt and
+    the hero gets the blame (a shopkeeper next to a spore turned hostile and killed an XL8 Valkyrie)."""
+    sl = np.s_[max(y - 1, 0):y + 2, max(x - 1, 0):x + 2]
+    return bool(agent.monster_tracker.peaceful_monster_mask[sl].any()) or utils.any_in(agent.glyphs[sl], G.PETS)
+
+
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
     ret = 1
@@ -36,6 +43,8 @@ def melee_monster_priority(agent, monsters, monster):
                 ret -= 5
 
     if mon.mname == 'gas spore':
+        if spore_blast_hits_friend(agent, y, x):
+            return ret - 200
         # handle a specific case when you are trapped by a gas spore
         if len(agent.get_visible_monsters()) == 1 \
                 and agent.blstats.hitpoints / agent.blstats.max_hitpoints:
@@ -49,7 +58,22 @@ def melee_monster_priority(agent, monsters, monster):
     return ret
 
 
+WATCH_GLYPHS = frozenset(MON.from_name(n) for n in ('watchman', 'watch captain'))
+
+
+def missiles_risk_the_watch(agent):
+    """Minetown: a stray missile (a miss, or the rest of a volley past a dying target) that hits a peaceful
+    out of sight angers the Watch (a volley killed a Mordor orc and its 2nd dagger hit a hobbit behind it;
+    the watchmen killed the XL8). Melee only there."""
+    gl = agent.global_logic
+    if gl.minetown_level is not None and agent.current_level().key() == gl.minetown_level:
+        return True
+    return utils.any_in(agent.glyphs, WATCH_GLYPHS)
+
+
 def ranged_priority(agent, dy, dx, monsters):
+    if missiles_risk_the_watch(agent):
+        return None
     ret = 11
 
     closest_mon_dis = float('inf')
@@ -98,8 +122,7 @@ def ranged_priority(agent, dy, dx, monsters):
             # hypothesis: a gas spore's explosion (radius 1) that kills the pet costs -15 alignment
             # ("rumble of distant thunder"), after which every prayer fails and the character
             # starves (DT6A seed 1). Astra: kill spores from range only, away from pets.
-            if jf_config.HAZARD_FIXES and mon.mname == 'gas spore' and \
-                    utils.any_in(agent.glyphs[max(y - 1, 0):y + 2, max(x - 1, 0):x + 2], G.PETS):
+            if mon.mname == 'gas spore' and spore_blast_hits_friend(agent, y, x):
                 return None
             # a miss, or the rest of a multishot volley, flies on past the target: never with a pet or a
             # peaceful behind it (two unseen games hit Minetown gnomes that way: the Watch killed them)
@@ -161,6 +184,11 @@ def _simulate_wand_path(agent, wand, monsters, y, x, dy, dx, range_left, hit_tar
             monster = 'pet'
             # For each monster hit, range decreases by 2.
             range_left -= 2
+        elif inside(agent, y, x) and agent.glyphs[y, x] in G.MONS and (y, x) != (agent.blstats.y, agent.blstats.x):
+            # a monster that isn't a known hostile: a peaceful (a lightning bolt at a wraith hit a watch
+            # captain and the Watch killed the XL10)
+            monster = 'peaceful'
+            range_left -= 2
         elif agent.blstats.y == y and agent.blstats.x == x:
             monster = 'self'
             range_left -= 2
@@ -186,6 +214,8 @@ def simulate_wand_path(agent, wand, monsters, dy, dx):
 
 def get_potential_wand_usages(agent, monsters, dy, dx):
     ret = []
+    if missiles_risk_the_watch(agent):
+        return ret
     player_hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
     # TODO: also get items recursively from bags
     for item in agent.inventory.items:
@@ -198,6 +228,8 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
             # print(y, x, monster, p)
             if monster == 'pet':
                 priority -= p * 20
+            elif monster == 'peaceful':
+                priority -= p * 200
             elif monster == 'self':
                 priority -= p * 30
             elif monster is not None:

@@ -146,6 +146,10 @@ TOOL_RUN_XL = None
 # hunting dwarves on the way, digging in the main dungeon if it gets a pick-axe. Fires only in games
 # that are otherwise lost.
 RESCUE_DIVE = True
+# The same later in the tour: a prayer failed (the god is angry or Luck < 0, so no more hunger prayers)
+# and the character is Weak with nothing to eat. The tour would starve on the spot (a clock-jf6 XL8
+# starved in the Mines 1700 turns after an unlucky prayer); the dive at least banks depth on the way.
+LATE_RESCUE = True
 # Ditch the pet for the Dlvl 1 grind (off: experiment). On 15 unseen grinds the pet ate ~40% of the
 # corpses (497 meals vs our 732) and made ~10% of the kills (no XP for us); food is what the grind runs
 # out of (hunger prayers, their failures, starvation). Take it down to Dlvl 2 and come back up alone
@@ -208,6 +212,7 @@ class DiveLogic:
         self.rescue = False                # the dive began as a rescue from a failed Dlvl 1 grind
         self.undiggable = set()            # level keys where the floor is too hard to dig
         self._hp_history = []              # (turn, hp) of the last few turns
+        self._status_logged = -1
         self._last_pos = None              # (level key, (y, x)) at the previous update
         self._arrived = None               # (level key, turn) of the last stairs arrival
         self._avoid_stairs_until = {}      # (level key, (y, x)) -> turn: don't take this '>' before
@@ -242,6 +247,16 @@ class DiveLogic:
         if not self._hp_history or self._hp_history[-1][0] != turn:
             self._hp_history.append((turn, agent.blstats.hitpoints))
             self._hp_history = self._hp_history[-12:]
+        if agent.blstats.hunger_state >= Hunger.FAINTING:
+            if agent._fainting_since is None:
+                agent._fainting_since = turn
+        else:
+            agent._fainting_since = None
+        if turn // 500 != self._status_logged:
+            # a heartbeat for stall diagnoses (a jf8 game idled 4850 turns on Dlvl 2 after its grind)
+            self._status_logged = turn // 500
+            agent.log(f'STATUS milestone={agent.global_logic.milestone.name} diving={self.diving} '
+                      f'hunger={agent.blstats.hunger_state} pos={(agent.blstats.y, agent.blstats.x)}')
         # A fall is instant, so the trap door's glyph is never seen and the map forgets it: a dive
         # climbing out of the Mines fell through the same trap door twice. Remember where we fell.
         pos = (agent.blstats.y, agent.blstats.x)
@@ -317,11 +332,14 @@ class DiveLogic:
         from .global_logic import Milestone
         xl = agent.blstats.experience_level
         rescue = RESCUE_DIVE and agent.prayer_failed and gl.milestone == Milestone.BE_ON_FIRST_LEVEL
+        late_rescue = LATE_RESCUE and agent.prayer_failed and gl.milestone != Milestone.BE_ON_FIRST_LEVEL and \
+            agent.blstats.hunger_state >= Hunger.WEAK and not agent.edible_carried_food()
         if xl >= DIVE_XL or gl.milestone >= Milestone.GO_DOWN or agent.blstats.time >= DIVE_TURN or \
-                (xl >= self._min_xl(DIG_DIVE_XL) and self.digging_tool() is not None) or rescue:
-            agent.log(f'DIVE phase starts (milestone {gl.milestone.name}{", rescue" if rescue else ""})')
+                (xl >= self._min_xl(DIG_DIVE_XL) and self.digging_tool() is not None) or rescue or late_rescue:
+            tag = ', rescue' if rescue else ', late rescue' if late_rescue else ''
+            agent.log(f'DIVE phase starts (milestone {gl.milestone.name}{tag})')
             self.diving = True
-            self.rescue = rescue
+            self.rescue = rescue or late_rescue
             # the tour handled the Mines; from here it's the main dungeon (a rescue takes the Mines route)
             self.mines_done = not rescue
         return self.diving
@@ -530,6 +548,38 @@ class DiveLogic:
             agent.engrave('Elbereth')
             return
         agent.search()
+
+    @Strategy.wrap
+    def faint_shelter(self):
+        """Starving (Weak or worse), no food carried, prayer not yet safe: wait on Elbereth."""
+        agent = self.agent
+        bl = agent.blstats
+        # after a failed prayer no prayer is coming (the god stays angry): waiting only starves, and it
+        # blocked the rescue dive (two replays sat on Elbereth until 'died of starvation')
+        if not jf_config.FAINT_SHELTER or bl.hunger_state < Hunger.WEAK or agent.prayer_failed or \
+                agent.current_level().dungeon_number == GEHENNOM or agent.character.prop.blind or \
+                agent.edible_carried_food():
+            yield False   # (carried food the bot won't eat, e.g. wolfsbane or a sacrifice corpse, doesn't count)
+        if bl.hunger_state >= Hunger.FAINTING:
+            prayer_due = agent.fainting_prayer_due()
+        else:
+            prayer_due = agent.is_safe_to_pray(agent.SAFE_HUNGER_PRAYER_GAP)
+        near = self._near_hostiles()
+        # the prayer comes next; a monster Elbereth can't stop is the fight's business
+        if prayer_due or any(self._ignores_elbereth(m[3]) for m in near):
+            yield False
+        engraving = (agent.inventory.engraving_below_me or '').lower()
+        if engraving != 'elbereth' and not agent.can_engrave():
+            yield False
+        # This runs above fight2: fighting while Fainting is what kills (each faint is several helpless
+        # turns; a pony killed a fainting XL8 that kept trading blows). With everything near respecting
+        # Elbereth, engrave even next to a monster (one free hit) and then just wait on it.
+        yield True
+        if engraving != 'elbereth':
+            agent.log(f'FAINT shelter: Elbereth while starving {[m[3].mname for m in near]}')
+            agent.engrave('Elbereth')
+            return
+        agent.search(1 if near else 5)
 
     def _fast_hp_loss(self):
         bl = self.agent.blstats
@@ -1275,21 +1325,32 @@ class DiveLogic:
             if shield is not None:
                 agent.inventory.drop(shield)
             return
-        tries = self._dig_tries.get(key, 0) + 1
-        self._dig_tries[key] = tries
-        agent.log(f'DIVE digging down with {tool.text!r} (try {tries})')
-        with agent.atom_operation():
-            tool = agent.inventory.move_to_inventory(tool)
-            agent.step(A.Command.APPLY)
-            agent.type_text(agent.inventory.items.get_letter(tool))
-            prompted = 'In what direction do you want to dig?' in agent.single_message
-            if prompted:
-                agent.direction('>')
-            elif agent.single_message.startswith('In what direction'):
-                agent.step(A.Command.ESC)
-        msg = agent.message
-        if agent.current_level().key() != key:
-            return
+        for _ in range(3):
+            tries = self._dig_tries.get(key, 0) + 1
+            self._dig_tries[key] = tries
+            agent.log(f'DIVE digging down with {tool.text!r} (try {tries})')
+            with agent.atom_operation():
+                tool = agent.inventory.move_to_inventory(tool)
+                agent.step(A.Command.APPLY)
+                agent.type_text(agent.inventory.items.get_letter(tool))
+                prompted = 'In what direction do you want to dig?' in agent.single_message
+                if prompted:
+                    agent.direction('>')
+                elif agent.single_message.startswith('In what direction'):
+                    agent.step(A.Command.ESC)
+            msg = agent.message
+            if agent.current_level().key() != key:
+                return
+            # Waking from a faint: the deafness that came with it ends right after, and its 'You can hear
+            # again' stops the new dig before any progress (a starving rescue dive spent ~300 turns and
+            # 15 tries on one level, close to DIG_MAX_TRIES marking it undiggable). Not the floor's
+            # fault: don't count it, dig on at once.
+            if prompted and 'You stop digging' in msg and \
+                    any(s in msg for s in ('You can hear again', 'You regain consciousness', 'You faint')):
+                self._dig_tries[key] = tries - 1
+                if agent.blstats.hunger_state <= Hunger.FAINTING:   # not passed out again
+                    continue
+            break
         if not prompted:
             # can't swap weapons (welded), stuck in a web, ...: try again later
             agent.log(f'DIVE could not dig: {msg!r}')
