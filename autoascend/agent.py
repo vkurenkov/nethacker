@@ -808,11 +808,18 @@ class Agent:
         divisor = 5 if xl <= 5 else 6 if xl <= 13 else 7 if xl <= 21 else 8 if xl <= 29 else 9
         return bl.hitpoints <= 5 or bl.hitpoints * divisor <= maxhp
 
+    def _hunger_prayer_gap(self):
+        # A prayer resets nutrition to 900 and Weak comes ~850 turns later, so DT6A's 1200-turn gap
+        # left every Dlvl-1 grind Fainting for hundreds of turns and praying at Fainting on a 400-turn
+        # gap (failures, level drain, starvation). With EARLY_FIXES pray at Weak from a 900-turn gap
+        # (rnz(350) failure risk ~6%) instead of fainting first.
+        return 900 if jf_config.EARLY_FIXES else self.SAFE_HUNGER_PRAYER_GAP
+
     def _eat_before_praying(self):
         # hypothesis: at XL < 5 the emergency prayer is the only answer to a bad fight (an XL2 elite
         # game spent it on hunger at T1350 and died to a goblin at T1660 with nothing left); eat the
         # food we carry instead of praying for hunger while that weak.
-        if self.blstats.experience_level >= 5 or not jf_config.TOUR_FIXES:
+        if self.blstats.experience_level >= 5 or not jf_config.EARLY_FIXES:
             return False
         return any(item.category == nh.FOOD_CLASS and item.objs[0].name != 'sprig of wolfsbane' and
                    not item.is_corpse() for item in flatten_items(self.inventory.items))
@@ -849,7 +856,7 @@ class Agent:
         with self.atom_operation():
             self.step(A.Command.ZAP)
             self.type_text(self.inventory.items.get_letter(item))
-            if not jf_config.TOUR_FIXES or 'In what direction?' in self.message:
+            if not jf_config.LATE_FIXES or 'In what direction?' in self.message:
                 self.direction(direction)
             elif 'Nothing happens' in self.message or 'You wrest' in self.message:
                 self.inventory.empty_wands.add(item.text)
@@ -1044,7 +1051,7 @@ class Agent:
         walkable = level.walkable & ~utils.isin(self.glyphs, G.BOULDER) & \
                    ~self.monster_tracker.peaceful_monster_mask & \
                    ~level.forbidden
-        if jf_config.TOUR_FIXES and self.inventory.items.gloves is None:
+        if jf_config.LATE_FIXES and self.inventory.items.gloves is None:
             walkable &= ~(level.petrify_until > self.blstats.time)
 
         if self._last_turn - self._allow_walking_through_traps_turn > 50:
@@ -1356,7 +1363,7 @@ class Agent:
         # hypothesis: starving (Weak or worse) with HP to spare, poison (-1d4 Str, -1d15 HP) or acid
         # (-1d15 HP) beats fainting next to a monster -- two XL11 dives died that way in the Mines
         starving = jf_config.STARVING_EATS and self.blstats.hunger_state >= Hunger.WEAK and \
-            self.blstats.hitpoints > 40 and (jf_config.TOUR_FIXES or self.global_logic.dive.diving)
+            self.blstats.hitpoints > 40 and (jf_config.LATE_FIXES or self.global_logic.dive.diving)
 
         # TODO: read intrinsics
         if self.character.race != Character.ORC and permonst.mflags1 & MON.M1_POIS != 0 and not starving:
@@ -1532,7 +1539,9 @@ class Agent:
         # prayer beats certain death. Stoning: a carried lizard corpse cures it without prayer.
         deadly = int(self.last_observation['blstats'][nh.NLE_BL_CONDITION]) & (
             nh.BL_MASK_STONE | nh.BL_MASK_SLIME | nh.BL_MASK_STRNGL | nh.BL_MASK_FOODPOIS | nh.BL_MASK_TERMILL)
-        if deadly and jf_config.TOUR_FIXES:
+        # Only fires when death is otherwise certain within a few turns, so it can never lower a
+        # max-progress score: on in every configuration (the elite's early game is untouched).
+        if deadly:
             if deadly & nh.BL_MASK_STONE:
                 lizards = [item for item in flatten_items(self.inventory.items) if item.is_corpse() and
                            item.monster_id == MON.from_name('lizard') - nh.GLYPH_MON_OFF]
@@ -1564,7 +1573,7 @@ class Agent:
             self.inventory.quaff(items[0])
             return
 
-        if jf_config.TOUR_FIXES:
+        if jf_config.EARLY_FIXES:
             low_hp = self._critically_low_hp()
         else:
             low_hp = (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
@@ -1575,11 +1584,54 @@ class Agent:
                 (self.is_safe_to_pray(500) and low_hp)
                 or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.FAINTING)
                 or (not self.prayer_failed and self.blstats.hunger_state >= Hunger.WEAK and
-                    self.is_safe_to_pray(self.SAFE_HUNGER_PRAYER_GAP) and not self._eat_before_praying())
+                    self.is_safe_to_pray(self._hunger_prayer_gap()) and not self._eat_before_praying())
         ):
             yield True
             self.pray()
             return
+
+        # Last resort (LAST_RESORT): about to die, no safe prayer, a hostile adjacent. The game is
+        # usually lost here, so gambles have positive value for a max-progress score: stairs (down
+        # also banks depth), unknown wands at the attacker, unknown potions, unknown scrolls.
+        if jf_config.LAST_RESORT and self._critically_low_hp():
+            y, x = self.blstats.y, self.blstats.x
+            adjacent = [m for m in self.get_visible_monsters() if utils.adjacent((m[1], m[2]), (y, x))]
+            if adjacent:
+                level = self.current_level()
+                here = level.objects[y, x]
+                if here in G.STAIR_DOWN and level.dungeon_number != Level.SOKOBAN:
+                    yield True
+                    self.log('LAST RESORT: down the stairs')
+                    self.move('>')
+                    return
+                if here in G.STAIR_UP and self.blstats.depth > 1 and level.dungeon_number != Level.SOKOBAN:
+                    yield True
+                    self.log('LAST RESORT: up the stairs')
+                    self.move('<')
+                    return
+                items = flatten_items(self.inventory.items)
+                _, my, mx, _, _ = adjacent[0]
+                for item in items:
+                    if item.category == nh.WAND_CLASS and not item.is_unambiguous() and \
+                            not self.inventory.is_known_empty(item) and item.comment != 'EMPT':
+                        yield True
+                        self.log(f'LAST RESORT: zapping unknown {item.text!r}')
+                        self.zap(item, self.calc_direction(y, x, my, mx))
+                        return
+                for item in items:
+                    if item.category == nh.POTION_CLASS and not item.is_unambiguous():
+                        yield True
+                        self.log(f'LAST RESORT: quaffing unknown {item.text!r}')
+                        self.inventory.quaff(item)
+                        return
+                for item in items:
+                    if item.category == nh.SCROLL_CLASS and not item.is_unambiguous():
+                        yield True
+                        self.log(f'LAST RESORT: reading unknown {item.text!r}')
+                        with self.atom_operation():
+                            self.step(A.Command.READ)
+                            self.type_text(self.inventory.items.get_letter(item))
+                        return
 
         # if self.inventory.engraving_below_me.lower() != 'elbereth' and self.can_engrave() and \
         #         (self.blstats.hitpoints < 1 / 5 * self.blstats.max_hitpoints or self.blstats.hitpoints < 5):

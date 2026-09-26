@@ -216,7 +216,7 @@ class Item:
             return False
         if not self.is_ray_wand():
             return False
-        if jf_config.TOUR_FIXES and self.uses and ':' in self.uses and self.uses.split(':')[1].isdigit() and \
+        if jf_config.LATE_FIXES and self.uses and ':' in self.uses and self.uses.split(':')[1].isdigit() and \
                 int(self.uses.split(':')[1]) <= 0:
             return False  # "(n:0)" -- known to be empty (the old 'no charges' test never matched)
         if self.objs[0] == O.from_name('sleep', nh.WAND_CLASS):

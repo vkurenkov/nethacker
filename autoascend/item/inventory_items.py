@@ -112,7 +112,10 @@ class InventoryItems:
                             setattr(self, name, item)
                             break
 
-                if item.is_possible_container() or (item.is_container() and self._recheck_containers):
+                # applying a bag mid-fight wasted turns during a dive (leocrotta death); defer it
+                if (item.is_possible_container() or (item.is_container() and self._recheck_containers)) and \
+                        not (getattr(getattr(getattr(self.agent, 'global_logic', None), 'dive', None), 'diving', False)
+                             and self.agent.get_visible_monsters()):
                     self.agent.inventory.check_container_content(item)
 
                 if (self.agent.last_observation['inv_strs'] != previous_inv_strs).any():

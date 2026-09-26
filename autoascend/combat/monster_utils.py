@@ -2,7 +2,7 @@
 from .. import jf_config
 
 ONLY_RANGED_SLOW_MONSTERS = ['floating eye', 'blue jelly', 'brown mold', 'gas spore', 'acid blob']
-if jf_config.TOUR_FIXES:
+if jf_config.LATE_FIXES:
     # passive stun / acid / fire / paralysis on touch (astra: no melee); a spotted jelly killed an
     # XL9 elite game
     ONLY_RANGED_SLOW_MONSTERS += ['yellow mold', 'green mold', 'red mold', 'spotted jelly', 'ochre jelly',

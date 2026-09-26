@@ -6,19 +6,29 @@ JF_CFG, so submissions always run these defaults.
 import json
 import os
 
-# failure-only fixes that can also change the levelling tour's trajectory:
-# gas spore near pet, cockatrice-corpse squares, no melee vs passive-damage monsters,
-# deadly-status emergency, eat carried food before a hunger prayer below XL 5
-TOUR_FIXES = False
+# Fixes that change the levelling tour. Split by WHEN they first change a game:
+# LATE: only at a specific hazard (gas spore next to the pet, cockatrice corpse, passive-damage
+#   monster, deadly status, empty wand) -- the elite's early game is untouched until then.
+# EARLY: prayer at pray.c's critically_low_hp instead of 'HP < 12', eat carried food before a
+#   hunger prayer below XL 5 -- these reshuffle games from the first prayer on.
+EARLY_FIXES = False
+LATE_FIXES = False
+# master switch kept for older experiment configs: sets both
+TOUR_FIXES = None
 # Excalibur dips only at >= 90% HP with a prayer ready (astra); changes the tour
 SAFE_DIPS = False
 # when Weak or worse with HP > 40, poisonous/acidic corpses are acceptable food
 STARVING_EATS = True
 # astra's survival layer (Elbereth rest, retreat upstairs) also during the levelling tour
 SURVIVAL_IN_TOUR = False
+# at critically low HP with no safe prayer and a hostile adjacent: stairs, unknown wands/potions/scrolls
+LAST_RESORT = True
 
 _raw = os.environ.get('JF_CFG')
 if _raw:
     for _name, _value in json.loads(_raw).items():
         if _name in globals() and not _name.startswith('_'):
             globals()[_name] = _value
+
+if TOUR_FIXES is not None:
+    EARLY_FIXES = LATE_FIXES = bool(TOUR_FIXES)

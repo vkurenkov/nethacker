@@ -97,7 +97,7 @@ def ranged_priority(agent, dy, dx, monsters):
             # hypothesis: a gas spore's explosion (radius 1) that kills the pet costs -15 alignment
             # ("rumble of distant thunder"), after which every prayer fails and the character
             # starves (DT6A seed 1). Astra: kill spores from range only, away from pets.
-            if jf_config.TOUR_FIXES and mon.mname == 'gas spore' and \
+            if jf_config.LATE_FIXES and mon.mname == 'gas spore' and \
                     utils.any_in(agent.glyphs[max(y - 1, 0):y + 2, max(x - 1, 0):x + 2], G.PETS):
                 return None
             return ret, y, x, monster[0]

@@ -22,7 +22,7 @@ from scipy import ndimage
 
 from . import objects as O
 
-from . import jf_log, utils
+from . import jf_config, jf_log, utils
 from .character import Character
 from .exceptions import AgentPanic
 from .glyph import G, MON, SS, Hunger
@@ -134,6 +134,7 @@ class DiveLogic:
         self.diving = False
         self.undiggable = set()            # level keys where the floor is too hard to dig
         self._hp_history = []              # (turn, hp) of the last few turns
+        self._last_pos = None              # (level key, (y, x)) at the previous update
         self._arrived = None               # (level key, turn) of the last stairs arrival
         self._avoid_stairs_until = {}      # (level key, (y, x)) -> turn: don't take this '>' before
 
@@ -147,6 +148,19 @@ class DiveLogic:
         if not self._hp_history or self._hp_history[-1][0] != turn:
             self._hp_history.append((turn, agent.blstats.hitpoints))
             self._hp_history = self._hp_history[-12:]
+        # A fall is instant, so the trap door's glyph is never seen and the map forgets it: a dive
+        # climbing out of the Mines fell through the same trap door twice. Remember where we fell.
+        pos = (agent.blstats.y, agent.blstats.x)
+        prev = self._last_pos
+        if prev is not None and prev[0] != key and (self.diving or jf_config.LATE_FIXES):
+            msg_all = agent.message
+            if 'trap door opens up under you' in msg_all or 'hole under you' in msg_all or \
+                    'You fall through' in msg_all:
+                old_level = agent.levels.get(prev[0])
+                if old_level is not None:
+                    old_level.objects[prev[1]] = SS.S_trap_door
+                    agent.log(f'DIVE fell through a trap door at {prev[1]} on {prev[0]}; remembered')
+        self._last_pos = (key, pos)
         if key not in self.level_first_turn:
             self.level_first_turn[key] = turn
         if key != self._last_key:
@@ -335,7 +349,11 @@ class DiveLogic:
         bl = agent.blstats
         resting = self._elbereth_resting
         threshold = ELBERETH_REST_UNTIL if resting else ELBERETH_REST_BELOW
-        if bl.hitpoints >= threshold * bl.max_hitpoints or agent.current_level().dungeon_number == GEHENNOM:
+        # a fast hitter (a leocrotta took a dive from 100 to 14 HP in 6 turns) can't be outrun: hide
+        # behind Elbereth as soon as HP falls fast, not only below 40%
+        falling = not resting and self._fast_hp_loss()
+        if (bl.hitpoints >= threshold * bl.max_hitpoints and not falling) or \
+                agent.current_level().dungeon_number == GEHENNOM:
             self._elbereth_resting = False
             yield False
         near = self._near_hostiles()
@@ -395,8 +413,11 @@ class DiveLogic:
         if level.dungeon_number == Level.SOKOBAN or bl.depth <= 1:
             yield False
         dis = agent.bfs()
+        # fleeing across the level from a faster monster only hands it free hits: on fast HP loss
+        # (without low HP) take the stairs only if they are a step or two away
+        reach = RETREAT_MAX_DISTANCE if (crowd is not None or bl.hitpoints < RETREAT_BELOW * bl.max_hitpoints) else 2
         ups = [p for p in zip(*utils.isin(level.objects, G.STAIR_UP).nonzero())
-               if 0 <= dis[p] <= RETREAT_MAX_DISTANCE]
+               if 0 <= dis[p] <= reach]
         if not ups:
             yield False
         yield True
