@@ -10,6 +10,10 @@ from . import utils
 from . import jf_config
 from . import power
 from . import castle_power
+from . import castle_cross
+from . import castle_landing
+from . import tele_route
+from . import power_route
 from .character import Character
 from .dive_logic import DiveLogic
 from .exceptions import AgentPanic
@@ -221,6 +225,7 @@ class GlobalLogic:
         self.mines_not_found = False
 
         self.dive = DiveLogic(agent)
+        self.landing = castle_landing.LandingGuard(self.dive)   # jf_config.LANDING_GUARD (valley-exit)
 
     def update(self):
         self.dive.update()
@@ -380,12 +385,19 @@ class GlobalLogic:
         yielded = False
         # CASTLE_POLY: on the castle a polymorph is the way over the moat (castle_power): keep acting in the form
         castle_poly = lambda: jf_config.CASTLE_POLY and self.dive.castle.active()
+        # BREACH_NOWAIT: on the castle (death costs nothing there) blindness and hallucination from the potion tests are
+        # not waited out -- 250-450 and 600-800 turns of standing in the courtyard while the throne room's liches and
+        # xorns and the maze's minotaur come (brx baseline: 'hallucinogen-distorted' killers in 5 of 125 target games)
+        castle_go = lambda: jf_config.BREACH_NOWAIT and self.dive.castle.active()
+        # VALLEY_XORN: a wall-walking form in Gehennom dives on (the Valley walk, then digging down: its HP is a buffer
+        # over ours) -- waited out, vxx3's xorns stood 450-700 turns on Gehennom 2's '<' until the form timed out
+        xorn_dive = lambda: jf_config.VALLEY_XORN and self.dive.in_gehennom() and castle_cross.wallwalker(self.agent)
         while (
-                self.agent.character.prop.blind or
+                (self.agent.character.prop.blind and not castle_go()) or
                 self.agent.character.prop.confusion or
                 self.agent.character.prop.stun or
-                self.agent.character.prop.hallu or
-                (self.agent.character.prop.polymorph and not castle_poly())):
+                (self.agent.character.prop.hallu and not castle_go()) or
+                (self.agent.character.prop.polymorph and not castle_poly() and not xorn_dive())):
             if not yielded:
                 yield True
                 yielded = True
@@ -948,6 +960,8 @@ class GlobalLogic:
                 self.dive.elbereth_rest().condition(lambda: self.dive.diving or jf_config.SURVIVAL_IN_TOUR),
             ])
             .preempt(self.agent, [
+                # Medusa-3 only (RAVEN_CYCLE): off the raven island to heal, back for a fresh dig
+                self.dive.raven_cycle(),
                 self.dive.retreat_upstairs().condition(lambda: self.dive.diving or jf_config.SURVIVAL_IN_TOUR),
                 # the Valley of the Dead only (GEHENNOM_DIVE): up its '<' to heal on the castle level
                 self.dive.valley_retreat(),
@@ -961,17 +975,52 @@ class GlobalLogic:
             .preempt(self.agent, [
                 self.dive.gehennom_scare(),
             ])
+            # the Valley of the Dead only (VALLEY_FORT): hold its '<' on a dropped scroll of scare monster and
+            # strike what comes (above the retreat and fight2, which would take us off the square)
+            .preempt(self.agent, [
+                self.dive.valley_fort(),
+            ])
             # power (CASTLE_POLY): depth 25+ on the main line, losing a fight -> a wand of polymorph at ourselves
             .preempt(self.agent, [
                 castle_power.deep_poly_escape_strategy(self.dive),
+            ])
+            # castle-first-pass (CFP_RUSH, castle_cross.py): on the castle's west side a lasting lift goes on at once and
+            # a floating hero digs straight onto the moat -- above fight2/elbereth_rest/the scare hold, below the crossing
+            .preempt(self.agent, [
+                castle_cross.rush_strategy(self.dive),
+            ])
+            # valley-exit (LANDING_GUARD, castle_landing.py): a minotaur (or another big Elbereth-ignorer) at the castle
+            # depth -- heal early, strike it frozen, zap the best known wand at it (beams, cold; other rays only with
+            # room to die out) -- above the rush, which yields while its lift phase has items to try
+            .preempt(self.agent, [
+                self.landing.strategy(),
             ])
             # crossing the castle moat (castle_logic.py): above the survival layer and the fight, which
             # would drag a levitating hero back to land or up the stairs
             .preempt(self.agent, [
                 self.dive.castle.crossing_strategy(),
             ])
+            # castle-first-pass (CFP_XORN, castle_cross.py): a wall-walking polymorph form walks straight through the
+            # castle's walls to a trap door -- above the crossing (a breathless xorn also counts as 'floating' there)
+            .preempt(self.agent, [
+                castle_cross.xorn_strategy(self.dive),
+                # valley-exit (VALLEY_XORN): still a wall-walker in the Valley -> through its rock to the '>'
+                self.dive.valley_xorn(),
+                # ...out of the form in Gehennom with the wand and polymorph control -> a xorn again
+                self.dive.xorn_repoly(),
+            ])
             .preempt(self.agent, [
                 self.agent.engulfed_fight(),
+            ])
+            # WISH_TELEPORT_ROUTE (tele_route.py): a wand of wishing's ring of teleport control and cursed scrolls of
+            # teleportation take us to the Valley and on to Gehennom's bottom-1 -- above the fight and the dive
+            .preempt(self.agent, [
+                tele_route.teleport_route_strategy(self.agent),
+            ])
+            # TC_ROUTE (power_route.py): teleport control + a sure level-teleport trigger in hand -> the Valley (and
+            # from Gehennom, Dlvl 50); the castle gamble once the lift plan gave up -- above the fight and the crossing
+            .preempt(self.agent, [
+                power_route.levelport_strategy(self.agent),
             ])
             .preempt(self.agent, [
                 self.agent.emergency_strategy(),

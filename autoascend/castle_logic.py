@@ -206,7 +206,28 @@ class CastlePassage:
             self._log(f'back from Gehennom: {level.key()} (depth {self.agent.blstats.depth})')
         self._last_dnum = dnum
 
+    def _maybe_resume(self):
+        """BREACH_RESUME: a passage given up for want of a way across comes back once one turns up (a wand of cold
+        named by a zap at a monster, a lift found by a last-resort quaff, a crossing polymorph form). Checked every
+        25 turns, at most 6 times: pwc/brx jf14-s0 gave up with an untested wand that a deep-escape zap then named."""
+        why = getattr(self, '_given_up_why', '') or ''
+        if not why.startswith(('nothing that crosses water', 'stranded')):
+            return
+        now = self.agent.blstats.time
+        if now - getattr(self, '_resume_check', -10 ** 9) < 25 or getattr(self, '_resumes', 0) >= 6:
+            return
+        self._resume_check = now
+        if self.castle_key is None or self.agent.current_level().key() != self.castle_key:
+            return
+        if self._floating() or self._plan() or self._cold_source() is not None:
+            self._resumes = getattr(self, '_resumes', 0) + 1
+            self.given_up = False
+            self._stuck = 0
+            self._log(f'resuming the passage ({self._resumes}): a way across turned up after "{why}"')
+
     def active(self):
+        if jf_config.BREACH_RESUME and self.given_up and jf_config.CASTLE_PASSAGE:
+            self._maybe_resume()
         return jf_config.CASTLE_PASSAGE and self.castle_key is not None and not self.given_up and \
             self.agent.current_level().key() == self.castle_key and \
             self.agent.current_level().dungeon_number == Level.DUNGEONS_OF_DOOM
@@ -229,7 +250,14 @@ class CastlePassage:
                    for i in self._items())
 
     def _floating(self):
-        return self.levitating() or self.water_walking() or self._power_hook('crossing_form', False)
+        if self.levitating() or self.water_walking() or self._power_hook('crossing_form', False):
+            return True
+        if jf_config.CFP_MB:
+            # castle-first-pass: magical breathing (a water-tested amulet) or an amphibious/breathless form walks the
+            # moat bottom round the ring like a levitator floats it (castle_cross.amphibious)
+            from . import castle_cross
+            return castle_cross.amphibious(self)
+        return False
 
     def _power_hook(self, name, default, *args):
         """Optional teammate module castle_power.py (power's arrival drill / polymorph forms). Hooks:
@@ -265,6 +293,7 @@ class CastlePassage:
     def _give_up(self, why):
         if not self.given_up:
             self._log(f'giving up: {why}')
+            self._given_up_why = why
         self.given_up = True
 
     # ------------------------------------------------------------------ items
@@ -446,7 +475,17 @@ class CastlePassage:
         return ok
 
     def _quaff(self, item):
+        if jf_config.CFP_XORN and not item.is_unambiguous():
+            # castle-first-pass: an unknown potion may be polymorph -- with a ring of polymorph control on, POLY_XORN
+            # turns it into a xorn that walks through the walls (the kit's rings that may be control go on first:
+            # amd jf16-s7/jf16-s13 carried one with no wand of polymorph)
+            # (only a KNOWN ring of polymorph control: putting every unknown ring on for a ~4% potion of polymorph
+            # would wear conflict, hunger, aggravation and polymorph rings through the crossing)
+            from . import castle_cross
+            if castle_cross.poly_prep(self, known_only=True):
+                return
         self._tested.add(item.glyphs[0])
+        self._lev_warn = None   # (BREACH_LEVWARN: a new lift starts its own clock)
         self.agent.inventory.quaff(item)
         self._log(f'quaffed {item.text!r}: {self.agent.message!r}')
         if self.levitating():
@@ -567,6 +606,11 @@ class CastlePassage:
         y, x = to_bot(mx, my)
         d = agent.calc_direction(agent.blstats.y, agent.blstats.x, y, x)
         if self._monster_at(mx, my):
+            if jf_config.CFP_ZAP and self._floating():
+                # castle-first-pass: teleportation/striking beams (or a ray along a long straight stretch) first
+                from . import castle_cross
+                if castle_cross.blocker_zap(self, mx, my, d):
+                    return
             if jf_config.CASTLE_EDGE_REST and self._floating():
                 # a blocker in the moat ring's one-square-wide columns (x 0 and 62) holds us under its bites and a
                 # tower xorn's: pwc-dp5 jf14-s14 missed a xan 15 times at (62,4). A known wand of striking
@@ -589,8 +633,28 @@ class CastlePassage:
         nexts = _downhill(dist, pos)
         if not nexts:
             return False
+        if jf_config.BREACH_SPOT and self.levitating() and any(self._boulder_at(*p) for p in nexts):
+            # a levitating hero can't push a boulder ('You don't have enough leverage'): brx-smoke1 jf14-s14~3 tried
+            # the corner's boulder 80 times and gave the passage up; go round it, or break it with the pick
+            free = [p for p in nexts if not self._boulder_at(*p)]
+            if not free:
+                return self._smash_boulder()
+            nexts = free
         route = ROUTE_S if prefer_route and self._half == 'south' else ROUTE_INDEX
         nexts.sort(key=lambda p: (self._monster_at(*p), prefer_route and p not in route))
+        if jf_config.BREACH_BYPASS and self._monster_at(*nexts[0]) and self._floating():
+            # every step closer is held: a free square just as close whose own next step is free goes round it -- at
+            # the east channel's mouth a sea monster on (61,5) is passed by (62,5) -> (61,6) (the baseline attacked
+            # 31 times from (62,4) instead; brx tally over base-all3/all4/t1-base)
+            d = dist.get(pos)
+            side = [(pos[0] + dx, pos[1] + dy) for dx, dy in DIRS]
+            side = [q for q in side if dist.get(q) == d and not self._monster_at(*q) and
+                    any(not self._monster_at(*r) for r in _downhill(dist, q))]
+            if side:
+                side.sort(key=lambda q: prefer_route and q not in route)
+                self._set_state(f'bypassing what holds {nexts[0]} by {side[0]}')
+                self._step_to(*side[0])
+                return True
         self._step_to(*nexts[0])
         return True
 
@@ -642,7 +706,7 @@ class CastlePassage:
                 self._pick_half()
                 return False
             self._set_state('backing out of a held moat column')
-            if not self._step_downhill(_bfs(TEST_SPOT, OUTSIDE), pos):
+            if not self._step_downhill(_bfs(self._tspot(), OUTSIDE), pos):
                 self._sea_retreat = False
                 return False
             return True
@@ -660,6 +724,187 @@ class CastlePassage:
             self._pick_half()
             return False
         return self._sea_step(pos, dist)
+
+    # ------------------------------------------------------------------ BREACH_PROBE
+
+    def _probe_corner(self):
+        """The moat-ring corner of our half (north (0,6), south (0,10)) and a dry square next to it with no water
+        around (TEST_SPOT for the north corner)."""
+        if self._half == 'south':
+            return (0, 10), (1, 9)
+        return CORNER, self._tspot()
+
+    def _sea_adjacent(self):
+        """Visible monsters on moat squares next to us (not ice): eels, sharks, a remembered 'I'."""
+        mx, my = self._pos()
+        out = []
+        for dx, dy in DIRS:
+            n = (mx + dx, my + dy)
+            if map_char(*n) == '}' and not self._dry(*n) and self._monster_at(*n):
+                out.append(n)
+        return out
+
+    SEA_WORDS = ('shark', 'giant eel', 'electric eel', 'kraken', 'piranha', 'jellyfish')
+    WAND_SPOT = (2, 8)   # a west courtyard square with no water next to it (TEST_SPOT gets our Elbereth)
+    # west courtyard squares with no water beside them, the north corner's nearest first
+    INNER = ((1, 7), (2, 7), (1, 8), (2, 8), (3, 7), (1, 9), (3, 8), (2, 9), (3, 9))
+
+    def _boulder_at(self, mx, my):
+        y, x = to_bot(mx, my)
+        return self.agent.glyphs[y, x] in G.BOULDER or self.agent.current_level().objects[y, x] in G.BOULDER
+
+    def _tspot(self):
+        """TEST_SPOT, unless BREACH_SPOT and a boulder lies on it (giants in the castle carry and drop boulders: the
+        brx all-flags jf14-s14 explored for 4000 turns toward a (1,7) under a boulder; the baseline gave up
+        'courtyard square (1, 7) not reachable' in jf14-s14~1): then the nearest free inner courtyard square."""
+        if not jf_config.BREACH_SPOT or not self._boulder_at(*TEST_SPOT):
+            return TEST_SPOT
+        for p in self.INNER:
+            if not self._boulder_at(*p):
+                return p
+        return TEST_SPOT
+
+    def _wand_spot(self):
+        if not jf_config.BREACH_SPOT:
+            return self.WAND_SPOT
+        ts = self._tspot()
+        for p in (self.WAND_SPOT,) + self.INNER:
+            if p != ts and not self._boulder_at(*p):
+                return p
+        return self.WAND_SPOT
+
+    def _wand_test_step(self):
+        """BREACH_WANDS: engrave-test every unknown wand on a bare square of the west courtyard before the passage
+        plan runs out. The arrival drill's tests ran on the landing square -- in the pit our castle-detecting dig
+        left, where inventory._engrave_single_wand's look ('There is a pit here. You see no objects here.') refused
+        each test and marked the wand tried: pwc/brx jf14-s0 gave the castle up ('nothing that crosses water') with
+        an untested wand of cold in the pack. True: acted this step."""
+        agent = self.agent
+        t = self._tries
+        from . import castle_power
+        tried = t.setdefault('bw_tried', set())
+        wands = [w for w in castle_power._untested_wands(agent) if w.glyphs[0] not in tried]
+        if not wands or agent.character.prop.blind or not agent.can_engrave() or \
+                agent.character.prop.polymorph or t.get('bw_approach', 0) > 60:
+            return False
+        if any(max(abs(m[1] - agent.blstats.y), abs(m[2] - agent.blstats.x)) <= 2
+               for m in agent.get_visible_monsters()):
+            if t.get('bw_wait', 0) >= 30:
+                return False
+            t['bw_wait'] = t.get('bw_wait', 0) + 1
+            agent.search()   # (fight2 deals with it; don't give the castle up meanwhile)
+            return True
+        spot = self._wand_spot()
+        if self._pos() != spot:
+            t['bw_approach'] = t.get('bw_approach', 0) + 1
+            self._set_state(f'to {spot} to engrave-test {len(wands)} wands')
+            return self._approach(spot)
+        w = wands[0]
+        tried.add(w.glyphs[0])
+        self._set_state(f'engrave-testing {w.text!r}')
+        try:
+            ok = castle_power._engrave_test(self, w)
+        except (AgentChangeStrategy, AgentFinished, AgentPanic):
+            raise
+        except Exception as e:   # an unexpected prompt in the engrave dialogue must not end the passage
+            self._log(f'engrave test of {w.text!r} failed: {e!r}')
+            ok = True
+        if not ok:
+            self._log(f'engrave test of {w.text!r} refused here ({agent.message[:60]!r})')
+        return True
+
+    def _probe_refresh(self):
+        """BREACH_PROBE: a probe that ended more than BREACH_PROBE_STALE turns ago (potion tests that blinded or
+        confused us, rests) is done again, shorter, before the next thing that may lift us."""
+        t = self._tries
+        now = self.agent.blstats.time
+        if t.get('probe_done') and now - t.get('probe_end', now) > jf_config.BREACH_PROBE_STALE and \
+                t.get('probe_round', 1) < 12:
+            t['probe_round'] = t.get('probe_round', 1) + 1
+            t['probe_done'] = 0
+            t['probe_start'] = now
+            t['probe_quiet'] = 0
+
+    def _probe_step(self):
+        """BREACH_PROBE: before the first lift is tried (or set off with), stand on the corner of our half on foot and
+        search -- a search finds a hidden eel or shark next to us (detect.c mfind0) -- fighting whatever sea monster
+        shows from dry land, and stepping back to rest on Elbereth one square in (no water next to it) below
+        BREACH_PROBE_HP. Done after BREACH_PROBE_QUIET searches in a row with no sea monster seen or heard of, or after
+        BREACH_PROBE_BUDGET turns. True: acted this step. (A shark waiting hidden at the channel entrance killed 10 of
+        ~21 crossing attempts in the baseline: they found it only after the potion had lifted them over the water.)"""
+        t = self._tries
+        agent = self.agent
+        bl = agent.blstats
+        if t.get('probe_done'):
+            return False
+        if self.levitating() and self._timed_levitation():
+            return False   # a potion's lift is running: go
+        first = t.get('probe_round', 1) == 1
+        quiet_needed = jf_config.BREACH_PROBE_QUIET if first else max(3, jf_config.BREACH_PROBE_QUIET // 2)
+        budget = jf_config.BREACH_PROBE_BUDGET if first else jf_config.BREACH_PROBE_BUDGET // 3
+        now = bl.time
+        start = t.setdefault('probe_start', now)
+        if now - start > budget:
+            t['probe_done'] = 1
+            t['probe_end'] = now
+            self._log(f'probe: budget of {budget} turns spent')
+            return False
+        msg = (agent.message or '').lower()
+        if any(w in msg for w in self.SEA_WORDS):
+            t['probe_quiet'] = 0   # bitten, found, fled: a sea monster is about even if hidden again now
+        corner, inner = self._probe_corner()
+        pos = self._pos()
+        resting = t.get('probe_resting')
+        if bl.hitpoints < jf_config.BREACH_PROBE_HP * bl.max_hitpoints or \
+                (resting and bl.hitpoints < 0.9 * bl.max_hitpoints):
+            if not resting:
+                self._log(f'probe: resting at {inner}, hp {bl.hitpoints}/{bl.max_hitpoints}')
+            t['probe_resting'] = 1
+            if pos != inner:
+                self._set_state(f'probe: stepping back to {inner}')
+                if not self._step_downhill(_bfs(inner, OUTSIDE), pos):
+                    return self._approach(inner)
+                return True
+            if self.levitating():
+                self._stop_levitating()   # a ring or boots: back on the floor to engrave and rest
+                return True
+            engraving = (agent.inventory.engraving_below_me or '').lower()
+            if engraving != 'elbereth' and agent.can_engrave() and not agent.character.prop.blind:
+                agent.engrave('Elbereth')
+                return True
+            if not self._fight_adjacent():
+                self._set_state('probe: resting')
+                agent.search(3)
+            return True
+        t['probe_resting'] = 0
+        if pos != corner:
+            if max(abs(pos[0] - corner[0]), abs(pos[1] - corner[1])) == 1:
+                self._set_state(f'probe: stepping onto the corner {corner}')
+                self._step_to(*corner)
+                return True
+            return self._approach(inner)
+        sea = self._sea_adjacent()
+        if sea:
+            t['probe_quiet'] = 0
+            t['probe_seen'] = t.get('probe_seen', 0) + 1
+            self._set_state(f'probe: fighting the sea monster at {sea[0]}')
+            y, x = to_bot(*sea[0])
+            with agent.atom_operation():
+                agent.step(A.Command.FIGHT)
+                agent.direction(agent.calc_direction(bl.y, bl.x, y, x))
+            return True
+        if self._fight_adjacent():
+            return True
+        t['probe_quiet'] = t.get('probe_quiet', 0) + 1
+        if t['probe_quiet'] > quiet_needed:
+            t['probe_done'] = 1
+            t['probe_end'] = now
+            self._log(f'probe {t.get("probe_round", 1)}: {corner} quiet for {quiet_needed} searches '
+                      f'(sea monsters met: {t.get("probe_seen", 0)}, {now - start} turns): setting off')
+            return False
+        self._set_state(f'probe: searching on {corner}')
+        agent.search()
+        return True
 
     # ------------------------------------------------------------------ strategy entry points
 
@@ -737,7 +982,7 @@ class CastlePassage:
                 self._set_state(f'stepping to {spot}')
                 self._step_to(*spot)
                 return True
-            spot = TEST_SPOT
+            spot = self._tspot()
             target = to_bot(*spot)
         if agent.bfs()[target] == -1:
             mx, my = self._pos()
@@ -925,6 +1170,8 @@ class CastlePassage:
             return self._approach(CORNER)
         plan = self._plan()
         cold = self._cold_source()
+        if jf_config.BREACH_WANDS and self._wand_test_step():
+            return True
         if not plan and cold is None:
             self._give_up('nothing that crosses water')
             return False
@@ -941,7 +1188,17 @@ class CastlePassage:
         # zap_over_floor), so a zap freezes 2-3 squares of the 26 on the way round -- it only helps a
         # stranded crossing.
         kind, item = plan[0] if plan else ('cold', cold)
-        spot = CORNER if kind in ('horn', 'cold') else TEST_SPOT
+        if jf_config.BREACH_COLD_FIRST and cold is not None and kind in ('potion', 'amulet'):
+            # a known cold source before the untested potions: a ray freezes ~3 moat squares, so 4-5 zaps bridge the
+            # west channel (and its ice has no water beside it: no sea monster reaches us there); the potions are
+            # then tried at the strip's east end (_cross_step 'stranded'), where a lift only has to last the 13 squares
+            # of the east channel instead of the whole 75-square way round (an uncursed potion lasts 11-150 turns)
+            kind, item = 'cold', cold
+        if jf_config.BREACH_PROBE and kind not in ('horn', 'cold') and pos in WEST_COURTYARD:
+            self._probe_refresh()
+            if self._probe_step():
+                return True
+        spot = CORNER if kind in ('horn', 'cold') else self._tspot()
         if pos != spot:
             return self._approach(spot)
         if kind == 'cold':
@@ -952,15 +1209,15 @@ class CastlePassage:
             agent.search()
             return True
         engraving = (agent.inventory.engraving_below_me or '').lower()
-        if spot == TEST_SPOT and engraving != 'elbereth' and agent.can_engrave() and \
+        if spot == self._tspot() and engraving != 'elbereth' and agent.can_engrave() and \
                 not agent.character.prop.blind and not self._tries.get('spot_elbereth'):
             self._tries['spot_elbereth'] = 1
             agent.engrave('Elbereth')
             return True
         lasting = kind in ('wish', 'boots', 'ring', 'amulet')
         bl = agent.blstats
-        if lasting and bl.hitpoints < 0.85 * bl.max_hitpoints and not self._hostiles_near(1) and \
-                self._tries.get('rest', 0) < 300:
+        if lasting and bl.hitpoints < (self._rush_hp() if jf_config.BREACH_RUSH else 0.85) * bl.max_hitpoints and \
+                not self._hostiles_near(1) and self._tries.get('rest', 0) < 300:
             # a lasting lift gives time: start the gauntlet (2 sharks, 4 giant eels, xorns in the walls)
             # at full strength
             self._tries['rest'] = self._tries.get('rest', 0) + 1
@@ -1021,7 +1278,19 @@ class CastlePassage:
         if self.levitating() and self._timed_levitation():
             self._resting = False
             return False
+        if jf_config.CFP_MB and not self.levitating():
+            # castle-first-pass: a polymorph form doesn't rest -- its hit points are its own pool (rehumanize returns
+            # ours) and it ends in rn1(500,500) turns; a cursed ring of polymorph may change it any turn (power-route's
+            # arm jf25 s1: a human mummy rested ~125 turns, then a panther and a shark killed the form)
+            from . import castle_cross
+            if castle_cross.form_permonst(agent) is not None and castle_cross.amphibious(self):
+                self._resting = False
+                return False
         want = 0.9 if (self._resting or self._after_valley_retreat()) else 0.45
+        if jf_config.BREACH_RUSH and not self._resting and map_char(*pos) == '.' and pos[1] in (0, 16):
+            # BREACH_RUSH: the strip is where a lasting lift rests (no land monster reaches it, Elbereth holds the sea
+            # monsters in row 1): stop there below 80% instead of in the west courtyard
+            want = 0.8
         if bl.hitpoints >= want * bl.max_hitpoints or self._tries.get('rest_stop', 0) > 600:
             if self._resting:
                 self._log(f'rested: hp {bl.hitpoints}/{bl.max_hitpoints}')
@@ -1030,7 +1299,7 @@ class CastlePassage:
         if jf_config.CASTLE_EDGE_REST and (pos in MOAT_EDGE or (pos[0] >= 57 and self._wet_around(*pos))):
             # rest one square in from the moat (sharks, eel wraps), not on its edge: TEST_SPOT in the west
             # courtyard, SAFE_EAST in the east one (pwc-dp4 jf25-s0 rested at the east courtyard's edge (61,6))
-            spot = SAFE_EAST if pos[0] >= 57 else TEST_SPOT
+            spot = SAFE_EAST if pos[0] >= 57 else self._tspot()
             self._set_state(f'stepping off the moat edge to rest at {spot}')
             if not self._step_downhill(_bfs(spot, OUTSIDE), pos):
                 self._step_to(*spot)
@@ -1107,8 +1376,15 @@ class CastlePassage:
                 self._set_state('waiting for the levitation to end')
                 agent.search(3)
             return
+        if jf_config.BREACH_LEVWARN and self.levitating() and self._timed_levitation() and self._levwarn_step(pos):
+            return
         if self._rest_stop(pos):
             return
+        if jf_config.CFP_ZAP:
+            # castle-first-pass: open the back door from the east courtyard's row 8, out of the eels' reach
+            from . import castle_cross
+            if castle_cross.door_zap_from_afar(self, pos):
+                return
         if pos in (GOAL, DOOR, TRAPDOOR):
             self._door_step(pos)
             return
@@ -1116,8 +1392,16 @@ class CastlePassage:
             if self._wield_weapon():
                 return
             bl = agent.blstats
-            if pos in WEST_COURTYARD and not self._timed_levitation() and \
-                    bl.hitpoints < 0.85 * bl.max_hitpoints and self._tries.get('rest', 0) < 300:
+            if jf_config.BREACH_PROBE and pos in WEST_COURTYARD and not self._timed_levitation() and \
+                    self._probe_step():
+                return
+            form_lift = False
+            if jf_config.CFP_MB and not self.levitating():
+                from . import castle_cross
+                form_lift = castle_cross.form_permonst(agent) is not None   # (no rest in a form: see _rest_stop)
+            if pos in WEST_COURTYARD and not self._timed_levitation() and not form_lift and \
+                    bl.hitpoints < (self._rush_hp() if jf_config.BREACH_RUSH else 0.85) * bl.max_hitpoints and \
+                    self._tries.get('rest', 0) < 300:
                 # floating on a ring/boots in the courtyard: set off at full strength (fight what comes)
                 if jf_config.CASTLE_EDGE_REST and pos in MOAT_EDGE:
                     # not beside the moat: a shark bit a ring-lifted pwc-dp3 jf16-s13 from 80 to 19 HP in two
@@ -1125,8 +1409,8 @@ class CastlePassage:
                     self._set_state('stepping off the moat edge to rest')
                     # (the south corner (0,10) is 3 steps from TEST_SPOT: a direct step asserted in a loop,
                     # pwc-dp11 jf14-s14)
-                    if not self._step_downhill(_bfs(TEST_SPOT, OUTSIDE), pos):
-                        self._step_to(*TEST_SPOT)
+                    if not self._step_downhill(_bfs(self._tspot(), OUTSIDE), pos):
+                        self._step_to(*self._tspot())
                     return
                 self._tries['rest'] = self._tries.get('rest', 0) + 1
                 if not self._fight_adjacent():
@@ -1148,6 +1432,8 @@ class CastlePassage:
                 dist = _bfs(GOAL, SOUTH if self._half == 'south' else NORTH)
             if pos not in dist:
                 dist = _bfs(GOAL, OUTSIDE)
+            if jf_config.BREACH_SIDESTEP and self._sidestep(pos):
+                return
             if pos in dist:
                 self._set_state('floating across')
                 if self._step_downhill(dist, pos, prefer_route=True):
@@ -1167,11 +1453,112 @@ class CastlePassage:
         # stranded (levitation ended on the dry strip, the ice ran out): try whatever is left right here
         plan = self._plan()
         if plan:
+            if jf_config.BREACH_COLD_FIRST and not self.levitating() and map_char(*pos) == '.':
+                # the strip borders the moat (row 1) all along: Elbereth first, so a quaff that puts us to sleep or
+                # blinds us doesn't hand a shark free bites (sea monsters respect it)
+                engraving = (agent.inventory.engraving_below_me or '').lower()
+                if engraving != 'elbereth' and agent.can_engrave() and not agent.character.prop.blind and \
+                        self._tries.get('strand_elbereth', 0) < 30:
+                    self._tries['strand_elbereth'] = self._tries.get('strand_elbereth', 0) + 1
+                    self._set_state(f'stranded at {pos}: Elbereth before trying {plan[0][0]}')
+                    agent.engrave('Elbereth')
+                    return
             self._set_state(f'stranded at {pos}')
             self._try(*plan[0])
             return
         self._give_up(f'stranded at {pos}')
         agent.search()
+
+    # the west channels' mouths: the corner (dry), the two water squares off it, and the first square of the
+    # one-square-wide column that both of them lead into
+    MOUTHS = {'north': ((0, 6), ((0, 5), (1, 5)), (0, 4)), 'south': ((0, 10), ((0, 11), (1, 11)), (0, 12))}
+
+    def _sidestep(self, pos):
+        """BREACH_SIDESTEP: a sea monster in the first square of the one-square-wide west column (the harness baseline's
+        commonest block: 42 attack actions at (0,4) from (0,5), each answered by 5d6 shark bites and a xorn in the walls)
+        can't be passed; one on either of the two squares off the corner can -- both lead diagonally into the column.
+        So back off onto the corner and wait there (up to 4 turns, twice) for the blocker to come out after us, then go
+        round it; the downhill step already prefers the unoccupied mouth square. True: acted this step."""
+        agent = self.agent
+        t = self._tries
+        corner, mouth, head = self.MOUTHS['south' if self._half == 'south' else 'north']
+        now = agent.blstats.time
+        waiting = t.get('ss_wait_since')
+        if pos in mouth and self._monster_at(*head) and t.get('ss_rounds', 0) < 2 and not self._monster_at(*corner):
+            t['ss_rounds'] = t.get('ss_rounds', 0) + 1
+            t['ss_wait_since'] = now
+            self._log(f'sidestep {t["ss_rounds"]}: {head} is held -- back onto {corner} to draw it out')
+            self._set_state('sidestep: backing onto the corner')
+            self._step_to(*corner)
+            return True
+        if pos == corner and waiting is not None:
+            if now - waiting > 4 or not self._monster_at(*head) or any(self._monster_at(*m) for m in mouth):
+                t['ss_wait_since'] = None   # it came out (or left): go on, round it
+                return False
+            self._set_state('sidestep: waiting on the corner for the blocker to come out')
+            if not self._attack_holder():
+                agent.search()
+            return True
+        return False
+
+    def _rush_hp(self):
+        """BREACH_RUSH: the HP fraction below which a lasting lift still rests in the west courtyard before the crossing.
+        The courtyard is where the maze's land monsters reach us (brx-t2-mino: ring kits 4/24, most deaths at the
+        landing or during the courtyard rest -- jf16-s6~2 rested floating at 38-50% HP until a gnome king killed it);
+        two squares into the channel no land monster reaches us, and the strip (row 0) is the rest stop (Elbereth
+        holds the sea monsters). A land hostile within 4: no rest at all -- the moat is the escape."""
+        agent = self.agent
+        bl = agent.blstats
+        y0, x0 = bl.y, bl.x
+        land = [m for m in agent.get_visible_monsters()
+                if max(abs(m[1] - y0), abs(m[2] - x0)) <= 4 and
+                (map_char(*to_map(m[1], m[2])) != '}' or self._dry(*to_map(m[1], m[2])))]   # (the maze counts)
+        if land:
+            return 0.0
+        return jf_config.BREACH_RUSH_HP
+
+    def _levwarn_step(self, pos):
+        """BREACH_LEVWARN: timeout.c levitation_dialogue says 'You float slightly lower.' 5 turns before a potion's
+        lift ends ('You wobble unsteadily' at 3). Then: quaff another known potion of levitation (potion.c adds to
+        the timeout even while levitating); else don't start a water stretch from dry land, and over water make for
+        the nearest dry square within reach instead of pressing on (a lift ending over the one-square channels
+        drowns us: no land to crawl out to). True: acted this step."""
+        agent = self.agent
+        msg = agent.message or ''
+        now = agent.blstats.time
+        if 'float slightly lower' in msg or 'wobble unsteadily' in msg:
+            if getattr(self, '_lev_warn', None) is None:
+                self._log(f'levitation ending (turn {now}) at {pos}')
+            self._lev_warn = now
+        warn = getattr(self, '_lev_warn', None)
+        if warn is None or now - warn > 8:
+            return False
+        pot = next((i for i in self._items() if i.category == nh.POTION_CLASS and i.is_unambiguous() and
+                    i.object.name == 'levitation' and i.status != i.CURSED), None)
+        if pot is not None:
+            self._lev_warn = None
+            self._set_state(f'levitation ending: quaffing {pot.text!r} to stay up')
+            agent.inventory.quaff(pot)
+            self._log(f'quaffed {pot.text!r} over {pos}: {agent.message!r}')
+            return True
+        dist_goal = _bfs(GOAL, OUTSIDE)
+        if self._dry(*pos):
+            nexts = _downhill(dist_goal, pos)
+            if nexts and all(not self._dry(*n) for n in nexts):
+                self._set_state('levitation ending: waiting on dry land')
+                if not self._fight_adjacent():
+                    agent.search()
+                return True
+            return False
+        reach = _bfs(pos, OUTSIDE)
+        land = [(d, dist_goal.get(p, 999), p) for p, d in reach.items() if d <= 6 and self._dry(*p)]
+        if not land:
+            return False
+        _, _, target = min(land)
+        self._set_state(f'levitation ending: making for dry land at {target}')
+        if not self._step_downhill(_bfs(target, OUTSIDE), pos):
+            return False
+        return True
 
     def _cold_step(self, cold):
         """Standing on the route with water next: freeze the straight segment ahead with a cold ray."""
@@ -1235,6 +1622,16 @@ class CastlePassage:
             self._set_state('through the door')
             self._step_to(*DOOR)
             return
+        if jf_config.BREACH_DOOR and not self.levitating():
+            # the east eels start at (57,07) and (57,09), both next to this square: Elbereth under us while we work
+            # the lock (a scared eel lets go, F030); a kick wipes it (dokick.c u_wipe_engr) -- written again after
+            engraving = (agent.inventory.engraving_below_me or '').lower()
+            if engraving != 'elbereth' and agent.can_engrave() and not agent.character.prop.blind and \
+                    tries.get('door_elbereth', 0) < 80:
+                tries['door_elbereth'] = tries.get('door_elbereth', 0) + 1
+                self._set_state('Elbereth at the back door')
+                agent.engrave('Elbereth')
+                return
         for name in ('striking', 'digging', 'opening'):
             wand = next((i for i in self._items() if self._usable_wand(i, name)), None)
             if wand is not None and tries.get(name, 0) < 2:
@@ -1274,7 +1671,17 @@ class CastlePassage:
             self._set_state('coming down to kick the door')
             self._stop_levitating()
             return
-        if self._fight_adjacent():
+        if jf_config.BREACH_DOOR:
+            # on Elbereth only what ignores it is worth a blow (hitting a scared monster erases it: mon.c setmangry)
+            near = [m for m in self._hostiles_near(1) if self.dive._ignores_elbereth(m[3])]
+            if near:
+                _, y, x, mon, _ = near[0]
+                self._set_state(f'fighting {getattr(mon, "mname", "?")} at the door')
+                with agent.atom_operation():
+                    agent.step(A.Command.FIGHT)
+                    agent.direction(agent.calc_direction(agent.blstats.y, agent.blstats.x, y, x))
+                return
+        elif self._fight_adjacent():
             return
         if agent.blstats.time < getattr(agent, '_no_kick_until', -1):
             agent.search(3)

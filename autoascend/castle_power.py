@@ -149,11 +149,35 @@ def arrival_step(passage):
                     return True
         # (scrolls that may be scare monster are dropped only when an Elbereth-ignorer closes in: CASTLE_SCARE,
         # dive_logic.gehennom_scare -- dropped here at the landing they stayed behind when we moved on)
-    if poly:
+    cfp_wait = False
+    if jf_config.CFP_RUSH:
+        # castle-first-pass: the kit's own lasting lifts and the magical-breathing water test go first; a big form
+        # tears the armour off (cfp-p2-jf25 s3: a leocrotta form, then a lynx killed the naked dwarf)
+        from . import castle_cross
+        cfp_wait = castle_cross.pending(passage)
+    xorn = False
+    if jf_config.CFP_XORN:
+        from . import castle_cross
+        xorn = castle_cross.wallwalker(agent)
+    if poly and not cfp_wait and not xorn:
         # 3. a known wand of polymorph: zap ourselves until a form that crosses water comes up
         form = current_form(agent)
+        if jf_config.CFP_MB:
+            # castle-first-pass: the form from the messages (the glyph test misses it when we're invisible), and a
+            # breathless form counts as crossing -- it walks the moat bottom (mondata.h amphibious() includes
+            # M1_BREATHLESS): arm cfpc-s4's giant mimic form walked the moat bottom to the strip; the old test (fly /
+            # swim / M1_AMPHIBIOUS) zapped such forms away again
+            from . import castle_cross
+            form = castle_cross.form_permonst(agent)
+            crossing = form is not None and (crosses(form) or castle_cross.amphibious(passage))
+        else:
+            crossing = form is not None and crosses(form)
         wand = _poly_wand(agent)
-        if wand is not None and (form is None or not crosses(form)) and t.get('pw_polyzaps', 0) < 12:
+        if wand is not None and not crossing and t.get('pw_polyzaps', 0) < 12 and \
+                jf_config.CFP_XORN and castle_cross.poly_prep(passage):
+            # castle-first-pass: the rings that may be polymorph control go on first (POLY_XORN answers 'xorn')
+            return True
+        if wand is not None and not crossing and t.get('pw_polyzaps', 0) < 12:
             if form is not None and agent.blstats.carrying_capacity >= 4:
                 # a small form is Overtaxed by our pack and zap.c check_capacity refuses to zap: keep only the wand
                 rest = [i for i in agent.inventory.items if i is not wand and i.can_be_dropped_from_inventory()
@@ -201,6 +225,17 @@ def door_step(passage, pos):
     if p is None:
         return False
     from .castle_logic import DOOR, TRAPDOOR, SAFE_EAST, OUTSIDE, _bfs
+    if jf_config.BREACH_PLUNGE and pos == TRAPDOOR and flies(p) and not passage.levitating():
+        # do.c dodown: on a trap door we have seen (flying over it: 'A trap door opens up under you! You don't fall
+        # in.' -- trap.c feeltrap) '>' plunges through it even while flying (dotrap TOOKPLUNGE); only levitation
+        # refuses. The old rule waited up to 3000 turns for the form to end here.
+        t = passage._tries
+        t['pw_plunge'] = t.get('pw_plunge', 0) + 1
+        if t['pw_plunge'] <= 3:
+            passage._set_state(f'power: {p.mname} form plunging through the trap door')
+            agent.direction('>')
+            passage._log(f"'>' on the trap door as a {p.mname}: {agent.message!r}")
+            return True
     wait = False
     if pos in (DOOR, TRAPDOOR) and flies(p):
         wait = True                       # a flyer floats over the trap door (trap.c: Flying)
@@ -219,6 +254,93 @@ def door_step(passage, pos):
         passage._set_state(f'power: waiting for the {p.mname} form to end')
         agent.search(3)
     return True
+
+
+# ---------------------------------------------------------------------------------------------- BREACH_MINO
+
+_W = {n: O.from_name(n, nh.WAND_CLASS) for n in (
+    'sleep', 'death', 'teleportation', 'polymorph', 'striking', 'fire', 'cold', 'lightning', 'magic missile',
+    'slow monster', 'speed monster', 'make invisible', 'create monster', 'digging', 'cancellation')}
+# what a zap does to a minotaur (15HD, MR 0, 3d10/3d10/2d8 a turn, speed 15): stops it for good, hurts it, or worse
+_DECISIVE = ('sleep', 'death', 'teleportation', 'polymorph')
+_DAMAGE = ('striking', 'fire', 'cold', 'lightning', 'magic missile', 'slow monster')
+_HARMFUL = ('speed monster', 'make invisible', 'create monster')
+MINO_RANGE = 8
+
+
+def is_big_ignorer(dive, mon):
+    """A minotaur, or another Elbereth-ignorer of level 10+ (captain, Elvenking...)."""
+    name = getattr(mon, 'mname', '')
+    if name == 'minotaur':
+        return True
+    return dive._ignores_elbereth(mon) and name != 'unknown' and getattr(mon, 'mlevel', 0) >= 10
+
+
+def breach_wand(agent, unknown_ok=True):
+    """BREACH_MINO: the wand to zap at a minotaur, best first: a known wand of sleep/death, teleportation, polymorph,
+    then striking/fire/cold/lightning/magic missile/slow monster, then an unknown wand not zapped yet whose possible
+    types (price, engrave test) are more likely to stop or hurt it than to help it. (wand, why) or (None, None)."""
+    items = [i for i in agent.inventory.items if i.is_wand() and not power._empty(agent, i)]
+    for group in (_DECISIVE, _DAMAGE):
+        for name in group:
+            for it in items:
+                if it.is_unambiguous() and it.object == _W[name]:
+                    return it, f'known {name}'
+    if not unknown_ok:
+        return None, None
+    zapped = agent._last_resort_zapped
+    best = None
+    for it in items:
+        if it.is_unambiguous() or it.glyphs[0] in zapped or len(it.glyphs) != 1:
+            continue
+        good = power.p_of(it, {_W[n] for n in _DECISIVE + _DAMAGE})
+        bad = power.p_of(it, {_W[n] for n in _HARMFUL})
+        decisive = power.p_of(it, {_W[n] for n in _DECISIVE})
+        if good <= bad:
+            continue
+        key = (decisive, good - bad)
+        if best is None or key > best[0]:
+            best = (key, it)
+    if best is None:
+        return None, None
+    return best[1], f'unknown P(stop)={best[0][0]:.2f} P(good-bad)={best[0][1]:.2f}'
+
+
+def zap_breach_wand(agent, wand, why, target, direction):
+    """Zap `wand` at `target` ((_, y, x, mon, _)) in `direction`; an unknown one is marked tried."""
+    _, my, mx, mon, _ = target
+    if not wand.is_unambiguous():
+        agent._last_resort_zapped.add(wand.glyphs[0])
+    agent.log(f'BREACH zapping {wand.text!r} ({why}) at the {getattr(mon, "mname", "?")} at ({my},{mx}) '
+              f'hp {agent.blstats.hitpoints}/{agent.blstats.max_hitpoints}')
+    agent.zap(wand, direction)
+    msg = agent.message
+    agent.log(f'BREACH zap -> {msg[:120]!r}')
+    if 'Nothing happens' in msg or 'You wrest' in msg:
+        agent.inventory.empty_wands.add(wand.text)
+    agent.inventory.items.update(force=True)
+
+
+def inline_targets(dive, max_dist=MINO_RANGE):
+    """Big Elbereth-ignorers in a straight line 2..max_dist squares away over walkable squares:
+    [(dist, direction, target)]."""
+    agent = dive.agent
+    bl = agent.blstats
+    level = agent.current_level()
+    out = []
+    for m in agent.get_visible_monsters():
+        _, my, mx, mon, _ = m
+        dy, dx = int(my - bl.y), int(mx - bl.x)
+        dist = max(abs(dy), abs(dx))
+        if dist < 2 or dist > max_dist or not (dy == 0 or dx == 0 or abs(dy) == abs(dx)) or \
+                not is_big_ignorer(dive, mon):
+            continue
+        sy, sx = (dy > 0) - (dy < 0), (dx > 0) - (dx < 0)
+        if any(not level.walkable[bl.y + sy * k, bl.x + sx * k] for k in range(1, dist)):
+            continue
+        out.append((dist, agent.calc_direction(bl.y, bl.x, bl.y + sy, bl.x + sx), m))
+    out.sort(key=lambda t: t[0])
+    return out
 
 
 # ---------------------------------------------------------------------------------------------- deep escape
@@ -247,11 +369,29 @@ def deep_poly_escape_strategy(dive):
         if form is not None and crosses(form):
             yield False
             return
+        from . import castle_cross
+        if jf_config.CFP_XORN and castle_cross.wallwalker(agent):
+            # castle-first-pass: a wall-walking form (xorn) is the way to the trap doors -- no re-zap (power-route's
+            # harness pr-polyx2 zapped the wand again as a xorn at 13/31 HP with a minotaur adjacent)
+            yield False
+            return
         hp, hpmax = bl.hitpoints, bl.max_hitpoints
         adjacent = [m for m in agent.get_visible_monsters() if utils.adjacent((m[1], m[2]), (bl.y, bl.x))]
         if not adjacent:
             yield False
             return
+        if jf_config.BREACH_MINO:
+            # at any HP: a minotaur takes 30-50 HP a turn and nothing but a wand (or a scroll of scare monster)
+            # stops it; the kit's wand of polymorph goes at IT (the crossing self-zap comes later, CASTLE_POLY)
+            big = [m for m in adjacent if is_big_ignorer(dive, m[3])]
+            if big and not dive.on_scare_scroll():
+                bwand, why = breach_wand(agent)
+                if bwand is not None:
+                    yield True
+                    target = big[0]
+                    zap_breach_wand(agent, bwand, why, target,
+                                    agent.calc_direction(bl.y, bl.x, target[1], target[2]))
+                    return
         wand = _poly_wand(agent) if hp < 0.6 * hpmax else None
         if wand is None:
             # an Elbereth-ignorer (minotaur, @) at us from the landing on: gamble each unknown wand on it now rather

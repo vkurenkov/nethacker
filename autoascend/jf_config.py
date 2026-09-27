@@ -199,6 +199,80 @@ CASTLE_WEST_DIG = True
 # when she is castle-1: 2 of 61 real kits 'petrified by Medusa' in pwc-dp1)
 # ON (train 3.3, power castle set)
 CASTLE_NO_RETREAT = True
+# --- castle-breach: getting past the castle with the kits the dive brings (castle_logic, castle_power, dive_logic) ---
+# Harness (castle-real-all, 61 real kits x 4 level-generation salts = 244 games, train 3.6 = 4103a5a): 8/244 pass,
+# 8/84 among the 21 kits that hold a passage item or a polymorph source. Crossing attempts (courtyard -> moat) die in
+# the moat ring's NW channel (map x 0 rows 1-5 + row 0 x 0-8, one square wide) or on the courtyard corner (0,6): 21 of
+# ~40 attempts (brx-base-all3/all4), a shark waiting hidden at (0,5)/(1,5)/(0,4) biting 5d6 up to twice per our move
+# while we trade blows over the water; every attempt that got past it reached the east courtyard.
+# BREACH_PROBE: before the first lift is tried in the west courtyard, stand on the moat-ring corner of our half ON FOOT
+# and search (detect.c mfind0: a search finds a hidden eel/shark next to us): fight what shows from dry land, step back
+# to TEST_SPOT (no water next to it) to rest below BREACH_PROBE_HP, and only set off once BREACH_PROBE_QUIET searches
+# in a row found nothing (at most BREACH_PROBE_BUDGET turns). A lasting lift found earlier (a ring put on where we
+# landed) is taken off for the rests.
+BREACH_PROBE = False
+BREACH_PROBE_QUIET = 8
+BREACH_PROBE_BUDGET = 300
+BREACH_PROBE_HP = 0.6
+# a probe older than this many turns is repeated (shorter) before the next item that may lift us
+BREACH_PROBE_STALE = 25
+# BREACH_WANDS: engrave-test the unknown wands on a bare west-courtyard square (2,8) before the passage plan is given up:
+# the arrival drill tested them on the landing square, inside the pit of our castle-detecting dig, where the engrave
+# test's look ('There is a pit here.  You see no objects here.') refused every wand and marked it tried -- jf14-s0 gave
+# the castle up ('nothing that crosses water') holding an untested wand of cold (brx-smoke1)
+BREACH_WANDS = False
+# BREACH_RESUME: a passage given up for want of a way across ('nothing that crosses water', 'stranded') resumes when one
+# turns up later (a wand named by a zap at a monster, a lift from a last-resort quaff, a crossing polymorph form)
+BREACH_RESUME = False
+# BREACH_COLD_FIRST: with a known wand of cold (or frost horn) and only untested potions/amulets left, freeze the west
+# channel first (a ray freezes ~3 squares; the ice has no water beside it) and try the potions at the strip's east end
+# on Elbereth: a lift then only has to cover the 13-square east channel (an uncursed potion lasts 11-150 turns, the whole
+# way round takes ~56 at our speed). Kits: 4 of 61 carry a wand of cold, 2 of them with a potion of levitation
+BREACH_COLD_FIRST = False
+# BREACH_LEVWARN: 'You float slightly lower.' (5 turns left of a potion's lift): quaff another known potion of
+# levitation, else don't start a water stretch from land, and over water make for the nearest dry square
+BREACH_LEVWARN = False
+# BREACH_SIDESTEP: floating into the west channel with a sea monster in its first one-square-wide square ((0,4) north:
+# 42 attack actions there in the baseline, the commonest block), back onto the corner and wait up to 4 turns for it to
+# come out after us onto one of the two squares off the corner, then pass it by the other (both lead into the column)
+BREACH_SIDESTEP = False
+# BREACH_NOWAIT: on the castle level (passage active) don't wait out blindness or hallucination (a potion of blindness:
+# 250-450 turns, hallucination 600-800) before going on with the passage plan -- confusion and stun (short, and a
+# confused step can land in the moat) are still waited out
+BREACH_NOWAIT = False
+# BREACH_PLUNGE: a flying polymorph form on the (55,08) trap door presses '>' (do.c dodown: a seen trap door takes a
+# flyer through with TOOKPLUNGE; only levitation refuses) instead of waiting up to 3000 turns for the form to end
+BREACH_PLUNGE = False
+# BREACH_SPOT: the west courtyard's item-test square (1,7) under a boulder (giants carry and drop them) moves to the
+# nearest free inner square, and a levitating hero goes round a boulder (or breaks it with the pick) instead of pushing
+# it without leverage: brx all-flags jf14-s14 explored 4000 turns toward a buried (1,7); baseline jf14-s14~1 gave up
+# 'courtyard square (1, 7) not reachable'; smoke jf14-s14~3 pushed the corner's boulder 80 times and gave up
+BREACH_SPOT = False
+# BREACH_RUSH: a lasting lift (ring, boots, a wished ring) rests in the west courtyard before the crossing only below
+# BREACH_RUSH_HP (was 85%), and never with a land hostile within 4 -- the moat is the escape from the maze's monsters
+# (2 squares into the channel nothing on land reaches us); the rest happens on the strip instead (rest stop below 80%,
+# Elbereth). brx-t2-mino ring kits 4/24: most died at the landing or in the courtyard rest (jf16-s6~2: gnome king)
+BREACH_RUSH = False
+BREACH_RUSH_HP = 0.35
+# BREACH_BYPASS: floating round the moat with every closer square held by a monster, step sideways to an equally close
+# free square whose next step is free instead of attacking (east channel mouth: a sea monster on (61,5) is passed by
+# (62,5) -> (61,6); the baseline attacked it from (62,4) 31 times in 434 harness games)
+BREACH_BYPASS = False
+# BREACH_MINO: an adjacent minotaur (or another Elbereth-ignorer of level 10+) at the castle depth: zap what may stop it
+# at any HP, best first -- a known wand of sleep/death, teleportation (zap.c u_teleport_mon works on noteleport levels:
+# rloc), polymorph (at IT: the kit's wand of polymorph was zapped at ourselves below 60% HP and minotaurs killed
+# public-s0 in 3 of 4 salts), then striking/fire/cold/lightning/magic missile, then each unknown wand once (the old
+# rule waited for HP < 90%: minotaurs take 30-50 HP a turn, 26 of 84 target games died to one)
+BREACH_MINO = False
+# BREACH_PILE: on a scroll of scare monster that works (CASTLE_SCARE hold, castle recognised), use the hold: zap wands
+# (BREACH_MINO's order) at an Elbereth-ignorer in a straight line up to 8 squares away, and try the passage plan's rings,
+# amulets, boots and wishes right there (the hold rested up to 1500 turns and tried nothing: 22 of 84 target games died
+# 'before any try', several after 100-700 turns on or near a pile)
+BREACH_PILE = False
+# BREACH_DOOR: at the back door (57,08) -- the giant eels start at (57,07)/(57,09), both next to it -- stand on Elbereth
+# while opening it (a scared eel lets go: F030), re-engraving after each kick (dokick.c u_wipe_engr(2), and its
+# wake_nearby wakes them); 3 of ~40 crossing attempts drowned there
+BREACH_DOOR = False
 # a hunger prayer from this gap (instead of FAINT_PRAYER_GAP / WEAK_PRAYER_GAP) when a hostile within
 # THREAT_RADIUS can reach us while Fainting, or while Weak with at most THREAT_WEAK_MARGIN nutrition left
 # (0: off). 9 of 10 Dlvl-1 deaths in the base runs were fainted next to ordinary monsters at gaps 950-1110.
@@ -402,6 +476,29 @@ CAMP_GUARD = False
 # arm-jf14 s8 +0.015 -- off
 WELD_PRAY = False
 WELD_PRAY_GAP = 1100
+# engraving (Elbereth, wand engrave-tests) follows engrave.c freehand(): a welded one-handed weapon (a cursed pick-axe the
+# dive applied) beside an uncursed shield still leaves a hand to write with; hands_welded() counted any shield, so such a
+# dive dug on without Elbereth (Valkyries start with a small shield)
+# ON (train 3.6): replay base8-jf14 s6 (pick-axe welded at the dive start, small shield worn): Elbereth 8x vs 1x, d24 -> d25
+FREEHAND_FIX = True
+# no retreat up the stairs from the level below Medusa's (or below an unvisited level at Medusa depth): they come out on
+# her '>' beside her, and her gaze stones us -- base9-public s3 dug past Medusa-26 at 17/78 HP, landed on 27 by its '<',
+# retreated up and was 'petrified by Medusa' (8 such deaths in ~700 dev runs); CASTLE_NO_RETREAT covers the castle only
+# once it is recognised
+# ON (train 3.6): replay base9-public s3 no longer climbs onto Medusa's '>' (lived 740 more turns on the castle level)
+MEDUSA_NO_RETREAT = True
+# teleport control's "To what level do you want to teleport?" was answered ESC (agent.update's generic text-prompt
+# branch), which cancels the teleport after the level teleporter is already used up. With control, from the Dungeons
+# any level past the castle is find_hell() = the Valley (castle+1: 0.507-0.691, above anything short of a castle
+# crossing) and from Gehennom level 50 exactly (the top of the progress table) or the vibrating-square level when
+# shallower (teleport.c level_tele): answer 50 in those two dungeons. Only reachable with teleport control (2 of 360 recent games), so dominant and default on.
+LEVELPORT_DEEP = True
+# a wand of wishing -> Gehennom's bottom-1 (tele_route.py): wish 1 = a ring of teleport control (worn), wish 2 = '2 cursed
+# scrolls of teleportation' (the wand is wrested for its last charge if needed), then read one anywhere in the Dungeons
+# (-> the Valley, castle+1) and one in the Valley (-> the vibrating-square level, Dlvl ~44-52: 0.78-0.81). Harness
+# lp-e2e: TC ring + a cursed scroll read on Dlvl 12 -> the Valley (Dlvl 26). Harness wr-unknown/wr2-unknown (XL 6 on Dlvl 3
+# with an unidentified wand of wishing): 12/12 into Gehennom, 10/12 to Dlvl 44-51. ON: it only acts with a wand of wishing.
+WISH_TELEPORT_ROUTE = True
 
 # Never dig or zap digging down on a staircase (rescue agent, 78a30e1; ported by hand for train 2): the square
 # under '@' is unknown on arrival, so _diggable_spot took the arrival '<' for floor, and a wand of digging
@@ -415,6 +512,142 @@ WAND_STAIRS_FIX = True
 # shopkeeper and his wand of striking killed the XL-8 dive; and the dive fetches no dwarf's pile in a shop.
 # ON (train 3.1): no shop pickups with uncontrolled teleportitis, no pile fetch in a shop (jf14 s10: teleported out unpaid, killed by the shopkeeper)
 SHOP_GUARD = True
+
+# --- valley-run (the Valley of the Dead with real castle-arrival kits: XL 7-10, 55-114 HP, AC -8..+10) ---
+# VALLEY_SPRINT (off, REJECTED -- no signal): the Valley walk never stops to fight what it can outrun
+# (dive_logic._valley_sprint): only adjacent monsters faster than us (bats) and the one on the next square of the way
+# are attacked; the way is the cheapest by a router that charges unseen graveyard squares and dangerous monsters;
+# up to 4 climbs of the '<' for a new landing square when the way on is through a dangerous monster; the landing
+# wields the weapon; a door is dug as soon as nothing is next to us; the '>' is taken at once with hostiles in view;
+# rest only below 45% HP; graveyard sleepers stay out of fight2 (the VALLEY_GRAVE_FILTER rule).
+# Evidence (valley-real suite, 61 real castle kits started in the Valley, 3000 turns): past the '>' 0/61 in every
+# arm -- base (train 3.6) median life 59 turns, v1 (4983dcc, vr-sprint1) 31, v2 (70412c3, vr-sprint2) 26; v2 got 4
+# games out of the landing zone (1 to the temple) vs 2 for base. The landing kills: first hit ~3 turns after the
+# fall (vampire bats, 44% of them vampires in bat form that rise again at full HP), then mummies.
+VALLEY_SPRINT = False
+
+# --- valley-exit ---
+# VALLEY_FORT (off, testing): the Valley's residents all home in on us (monmove.c set_apparxy: a monster that can see
+# knows our square, no line of sight needed) and an XL-8 kit can't trade blows with them: vx-base (valley-real, 61
+# real kits) 0/61 past the '>', 41 dead in the Valley (median ~40 turns: 2-6 vampire-bat-type biters within ~3 turns
+# of the fall, then giant/ettin mummies). A scroll of scare monster still works in Gehennom (onscary: only Elbereth
+# has the Inhell exception) and a scared monster never melees (dochug: mattacku only if !scared). So on landing walk
+# to the '<' (1-13 steps from every landing square), drop the scroll there (or, unknown, every scroll that may be one:
+# 12 of the 61 kits truly carry one) and strike from that square whatever comes next to us, with the climb at hand;
+# leave for the walk once no hostile has been in view for a while and HP is back, and come back to it to heal
+# (dive_logic.valley_fort). Only acts in the Valley.
+VALLEY_FORT = False
+# LANDING_GUARD (off, testing; castle_landing.py): the castle landing -- a minotaur (or another big Elbereth-ignorer) at
+# the castle depth gets the best known wand (beams and cold; other rays only with room to die out before a bounce),
+# a frozen one is struck instead, known healing is quaffed at 60% HP beside it (one of its turns takes 30-50 HP), and
+# CASTLE_SCARE drops its scrolls at 4 squares instead of 2. Inert before depth 25 on the main line.
+LANDING_GUARD = False
+# VALLEY_XORN (valley-exit; dive_logic.valley_xorn): a wall-walking polymorph form in the Valley (castle-first-pass's
+# CFP_XORN crosses the castle as a xorn) phases through the Valley's rock to its '>' (gehennom.des: NON_DIGGABLE but no
+# NON_PASSWALL) and goes down; the Gehennom dig-dive goes on below (a xorn keeps its weapon and hands). Acts only in
+# the Valley in a wall-walking form.
+# ON (e1d198e + this): real arm jf16 s0 pinned 0.691/D30 -> 0.723/D33; xornkit_salted 14: 5 Valley arrivals all exit
+# (D34 x4, D31) vs all dying at D30 off; identity off/on until 2 turns after the Valley arrival; crash-clean (vxk-on6,
+# id-t5-on) -- the turn-30000 DRIVER hang is a harness-only artifact (#polyself before the first attribute parse).
+VALLEY_XORN = True
+
+# --- castle-first-pass (castle_cross.py): get off the castle's west landing onto the moat before the landing kills us ---
+# CFP_RUSH: on the castle's west side a LASTING lift (known lev ring/boots, then unknown rings, then unknown magic
+# boots) goes on at once, above fight2/elbereth_rest/the scare hold, and a floating hero digs straight from the maze
+# to (-1,2)/(-1,14) and floats onto the moat ring's west column at (0,1)/(0,15) (9 water squares to the dry strip
+# instead of 14 from the courtyard corner). Over the moat no walker reaches us. Pinned-clock cfp-p2-jf16 s0: a ring
+# of levitation in the kit, dead 25 turns after landing (master lich + elf-lord) with the ring never tried.
+# ON in the train-4 candidate with CFP_MB/CFP_ZAP/CFP_XORN/POLY_XORN: the set of the first real castle pass (ledger
+# R082/R083: arm jf16 s0 0.691, Dlvl 30); all act only on the castle level (POLY_XORN: a polymorph-control prompt at
+# depth 25+).
+CFP_RUSH = True
+# CFP_MB (with CFP_RUSH): magical breathing walks the moat bottom (trap.c drown: 'But you aren't drowning. You touch
+# bottom.'); an unknown amulet is put on in the lift phase and water-tested by the step off the dug launch square (no
+# MB: we crawl back out onto it); a confirmed amulet or an amphibious/breathless polymorph form counts as floating for
+# castle_logic's crossing. cfp-p2-jf25 s3's kit held an amulet of magical breathing and a skeleton key, never used.
+CFP_MB = True
+# CFP_ZAP: what blocks the way round the moat gets the best known wand first -- teleportation, striking (beams), then
+# sleep/lightning/fire/cold/magic missile rays only where the ray can't bounce back (castle_logic zapped only striking)
+CFP_ZAP = True
+# CFP_XORN (with POLY_XORN, power-route): before CASTLE_POLY's self-zap put on the rings that may be polymorph control
+# (the lift test took them off), stop zapping once we are a wall-walker, and as a xorn walk through the castle's walls
+# (no NON_PASSWALL in castle.des) along the walled north corridor to a trap door (40..55,08): trap.c fall_through on
+# the stronghold is find_hell(), the Valley. cfp-v1-arm jf16 s0 zapped its wand of polymorph 6 times into random forms
+# with the ring of polymorph control in its pack (taken off by the lift test).
+CFP_XORN = True
+# CFP_PRUSH (with CFP_RUSH): potions that may lift us are quaffed one square west of the dug launch square (-1,2)/
+# (-1,14) on Elbereth, not in the courtyard: a potion's 10-149 turns then start 2 moves from the moat with 9 water
+# squares to the strip (14 from the courtyard), and no walk through the maze. Potions go before the magical-breathing
+# water test (the dunk dilutes them: cfp-g1-arm cfpi-s1 turned its diluted potion of levitation into water).
+# OFF in the train-4 candidate: castle-real-all 1/61 with it vs 2/61 without (t4-real-on, cfp-cra-prush): the rush to the
+# launch square walks/digs through the maze on foot, and jf25-s0 met a troll there instead of quaffing its potion of
+# levitation at the courtyard's TEST_SPOT (which crosses and passes without it)
+CFP_PRUSH = False
+# CFP_INVIS (with CFP_RUSH): on the castle, before the lifts, go permanently invisible with a KNOWN wand of make
+# invisible (zapped at ourselves: zap.c 'ordinary' -> HInvis FROMOUTSIDE) or ring of invisibility (a worn mummy wrapping
+# blocks it and comes off first): monmove.c set_apparxy makes a monster that can't see us guess our square each time we
+# move (ours 1 time in 3, else a random accessible neighbour), so sharks, eels and minotaurs land ~40-55% of their melee
+CFP_INVIS = False
+
+# --- power-route (power_route.py): teleport control + a level-teleport trigger from what the dive carries ---
+# TC_ROUTE (off): learn which ring gives teleport control from the game's prompts ('Where do you want to be
+# teleported?' / 'To what level do you want to teleport?' with one unknown ring worn) and the tengu message, identify
+# by reading (the identify menu picks rings, then teleport scrolls' BUC, wands, potions), and jump as soon as TC and a
+# SURE trigger are in hand: a cursed scroll of teleportation read unconfused, or a level teleporter (teleport.c:
+# confused answers to the level prompt are random 4 times in 5). From the Dungeons that lands in the Valley (castle+1),
+# from Gehennom on Dlvl 50 or the vibrating-square level (LEVELPORT_DEEP). Evidence: the 61 real castle kits held a TC
+# ring 4 times and a teleport scroll 34 times (4 cursed); jf16-s14 (Dlvl-29 castle, base3) carried the TC ring, a cursed
+# teleport scroll and 4 identify scrolls, and died 13 turns after landing with all of it unused.
+# ON (merge c44fe78): 45-game guard, dive-only version, pooled ~+0.025 (public 0.5112 vs base10 0.5023, jf14 0.4387 vs
+# 0.4243, jf16 0.4611 vs 0.4094; ledger R079); harness designed kit pr-tca7b 4/7 into the Valley (Dlvl 30).
+TC_ROUTE = True
+# the castle once the lift plan has given up (castle_logic.given_up): dying there costs nothing and an uncontrolled level
+# teleport only goes up, so read-identify, put rings that may give TC on, and pull every teleport trigger
+TC_CASTLE_GAMBLE = True
+# with TC known and only uncursed teleport scrolls: get confused (a stack that confused us before -- a cursed confuse
+# monster scroll -- or a known potion of confusion/booze) and read one: controlled 1 time in 5
+# (rnl(5) at Luck 0), else a random level (the score keeps the deepest). In Gehennom (the Valley kills an XL-8 hero in
+# ~60 turns), on the castle, or from TC_LOTTERY_DEPTH down
+TC_LOTTERY = True
+TC_LOTTERY_DEPTH = 10
+# with TC known: dip the teleport scrolls into known unholy water (potion.c H2Opotion_dip curses the whole stack: every
+# scroll becomes a sure controlled jump); at the castle's end state also into water of unknown BUC (1 in 8 unholy,
+# plain water blanks them)
+TC_DIP = True
+# a ring known (or proven by a TC prompt) to give teleport control goes on and stays on: a level teleporter stepped on
+# anywhere in the Dungeons is then the Valley (6% of games step on one)
+TC_WEAR = True
+# identify by reading outside the castle at quiet moments (no hostile within 6, HP >= 60%, not Weak): known identify
+# scrolls and unknown stacks of 2+ while unknown rings/wands/potions or a teleport scroll of unknown BUC are carried
+TC_DIVE_ID = True
+# drop carried rings/potions/scrolls/amulets of unknown BUC on a known altar of the current level (the grind's Dlvl 1-3
+# hold ~90% of the kit's scrolls and potions: 25 of 90 base10 games stood on an altar there); the bot picks them up again
+TC_ALTAR = True
+# try on (and take off) unknown rings whose BUC is known not cursed, at a quiet moment of the dive: a levitation ring
+# names itself ('You start to float in the air!') -- a certain lift for the castle and Medusa's islands
+TC_RING_TEST = True
+# polymorph control's 'Become what kind of monster?' (polyself.c) was answered ESC = a random form; on the castle answer
+# 'xorn' instead: it walks through walls (M1_WALLWALK; castle.des has no NON_PASSWALL) to the trap doors behind the
+# back door and falls through into the Valley (castle-first-pass moves the form; jf16-s7's Dlvl-29 kit holds a ring of
+# polymorph control). ON in the train-4 candidate (the xorn pass set, see CFP_RUSH).
+POLY_XORN = True
+
+# STAIR_BOULDER_FIX (off, power-route; ledger B009): a boulder on the staircase dive_logic._take_stairs wants. The BFS
+# never enters a boulder square, so it pushed the boulder from next to the stairs; with a wall behind it 'You try to
+# move the boulder, but in vain.' takes no game time and the dive spun there (jf14 s4: ~300k steps on Mines 2 with a
+# pick-axe and a wand of digging in the pack, then a soldier ant; 0.075 vs 0.602). After a failed push the boulder is
+# broken (pick-axe/mattock applied at it, or a known wand of striking), else pushed from a side with floor behind it,
+# else the stairs are left alone for STAIR_BOULDER_WAIT turns
+# ON (R096): jf14 s4 0.075 -> 0.602 (pick-axe breaks the boulder on Mines 2's '<'); flag off byte-identical on 3 pinned
+# seeds; 45-game guard fired only there, 0 unexpected exceptions / driver restarts.
+STAIR_BOULDER_FIX = True
+STAIR_BOULDER_WAIT = 300
+
+# SOKOBAN_TRIP (off, power-route): when the grind would hand over to the dive, run the tour's Sokoban milestones first
+# (dive_logic._sokoban_trip): 4 random rings + 4 random wands + the prize (bag of holding / amulet of reflection) --
+# the ingredients the castle and teleport-control routes lack (TC ring in 4 of 61 real castle kits)
+SOKOBAN_TRIP = False
+SOKOBAN_TRIP_TURNS = 8000
 
 _raw = os.environ.get('JF_CFG')
 if _raw:

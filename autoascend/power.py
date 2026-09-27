@@ -20,7 +20,7 @@ import re
 
 import nle.nethack as nh
 
-from . import jf_config
+from . import jf_config, tele_route
 from . import objects as O
 from .item import Item, flatten_items
 
@@ -57,6 +57,8 @@ WISH_LS = 'blessed amulet of life saving'
 WISH_SPEED = 'blessed greased +2 speed boots'
 # wishes whose object has a random appearance (gray dragon scale mail is known on sight)
 WISH_OBJECTS = {WISH_LEV_RING: LEV_RING, WISH_LS: LS_AMULET, WISH_SPEED: SPEED_BOOTS}
+# WISH_TELEPORT_ROUTE (tele_route.py): a ring of teleport control and cursed scrolls of teleportation
+WISH_OBJECTS.update({tele_route.WISH_TC_RING: tele_route.TC_RING, tele_route.WISH_TELE_SCROLLS: tele_route.TELE_SCROLL})
 
 
 def _prob(obj):
@@ -273,6 +275,7 @@ def learn_wished(agent):
     if obj is None:
         return
     letter = m.group(1)
+    tele_route.note_wished(agent, text, letter)
     obs = agent.last_observation
     glyph = next((int(g) for l, g in zip(obs['inv_letters'], obs['inv_glyphs']) if chr(l) == letter), None)
     im = agent.inventory.item_manager
@@ -293,6 +296,10 @@ def wish_text(agent, purpose=None):
     once: the dive's next death is survived; only ~19% of games reach the Castle, where a passage wish pays
     +0.045), then the Castle passage (a ring of levitation can be taken off to drop through the trap door),
     then speed boots. For purpose='passage' (castle_logic zapping at the moat) the ring comes first."""
+    # WISH_TELEPORT_ROUTE first, even at the moat: two controlled level teleports beat one crossing (tele_route.py)
+    route = tele_route.route_wish(agent)
+    if route is not None:
+        return route
     if purpose == 'passage' and not has_object(agent, LEV_RING):
         return WISH_LEV_RING
     if not any(i.is_armor() and i.is_unambiguous() and 'dragon scale' in i.object.name

@@ -111,6 +111,31 @@ def graveyard_mask(shape):
     return mask
 
 
+_ROUTE = {}
+
+
+def route_distance(shape):
+    """Steps from each square to the '>' over the floor of every wall variant with the secret doors open (-1:
+    unreachable): the shortest route of the most open variant, a progress yardstick for logs (not for planning)."""
+    if shape in _ROUTE:
+        return _ROUTE[shape]
+    walk = floor_mask(shape)
+    for door, _ in DOORS:
+        walk[door] = True
+    dist = np.full(shape, -1, int)
+    dist[DOWN_STAIRS] = 0
+    todo = [DOWN_STAIRS]
+    for y, x in todo:
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                ny, nx = y + dy, x + dx
+                if (dy or dx) and 0 <= ny < shape[0] and 0 <= nx < shape[1] and walk[ny, nx] and dist[ny, nx] < 0:
+                    dist[ny, nx] = dist[y, x] + 1
+                    todo.append((ny, nx))
+    _ROUTE[shape] = dist
+    return dist
+
+
 def floor_mask(shape):
     """Squares that are floor in at least one variant of the level, in bot coordinates (doors excluded)."""
     mask = np.zeros(shape, bool)
