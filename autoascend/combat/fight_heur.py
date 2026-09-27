@@ -256,8 +256,16 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
     return ret
 
 
+def in_gehennom(agent):
+    """monmove.c onscary(): Elbereth scares nothing in Gehennom (Inhell); engraving it there only hands out a
+    free hit, and waiting on it is standing still under attack."""
+    return jf_config.GEHENNOM_DIVE and agent.current_level().dungeon_number == 1
+
+
 def elbereth_action(agent, monsters):
     if agent.inventory.engraving_below_me.lower() == 'elbereth':
+        return []
+    if in_gehennom(agent):
         return []
     if not agent.can_engrave():
         return []
@@ -285,7 +293,7 @@ def elbereth_action(agent, monsters):
 
 
 def wait_action(agent, monsters):
-    if agent.inventory.engraving_below_me.lower() == 'elbereth':
+    if agent.inventory.engraving_below_me.lower() == 'elbereth' and not in_gehennom(agent):
         player_hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
         priority = 30 - player_hp_ratio * 40
         return [(priority, ('wait',))]
@@ -391,7 +399,8 @@ def get_priorities(agent):
     """ Returns a pair (move priority heatmap, other actions (with priorities) list) """
     walkable = agent.current_level().walkable
     priority = np.zeros(walkable.shape, dtype=float)
-    monsters = agent.get_visible_monsters()
+    # without the monsters a stalled fight let go of (jf_config.FIGHT_STALL_TURNS)
+    monsters = agent.fight_monsters()
     for m in monsters:
         draw_monster_priority_positive(agent, m, priority, walkable)
     for m in monsters:

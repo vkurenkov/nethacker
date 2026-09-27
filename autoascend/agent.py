@@ -10,7 +10,8 @@ import numpy as np
 from nle.nethack import actions as A
 
 from . import combat
-from . import jf_config, jf_log
+from . import jf_config, jf_log, jf_scenario
+from . import power
 from . import utils
 from .character import Character
 from .exceptions import AgentPanic, AgentFinished, AgentChangeStrategy
@@ -50,6 +51,8 @@ class Agent:
         self.last_observation = None
 
         self._last_pet_seen = 0
+        self._corpse_debug_pos = None
+        self._attack_ctx = None       # (turn, melee target, throw direction, origin, glyphs before) CORPSE_TRACK
 
         self.inventory = Inventory(self)
         self.character = Character(self)
@@ -62,10 +65,13 @@ class Agent:
         self.last_prayer_turn = None
         self.prayer_hold_until = -1
         self._fainting_since = None   # turn Fainting was first seen (jf_config.STARVE_CLOCK)
+        self._weak_since = None       # turn Weak was first seen (jf_config.THREAT_PRAYER_GAP)
         self._faint_measure = None    # (turn, uhunger estimate) from the last faint's length
         self._pray_reason = None      # which rule asked for the next prayer (logged)
         self._no_kick_until = -1      # wounded legs: no kicking until this turn
         self._last_resort_stairs_turn = -10 ** 9
+        self._last_resort_dig_turn = -1   # LAST_RESORT_DIG: at most one zap per turn
+        self._last_resort_zapped = set()  # LR_WAND_ONCE: glyphs of unknown wands the last resort already zapped
         self.prayer_failed = False
         self._monk_meat_meals = 0
         self._previous_glyphs = None
@@ -97,8 +103,12 @@ class Agent:
         # when (number of turn) there was last decision about allowing these actions (e.g. agent is somewhat stuck)
         self._allow_walking_through_traps_turn = -float('inf')
         self._allow_attack_all_turn = -float('inf')
+        self._pit_pos = None          # (level key, y, x) of the pit we are stuck in (FIGHT_PIT_FIX)
         self._hb_actions = Counter()   # actions and go_to targets since the last STATUS heartbeat
         self._hb_gotos = Counter()
+        self._fight_stall = None       # (turn a contactless fight began, XP then, last fight2 turn) FIGHT_STALL_TURNS
+        self._fight_ignored = {}       # (level key, glyph) -> [y, x, until turn, anywhere]: monsters fight2 let go
+        self._fight_moves = []         # (turn, level key, position) of fight2's consecutive moves (FIGHT_STALL_MOVES)
 
         self.last_cast_fail_turn = defaultdict(lambda: -float('inf'))
 
@@ -440,15 +450,22 @@ class Agent:
         # isn't always flagged as text entry: the bot's keys went into it ('lll...', ':/M', '#te') until a
         # potion type was called '#te', the item parser choked and the game stalled to the timeout
         if re.search(r'Call an? [^:]*:\s*$', self.single_message) and self._text_prompt_escapes < 5:
+            # a scroll that turned to dust on pickup names this game's scare monster label (power.py)
+            power.note_dust_prompt(self)
             self._text_prompt_escapes += 1
             self.step(A.Command.ESC)
             return
 
         if observation['misc'][1] and self._text_prompt_escapes < 5:  # entering text
             if "You may wish for an object." in self.message:
-                # TODO: wishing strategy
                 # TODO: assume wished item as blessed
-                self.step('b', iter('lessed greased +2 gray dragon scale mail\r'))
+                # SPARE_WISHES / castle_logic (agent.wish_purpose): GDSM first, then the Castle passage
+                # castle_logic may set agent.wish_text (an explicit wish) and/or agent.wish_purpose
+                purpose = getattr(self, 'wish_purpose', None)
+                text = getattr(self, 'wish_text', None) or \
+                    (power.wish_text(self, purpose) if (jf_config.SPARE_WISHES or purpose) else power.WISH_GDSM)
+                self.log(f'POWER wishing for {text!r}')
+                self.step(text[0], iter(text[1:] + '\r'))
                 return
             else:
                 # a text-entry flag that survives ESC after ESC recursed update->step->update until
@@ -672,10 +689,20 @@ class Agent:
                 glyph = MON.from_name(mname)
                 monster_id = glyph - nh.GLYPH_MON_OFF
                 corpse_glyph = MON.body_from_name(mname)
+                recorded = []
                 for y, x in zip(*utils.isin(mons, [glyph]).nonzero()):
                     # TODO: it works because level.items is updated in `inventory.check_items`
                     if all(map(lambda item: item.is_corpse() and item.monster_id != monster_id, level.items[y, x])):
                         level.corpses_to_eat[y, x][monster_id] = self.blstats.time
+                        recorded.append((int(y), int(x)))
+                # tour only: the dive's eating is dive-safety's (the first food arm's dives did worse)
+                if jf_config.CORPSE_TRACK and not self.global_logic.dive.diving:
+                    recorded += self._track_kill_positions(mname, level, recorded)
+                if jf_config.CORPSE_DEBUG:
+                    was = [(int(y), int(x)) for y, x in zip(*utils.isin(self._previous_glyphs, [glyph]).nonzero())]
+                    body = [(int(y), int(x)) for y, x in zip(*utils.isin(self.glyphs, [corpse_glyph]).nonzero())]
+                    self.log(f'CORPSE kill {mname} recorded={recorded} was_at={was} bodies_now={body} '
+                             f'me={(self.blstats.y, self.blstats.x)}')
 
         old_possible_corpses = level.corpses_to_eat[self.blstats.y, self.blstats.x].copy()
         del level.corpses_to_eat[self.blstats.y, self.blstats.x]
@@ -687,6 +714,99 @@ class Agent:
 
             level.corpses_to_eat[self.blstats.y, self.blstats.x][item.monster_id] = \
                 old_possible_corpses[item.monster_id]
+        if jf_config.CORPSE_DEBUG and corpses and self._corpse_debug_pos != (self.blstats.y, self.blstats.x):
+            self._corpse_debug_pos = (self.blstats.y, self.blstats.x)
+            self.log(f'CORPSE below {[(MON.permonst(it.monster_id + nh.GLYPH_MON_OFF).mname, n, self.blstats.time - old_possible_corpses[it.monster_id]) for it, n in corpses.items()]} '
+                     f'hunger={self.blstats.hunger_state}')
+        elif not corpses:
+            self._corpse_debug_pos = None
+
+    _DIRS = {'n': (-1, 0), 's': (1, 0), 'e': (0, 1), 'w': (0, -1),
+             'ne': (-1, 1), 'nw': (-1, -1), 'se': (1, 1), 'sw': (1, -1)}
+    CORPSE_ROT_AGE = 250   # corpses rot away by then (mkobj.c start_corpse_timeout): older records are stale
+
+    def _track_kill_positions(self, mname, level, recorded_now):
+        """CORPSE_TRACK: kill squares the glyph-disappearance test above misses. In two jf14 grinds 27% of the
+        kills went unrecorded (thrown-dagger kills parsed a few observations later, after the bot's bag check;
+        pack monsters with a same-kind neighbour; a remembered non-corpse item on the square), and a corpse
+        of unknown age is never eaten: 47 of the 125 edible corpses we stood on had no age, and the pet ate
+        most of them. Sources here: our last attack's target square / the first square of that kind along
+        the throw, and a square whose victim glyph turned into its corpse. An existing record younger than
+        CORPSE_ROT_AGE is kept, so a corpse never looks younger than it may be."""
+        glyph = MON.from_name(mname)
+        monster_id = glyph - nh.GLYPH_MON_OFF
+        corpse_glyph = MON.body_from_name(mname)
+        cands = []
+        ctx = self._attack_ctx
+        if ctx is not None and self.blstats.time - ctx[0] <= 2 and \
+                re.search(r'You (?:kill|destroy) ', self.message) is not None:
+            _, target, direction, origin, before = ctx
+            if target is not None:
+                if before[target] == glyph:
+                    cands.append((int(target[0]), int(target[1])))
+            elif direction in self._DIRS:
+                dy, dx = self._DIRS[direction]
+                y, x = origin
+                for _ in range(13):
+                    y, x = y + dy, x + dx
+                    if not (0 <= y < before.shape[0] and 0 <= x < before.shape[1]):
+                        break
+                    if before[y, x] == glyph:
+                        cands.append((int(y), int(x)))
+                        break
+        if self._previous_glyphs is not None:
+            for y, x in zip(*((self._previous_glyphs == glyph) & (self.glyphs == corpse_glyph)).nonzero()):
+                cands.append((int(y), int(x)))
+        added = []
+        for y, x in cands:
+            if (y, x) in recorded_now or (y, x) in added:
+                continue
+            if any(item.is_corpse() and item.monster_id == monster_id for item in level.items[y, x]):
+                continue
+            old = level.corpses_to_eat.get((y, x))
+            if old is not None and monster_id in old and self.blstats.time - old[monster_id] < self.CORPSE_ROT_AGE:
+                continue
+            level.corpses_to_eat[y, x][monster_id] = self.blstats.time
+            added.append((y, x))
+        return added
+
+    _PIT_IN = ('You are still in a pit', 'You dig a pit in the', 'You fall into a pit', 'You land on a set of sharp iron')
+
+    def _update_pit_state(self):
+        """PIT_AWARE_FIGHT: where we last were in a pit (trap.c climb_pit: only move attempts get us out)."""
+        here = (*self.current_level().key(), self.blstats.y, self.blstats.x)
+        msg = self.message
+        if 'You crawl to the edge of the pit' in msg:
+            self._in_pit_at = None
+        elif any(s in msg for s in self._PIT_IN):
+            self._in_pit_at = here
+        elif getattr(self, '_in_pit_at', None) is not None and self._in_pit_at != here:
+            self._in_pit_at = None
+
+    def in_pit(self):
+        return getattr(self, '_in_pit_at', None) == (*self.current_level().key(), self.blstats.y, self.blstats.x)
+
+    def _update_level_sessile(self, level):
+        """SESSILE_MEMORY: remember where the monsters fight2 never melees sit (molds, jellies, floating eyes, gas
+        spores: ONLY_RANGED_SLOW_MONSTERS). Out of sight, such a square shows the item under the monster, so
+        check_items walked back to 'check' it, found the mold in the way ('Monster on a next tile'), panicked and
+        came back again: a red mold on an item pile cost jf26 s0 219 panics over 3700 grind turns, jf16 s4 247 over
+        3700; a floating eye blocking a Dlvl 6 corridor cost jf26 s1 235 over 3900 dive turns. The BFS keeps such
+        a square closed until we stand next to it and see it empty."""
+        mons = utils.isin(self.glyphs, G.MONS) & ~self.monster_tracker.peaceful_monster_mask
+        t = self.blstats.time
+        if not self.character.prop.hallu:
+            for y, x in zip(*mons.nonzero()):
+                mon = MON.permonst(self.glyphs[y, x])
+                if mon.mname in combat.monster_utils.ONLY_RANGED_SLOW_MONSTERS:
+                    # molds and jellies never move; a floating eye or gas spore drifts (forget it sooner)
+                    level.sessile[int(y), int(x)] = (t, 1000 if mon.mmove == 0 else 150)
+        if level.sessile and not self.character.prop.blind:
+            y0, x0 = self.blstats.y, self.blstats.x
+            for (y, x), (seen, keep) in list(level.sessile.items()):
+                # gone once seen empty from next to it (a monster there would show), or long unseen
+                if (max(abs(y - y0), abs(x - x0)) <= 1 and not mons[y, x]) or t - seen > keep:
+                    del level.sessile[(y, x)]
 
     def update_level(self):
         if utils.isin(self.glyphs, G.SWALLOW).any():
@@ -731,6 +851,10 @@ class Agent:
         self._update_level_items()
         self._update_level_shops()
         self._update_level_corpses()
+        if jf_config.SESSILE_MEMORY:
+            self._update_level_sessile(level)
+        if jf_config.PIT_AWARE_FIGHT:
+            self._update_pit_state()
 
         for y, x in zip(*utils.isin(level.objects, G.ALTAR).nonzero()):
             if (y, x) not in level.altars:
@@ -850,6 +974,10 @@ class Agent:
             return self.message
 
     def is_safe_to_pray(self, limit=500, certain_death=False):
+        # pray.c: 'Since you are in Gehennom, Tyr can't help you' -- nothing is fixed, and unless the alignment
+        # record is high the god gets angry (angrygods) -- so no prayer at all there, not even for certain death
+        if jf_config.GEHENNOM_DIVE and self.current_level().dungeon_number == 1:
+            return False
         # certain_death (stoning, sliming, ...): a prayer that may fail beats dying, so the holds below
         # don't apply (an s10 dive was petrified during its dwarf-hunt hold; half the time the kill
         # hadn't cost any Luck and the prayer would have worked)
@@ -873,20 +1001,117 @@ class Agent:
 
     # prayer timeout is rnz(350) after a successful prayer and hunger is fixed only if it is below 200,
     # so a hunger prayer fails in ~7% of cases after 900 turns but only in ~2% after 1200 turns
+    def _tour_gaps_by_xl(self):
+        """TOUR_GAPS_BY_XL: [[min_xl, weak_gap, faint_gap], ...] -- the entry with the highest min_xl <= XL (the
+        late grind is food-poor: at XL 7 STARVE_DEADLINE fired at gaps 1142-1352 in the 1500/1400 arm)."""
+        best = None
+        for entry in jf_config.TOUR_GAPS_BY_XL or ():
+            if self.blstats.experience_level >= entry[0] and (best is None or entry[0] >= best[0]):
+                best = entry
+        return best
+
     @property
     def SAFE_HUNGER_PRAYER_GAP(self):
+        # TOUR_WEAK_PRAYER_GAP: a longer Weak gap in the tour only (the dive has no faint guard);
+        # DIVE_WEAK_PRAYER_GAP: a shorter one deep in the dive (castle: a faint beside a troll is worse)
+        if not self.global_logic.dive.diving:
+            by_xl = self._tour_gaps_by_xl()
+            if by_xl is not None:
+                return by_xl[1]
+            if jf_config.TOUR_WEAK_PRAYER_GAP:
+                return jf_config.TOUR_WEAK_PRAYER_GAP
+        elif jf_config.DIVE_WEAK_PRAYER_GAP and self.blstats.depth >= jf_config.DIVE_GAP_MIN_DEPTH:
+            return jf_config.DIVE_WEAK_PRAYER_GAP
         return jf_config.WEAK_PRAYER_GAP
+
+    def _faint_prayer_gap(self):
+        if not self.global_logic.dive.diving:
+            by_xl = self._tour_gaps_by_xl()
+            if by_xl is not None:
+                return by_xl[2]
+            if jf_config.TOUR_FAINT_PRAYER_GAP:
+                return jf_config.TOUR_FAINT_PRAYER_GAP
+        elif jf_config.DIVE_FAINT_PRAYER_GAP and self.blstats.depth >= jf_config.DIVE_GAP_MIN_DEPTH:
+            return jf_config.DIVE_FAINT_PRAYER_GAP
+        return jf_config.FAINT_PRAYER_GAP
     PRAYER_FAILURE_WAIT = 2000
     PRAYER_SUCCESS_MESSAGES = ('is well-pleased', 'is pleased.', 'is satisfied', 'hopeful feeling',
                                'You feel much better', 'stomach feels content')
+
+    def _hunger_threat(self):
+        """A hostile close enough to reach us during a faint (THREAT_PRAYER_GAP): within THREAT_RADIUS, able to
+        walk up to us (not the stationary / passive-only ones: molds, lichens, floating eyes), and serious:
+        difficulty >= THREAT_MIN_DIFFICULTY (hill orc, rothe, giant ant, werejackal: 4), two or more of them,
+        one that ignores Elbereth, or our HP below half. A lone iguana (3 tries) at a 1045 gap made a public-7
+        prayer fail that the base game made safely at 1101 -- a faint next to one costs little."""
+        bl = self.blstats
+        near = []
+        for _, y, x, mon, _ in self.get_visible_monsters():
+            if max(abs(int(y) - bl.y), abs(int(x) - bl.x)) > jf_config.THREAT_RADIUS:
+                continue
+            if mon.mname in combat.monster_utils.ONLY_RANGED_SLOW_MONSTERS or getattr(mon, 'mmove', 12) <= 3:
+                continue
+            near.append(mon)
+        if not near:
+            return None
+        dive = self.global_logic.dive
+        for mon in near:
+            if getattr(mon, 'difficulty', 0) >= jf_config.THREAT_MIN_DIFFICULTY or dive._ignores_elbereth(mon):
+                return mon.mname
+        if len(near) >= jf_config.THREAT_MIN_COUNT or bl.hitpoints < jf_config.THREAT_HP_FRAC * bl.max_hitpoints:
+            return f'{len(near)}x{near[0].mname}'
+        return None
+
+    def uhunger_weak_estimate(self):
+        """Nutrition left while Weak: eat.c turns Weak when uhunger drops below 50, then -1 per turn (plus one
+        per melee attack). None when not Weak."""
+        if self._weak_since is None or self.blstats.hunger_state != Hunger.WEAK:
+            return None
+        return 49 - (self.blstats.time - self._weak_since)
+
+    def threat_prayer_due(self):
+        """THREAT_PRAYER_GAP: the hunger prayer comes early (from that gap instead of 1100/1200) when a hostile is
+        close while Fainting, or while Weak within THREAT_WEAK_MARGIN nutrition of Fainting.
+        Evidence (base-* 37ad93a, 90 games): 9 of the 10 Dlvl-1 deaths were fainted next to ordinary melee
+        monsters at gaps 950-1110, waiting for the 1100-turn Fainting rule; 114 of 268 fainting cycles had a
+        hostile attack during the faints and 9 of those died (~8%), while rnz(350) fails a prayer 6.2% of the
+        time at a 950 gap, 5.5% at 1000 and 3.9% at 1100 -- and the Weak->Fainting transition always faints
+        at once (eat.c newuhs), so an approaching monster gets 10+ free turns."""
+        if not jf_config.THREAT_PRAYER_GAP or self.prayer_failed or self.global_logic.dive.diving:
+            return False
+        bl = self.blstats
+        if bl.hunger_state < Hunger.WEAK:
+            return False
+        if bl.hunger_state == Hunger.WEAK:
+            est = self.uhunger_weak_estimate()
+            if est is None or est > jf_config.THREAT_WEAK_MARGIN:
+                return False
+        if not self.is_safe_to_pray(jf_config.THREAT_PRAYER_GAP):
+            return False
+        threat = self._hunger_threat()
+        if threat is None:
+            return False
+        self._pray_reason = f'hunger-threat {threat} est={self.uhunger_weak_estimate()}'
+        return True
 
     def fainting_prayer_due(self):
         """A hunger prayer while Fainting: DT6A/s13 rule (a fixed gap) or the starvation clock."""
         bl = self.blstats
         if bl.hunger_state < Hunger.FAINTING:
             return False
+        if self._food_first():
+            return False
+        if self.threat_prayer_due():
+            return True
         if not jf_config.STARVE_CLOCK:
-            return self.is_safe_to_pray(jf_config.FAINT_PRAYER_GAP)
+            if self.is_safe_to_pray(self._faint_prayer_gap()):
+                return True
+            # STARVE_DEADLINE: with long Fainting gaps (1400-1600) a cycle that began with a prayer that fixed no
+            # hunger (an HP prayer while Not Hungry) could starve first: eat.c kills below -(100 + 10 * Con)
+            if jf_config.STARVE_DEADLINE and not self.prayer_failed and self._starvation_near():
+                self._pray_reason = f'starve-deadline est={self.uhunger_estimate()}'
+                return self.is_safe_to_pray(100, certain_death=True)
+            return False
         if self.is_safe_to_pray(jf_config.FAINT_PRAYER_GAP_LONG):
             self._pray_reason = 'faint-gap'
             return True
@@ -930,6 +1155,17 @@ class Agent:
             return self.is_safe_to_pray(100, certain_death=True)
         return False
 
+    def _starvation_near(self):
+        """The uhunger estimate from the last faint's length (or 1/turn since Fainting began, if no faint was
+        measured) is within FAINT_ESTIMATE_MARGIN of eat.c's starvation line -(100 + 10 * Con)."""
+        bl = self.blstats
+        since = self._fainting_since if self._fainting_since is not None else bl.time
+        death_line = -(100 + 10 * bl.constitution)
+        est = self.uhunger_estimate()
+        if est is not None:
+            return est <= death_line + jf_config.FAINT_ESTIMATE_MARGIN
+        return bl.time >= since + (-death_line) - jf_config.STARVE_MARGIN
+
     def uhunger_estimate(self):
         """From the last measured faint (eat.c: a faint lasts 10 - uhunger/10 moves), decayed by one per
         turn since (the worst case). None if no faint was measured during this Fainting spell."""
@@ -956,7 +1192,16 @@ class Agent:
         # (rnz(350) failure risk ~6%) instead of fainting first.
         return 900 if jf_config.EARLY_FIXES else self.SAFE_HUNGER_PRAYER_GAP
 
+    def _food_first(self):
+        """Plenty of food carried (e.g. bought): eat it rather than risk a hunger prayer below FOOD_FIRST_GAP
+        (1200-1399 gaps fail ~2.7%, Fainting ones at 1000-1099 ~3-5%), keeping the prayer for HP emergencies."""
+        return bool(jf_config.FOOD_FIRST_MIN) and \
+            self.inventory.carried_nutrition() >= jf_config.FOOD_FIRST_MIN and \
+            not self.is_safe_to_pray(jf_config.FOOD_FIRST_GAP)
+
     def _eat_before_praying(self):
+        if self._food_first():
+            return True
         # hypothesis: at XL < 5 the emergency prayer is the only answer to a bad fight (an XL2 elite
         # game spent it on hunger at T1350 and died to a goblin at T1660 with nothing left); eat the
         # food we carry instead of praying for hunger while that weak.
@@ -988,10 +1233,19 @@ class Agent:
             self.current_level().door_open_count[y, x] += 1
             return self.glyphs[y, x] not in G.DOOR_CLOSED
 
+    def _note_attack(self, target=None, direction=None):
+        """CORPSE_TRACK: remember where our attack went (and the map before it), so that a kill's corpse gets
+        its age even when the kill message is parsed a few observations later or the victim had a
+        same-kind neighbour. See _track_kill_positions."""
+        if jf_config.CORPSE_TRACK and getattr(self, 'glyphs', None) is not None:
+            self._attack_ctx = (self.blstats.time, target, direction, (self.blstats.y, self.blstats.x),
+                                self.glyphs.copy())
+
     def melee_attack(self, y, x):
         with self.panic_if_position_changes():
             assert self.glyphs[y, x] in G.MONS or self.glyphs[y, x] in G.INVISIBLE_MON or \
                    self.glyphs[y, x] in G.SWALLOW
+            self._note_attack(target=(y, x))
             self.direction(y, x)
         return True
 
@@ -1019,6 +1273,7 @@ class Agent:
             # it may be possible depending on creature
             return False
 
+        self._note_attack(direction=direction)
         with self.atom_operation():
             self.step(A.Command.THROW)
             self.type_text(self.inventory.items.get_letter(item))
@@ -1205,13 +1460,14 @@ class Agent:
 
         return ret
 
-    def bfs(self, y=None, x=None):
+    def bfs(self, y=None, x=None, force_squeeze=False):
         if y is None:
             y = self.blstats.y
         if x is None:
             x = self.blstats.x
 
-        if self.last_bfs_step == self.step_count and y == self.blstats.y and x == self.blstats.x:
+        if not force_squeeze and self.last_bfs_step == self.step_count and y == self.blstats.y and \
+                x == self.blstats.x:
             return self.last_bfs_dis.copy()
 
         level = self.current_level()
@@ -1219,11 +1475,21 @@ class Agent:
         walkable = level.walkable & ~utils.isin(self.glyphs, G.BOULDER) & \
                    ~self.monster_tracker.peaceful_monster_mask & \
                    ~level.forbidden
+        if jf_config.TEMP_FORBID:
+            walkable &= ~(level.forbidden_until > self.blstats.time)
         if jf_config.HAZARD_FIXES and self.inventory.items.gloves is None:
             walkable &= ~(level.petrify_until > self.blstats.time)
 
         if self._last_turn - self._allow_walking_through_traps_turn > 50:
             walkable &= ~utils.isin(level.objects, G.TRAPS)
+        elif jf_config.SAFE_TRAP_WALK:
+            # walking through known traps is a last resort: never into the ones that can wreck the game
+            # (polymorph, fire, sleeping gas, magic, anti-magic, rust), nor off the level during the tour or while
+            # climbing out of a branch (CLIMB_NO_FALL)
+            dive = self.global_logic.dive
+            exits_ok = dive.diving and not (jf_config.CLIMB_NO_FALL and dive.climbing())
+            walkable &= ~utils.isin(level.objects, self.UNSAFE_TRAPS if exits_ok
+                                    else self.UNSAFE_TRAPS | self.LEVEL_EXIT_TRAPS)
 
         # a shopkeeper blocks the door to anyone carrying a pick-axe or mattock ('Will you please leave
         # your pick-axe outside?'): walking to the goods (check_items) looped at shop doors for 3000-16000
@@ -1248,20 +1514,37 @@ class Agent:
             mon = MON.permonst(self.glyphs[my][mx])
             if mon.mname in combat.monster_utils.ONLY_RANGED_SLOW_MONSTERS:
                 walkable[my, mx] = False
+        if jf_config.SESSILE_MEMORY:
+            # ...also while out of sight (see _update_level_sessile)
+            for (my, mx) in level.sessile:
+                if (my, mx) != (y, x):
+                    walkable[my, mx] = False
 
+        walkable_diagonally = walkable & ~utils.isin(level.objects, G.DOORS) & (level.objects != -1) \
+            & ~level.intact_doors
+        can_squeeze = (force_squeeze or self.inventory.items.total_weight <= 600) and \
+            self.current_level().dungeon_number != Level.SOKOBAN
         dis = utils.bfs(y, x,
                         walkable=walkable,
-                        walkable_diagonally=walkable & ~utils.isin(level.objects, G.DOORS) & (level.objects != -1)
-                                            & ~level.intact_doors,
-                        can_squeeze=self.inventory.items.total_weight <= 600 and \
-                                    self.current_level().dungeon_number != Level.SOKOBAN,
+                        walkable_diagonally=walkable_diagonally,
+                        can_squeeze=can_squeeze,
                         )
 
-        if y == self.blstats.y and x == self.blstats.x:
+        if y == self.blstats.y and x == self.blstats.x and not force_squeeze:
             self.last_bfs_dis = dis
             self.last_bfs_step = self.step_count
 
         return dis.copy()
+
+    UNSAFE_TRAPS = frozenset({SS.S_polymorph_trap, SS.S_fire_trap, SS.S_sleeping_gas_trap, SS.S_magic_trap,
+                              SS.S_anti_magic_trap, SS.S_rust_trap})
+    LEVEL_EXIT_TRAPS = frozenset({SS.S_trap_door, SS.S_hole, SS.S_level_teleporter})
+
+    def _diagonal_step_ok(self, masks, y, x, ty, tx):
+        """The BFS rule for a diagonal step (y, x) -> (ty, tx) (utils.bfs)."""
+        walkable, walkable_diagonally, can_squeeze = masks
+        return bool(walkable_diagonally[ty, tx] and walkable_diagonally[y, x] and
+                    (can_squeeze or walkable[ty, x] or walkable[y, tx]))
 
     def path(self, from_y, from_x, to_y, to_x, dis=None):
         if from_y == to_y and from_x == to_x:
@@ -1275,17 +1558,35 @@ class Agent:
         # FIXME: currently the path can lead through diagonally inwalkable tiles.
         #        The path is the shortest possible, so the agent is guaranteed to
         #        unstuck itself eventually (usually a few panic exceptions) if that happens
+        # PATH_DIAG_FIX: it didn't unstick. The BFS reaches a door orthogonally, but walking the distances
+        # back picked any square one step closer -- also the one diagonal to the door. A jf26 s0 grind
+        # tried the same diagonal step into an open door 90 times ('You can't move diagonally into an
+        # intact doorway', each a panic and a restart of the strategy). Among the (identically shuffled)
+        # candidates the first legal step is taken; the old choice only when none is legal. Only doorways
+        # the game has already refused (level.intact_doors) are checked: a first try costs no game time, and
+        # leaving it alone keeps every other path (and game) exactly as before.
+        masks = None
+        if jf_config.PATH_DIAG_FIX and self.current_level().intact_doors.any():
+            # (walkable, walkable diagonally, can squeeze): a diagonal step is refused only at those doorways
+            refused = self.current_level().intact_doors
+            masks = (~refused, ~refused, True)
 
         cur_y, cur_x = to_y, to_x
         path_rev = [(cur_y, cur_x)]
         while cur_y != from_y or cur_x != from_x:
+            chosen = None
             for y, x in self.neighbors(cur_y, cur_x):
                 if dis[y, x] == dis[cur_y, cur_x] - 1 and dis[y, x] >= 0:
-                    path_rev.append((y, x))
-                    cur_y, cur_x = y, x
-                    break
-            else:
-                assert 0
+                    if masks is None or y == cur_y or x == cur_x or \
+                            self._diagonal_step_ok(masks, y, x, cur_y, cur_x):
+                        chosen = (y, x)
+                        break
+                    if chosen is None:
+                        chosen = (y, x)   # an illegal diagonal: kept only if no legal step turns up
+            # (one shuffle per step as before, so the RNG stream -- and every later choice -- is unchanged)
+            assert chosen is not None
+            path_rev.append(chosen)
+            cur_y, cur_x = chosen
 
         assert dis[cur_y, cur_x] == 0 and from_y == cur_y and from_x == cur_x
         path = path_rev[::-1]
@@ -1351,6 +1652,11 @@ class Agent:
 
             with self.env.debug_tiles(orig_path, **debug_tiles_args) \
                     if debug_tiles_args is not None else contextlib.suppress():
+                # GOTO_TARGET_FIX: the loop variables were (y, x), overwriting the target, so a path blocked
+                # mid-way (a peaceful stepping in, a square found unwalkable) made the next round head for the
+                # blocked square itself: 'end point is no longer accessible', a panic and a restart of the
+                # strategy instead of a new route to the real target (Mines peacefuls; jf26 s9 looped on it)
+                ty, tx = y, x
                 for y, x in path:
                     if self.monster_tracker.peaceful_monster_mask[y, x]:
                         cont = True
@@ -1367,6 +1673,8 @@ class Agent:
                         break
                 else:
                     cont = False
+                if jf_config.GOTO_TARGET_FIX:
+                    y, x = ty, tx
 
     ######## LOW-LEVEL STRATEGIES
 
@@ -1401,13 +1709,119 @@ class Agent:
         recent = [hp for t, hp in hist if t >= now - turns]
         return bool(recent) and max(recent) > self.blstats.hitpoints
 
+    def _fight_stall_turns(self):
+        """jf_config.FIGHT_STALL_TURNS; in the Valley of the Dead (GEHENNOM_DIVE) VALLEY_FIGHT_STALL_TURNS when that
+        is 0: its graveyards' sleeping undead, seen across their boundaries, held fight2 dancing between two
+        squares for 1300-2500 turns in 3 of 15 valley-x10 scenario games (they starved)."""
+        if jf_config.FIGHT_STALL_TURNS:
+            return jf_config.FIGHT_STALL_TURNS
+        return jf_config.VALLEY_FIGHT_STALL_TURNS if self.global_logic.dive.in_valley() else 0
+
+    # monsters fight2 never melees and that don't come at us: once let go, they stay let go even when adjacent
+    # (rescue's public/6 run: fight2 stepped away from an adjacent gas spore, the explorer walked back beside it,
+    # and the stall breaker re-fired every ~30 turns, 54 times)
+    _FIGHT_PASSIVE = frozenset(combat.monster_utils.ONLY_RANGED_SLOW_MONSTERS) - {'gelatinous cube', 'Oracle'}
+
+    def fight_monsters(self):
+        """get_visible_monsters() without those a stalled fight let go of (jf_config.FIGHT_STALL_TURNS). They count
+        again once adjacent (unless passive), after FIGHT_IGNORE_TURNS, or when something hurts us (only those
+        within 3 when any is: a sleeping zoo further off stays let go)."""
+        monsters = self.get_visible_monsters()
+        if self._fight_stall_turns() <= 0 or not self._fight_ignored:
+            return monsters
+        bl = self.blstats
+        near = lambda m: max(abs(m[1] - bl.y), abs(m[2] - bl.x)) <= 3
+        hurt = self._hurt_recently(3)
+        if hurt and not any(near(m) for m in monsters):
+            # hurt by something unseen or from afar: it may be one we let go
+            self._fight_ignored.clear()
+            return monsters
+        key = self.current_level().key()
+        kept = []
+        for m in monsters:
+            _, y, x, mon, glyph = m
+            ent = self._fight_ignored.get((key, glyph))
+            if ent is not None and ent[2] >= bl.time and (ent[3] or max(abs(y - ent[0]), abs(x - ent[1])) <= 2) and \
+                    (mon.mname in self._FIGHT_PASSIVE or not utils.adjacent((bl.y, bl.x), (y, x))) and \
+                    not (hurt and near(m)):
+                ent[0], ent[1] = int(y), int(x)   # a slow drifter (a floating eye) stays let go
+                continue
+            kept.append(m)
+        return kept
+
+    def _note_fight_stall(self, best_action, monsters):
+        """FIGHT_STALL_TURNS: fight2's 'strike first' heatmap parks us two squares from a monster and waits for
+        it to step in; one that never comes (asleep, immobile, trapped, out of throwing line with the missiles
+        spent) kept fight2 -- which preempts the dive plan, exploration and eating -- dancing between two
+        squares: public s9 (a sleeping nymph held the XL8 dive on Dlvl 4 for 3300 turns and three hunger
+        prayers), jf26 s3 (4000 turns on Dlvl 3, died there), public s11 (a starving rescue stepped W/E beside
+        zombies for ~1500 turns until it starved). In a 45-game profile, 67 fight2 stalls lasted 150+ turns.
+        Two triggers (merged with rescue's FIGHT_STALL_BREAK):
+        - the dance itself: FIGHT_STALL_MOVES consecutive moves among at most 3 squares (over >= n/2 turns);
+        - FIGHT_STALL_TURNS turns with no contact (melee/kick/zap, or holding out on Elbereth), kill or damage
+          while above half HP (legitimate fights resolve sooner: most 40-149-turn ones ended in a kill).
+        Then the monsters fight2 faces are let go (FIGHT_IGNORE_TURNS, see fight_monsters)."""
+        bl = self.blstats
+        st = self._fight_stall
+        key = self.current_level().key()
+        # contact, or deliberately holding out on Elbereth / hurt: not a stall to break
+        contact = best_action[0] in ('melee', 'kick', 'zap', 'wait', 'elbereth') or \
+            bl.hitpoints < 0.5 * bl.max_hitpoints
+        names = frozenset(m[3].mname for m in monsters if not utils.adjacent((bl.y, bl.x), (m[1], m[2])))
+        ended = None if st is None else 'gap' if bl.time - st[2] > 10 else 'contact' if contact else \
+            'kill' if bl.experience_points != st[1] else 'hurt' if self._hurt_recently(3) else None
+        if st is None or ended:
+            if st is not None and st[2] - st[0] >= 20:
+                # diagnostics (also with FIGHT_STALL_TURNS < 0: log only, no behaviour change)
+                self.log(f'FIGHT stall of {st[2] - st[0]} turns ended ({ended}): {sorted(st[3])}')
+            self._fight_stall = (bl.time, bl.experience_points, bl.time, names)
+            self._fight_moves = []
+            return
+        self._fight_stall = (st[0], st[1], bl.time, st[3] | names)
+        n = jf_config.FIGHT_STALL_MOVES
+        if best_action[0] in ('move', 'go_to'):
+            self._fight_moves = (self._fight_moves + [(bl.time, key, (bl.y, bl.x))])[-max(n, 1):]
+        else:
+            self._fight_moves = []   # a throw or a pickup: not (yet) a dance
+        dance = bool(n) and len(self._fight_moves) >= n and len({m[1:] for m in self._fight_moves}) <= 3 and \
+            bl.time - self._fight_moves[0][0] >= n // 2
+        if self._fight_stall_turns() < 0:
+            mark = (bl.time - st[0]) // 500
+            if mark and mark != getattr(self, '_fight_stall_mark', None):
+                self._fight_stall_mark = mark
+                self.log(f'FIGHT stall ongoing {bl.time - st[0]} turns: {sorted(st[3] | names)}')
+            if dance:
+                self.log(f'FIGHT dance (log only): {n} moves among {len({m[1:] for m in self._fight_moves})} squares')
+                self._fight_moves = []
+            return
+        # the tour's grind (spawn-limited: its turns cost little) only lets go of the long stalls: the dance trigger
+        # there fired on molds and floating eyes within ~40 turns and just reshuffled games (6 of 15 public games)
+        diving = self.global_logic.dive.diving
+        if not diving:
+            dance = False
+        if not dance and bl.time - st[0] < (self._fight_stall_turns() if diving else jf_config.FIGHT_STALL_TOUR_TURNS):
+            return
+        until = bl.time + jf_config.FIGHT_IGNORE_TURNS
+        let_go = []
+        for _, y, x, mon, glyph in monsters:
+            if mon.mname in self._FIGHT_PASSIVE or not utils.adjacent((bl.y, bl.x), (y, x)):
+                # let go twice on this level: anywhere on it from now on (a leprechaun that keeps its distance and
+                # hops around re-engaged fight2 every 40 turns: 649 let-go events in 45 games)
+                again = (key, glyph) in self._fight_ignored
+                self._fight_ignored[(key, glyph)] = [int(y), int(x), until, again]
+                let_go.append((mon.mname, int(y), int(x)))
+        self.log(f'FIGHT stalled ({"dance" if dance else f"{bl.time - st[0]} turns"}, no contact, kill or damage): '
+                 f'letting go of {let_go}')
+        self._fight_stall = None
+        self._fight_moves = []
+
     @utils.debug_log('fight2')
     @Strategy.wrap
     def fight2(self):
         yielded = False
         wait_counter = 0
         while 1:
-            monsters = self.get_visible_monsters()
+            monsters = self.fight_monsters()
             # hallucinating, every monster looks hostile: in the Mines (peaceful to a dwarf; Minetown's Watch)
             # the bot attacked peacefuls and was arrested (~half of 13 angry-Watch games after a yellow light).
             # Only fight back when something is actually hurting us; otherwise wait it out.
@@ -1453,6 +1867,30 @@ class Agent:
             if self.character.prop.polymorph:
                 actions = list(filter(lambda x: x[1][0] != 'ranged', actions))
 
+            if jf_config.PIT_AWARE_FIGHT and self.in_pit() and \
+                    any(utils.adjacent((self.blstats.y, self.blstats.x), (m[1], m[2])) for m in monsters):
+                # B001: climbing out of a pit takes several tries ('You are still in a pit'), each a turn the
+                # attacker gets for free (jf16 s11: in our dig pit beside a Grey-elf and a werewolf, 90 -> 38 HP
+                # while fight2 kept stepping). With an attacker next to us, fight from the pit.
+                stay = [a for a in actions if a[1][0] not in ('move', 'go_to')]
+                if stay:
+                    actions = stay
+
+            if jf_config.FEYE_FIX and not self.character.prop.blind:
+                # never melee a floating eye we can see: its passive gaze freezes us for up to 127 turns. The
+                # exploration's stall breaker (allow_attack_all, below) keeps only attacks, and the eye's -110
+                # melee priority was then the best: 401 freezes in 223 dev games, 35 of them died frozen (a
+                # pony killed an XL7 grinder at 75/75 HP, gc-lf2 jf16 s4)
+                actions = [a for a in actions if not (a[1][0] == 'melee' and self._is_floating_eye_at(
+                    self.blstats.y + a[1][1], self.blstats.x + a[1][2]))]
+            if jf_config.FIGHT_PIT_FIX and self._in_pit():
+                # climbing out of a pit takes several turns ('You are still in a pit'), and every failed move is a
+                # free round for the monsters around, while melee from a pit is unrestricted (uhitm.c has no
+                # TT_PIT check): a digger in its own pit tried to walk out 4 times with a Grey-elf and a
+                # werewolf adjacent, 90 -> 38 HP, and died (dive-safety, dsafe-A2-jf16 s11)
+                attack_actions = [a for a in actions if a[1][0] in ('melee', 'kick', 'ranged', 'zap')]
+                if attack_actions:
+                    actions = attack_actions
             if allow_attack_all:
                 attack_actions = [a for a in actions if a[1][0] in ('melee', 'kick', 'ranged', 'zap')]
                 if attack_actions:
@@ -1470,6 +1908,61 @@ class Agent:
                 actions_str = '|'.join([combat.utils.action_str(self, a) for a in sorted(actions, key=lambda x: x[0])])
                 with self.env.debug_log(actions_str):
                     wait_counter = self._fight2_perform_action(best_action, wait_counter)
+            if self._fight_stall_turns():
+                self._note_fight_stall(best_action, monsters)
+
+    # (not 'There is a pit here': the square's look text, also after climbing to the edge)
+    _PIT_IN = ('You are still in a pit', 'You dig a pit in the', 'You fall into a pit', 'You land on a set of sharp iron spikes',
+               'You are still in a spiked pit')
+    _PIT_OUT = ('You crawl to the edge of the pit', 'You climb out of the pit')
+
+    def _in_pit(self):
+        """Stuck in a pit (our own dig pit or a trap), tracked from the messages: set by falling in or by a
+        failed move ('You are still in a pit'), cleared by climbing out or by any change of square/level."""
+        here = (self.current_level().key(), self.blstats.y, self.blstats.x)
+        msg = ' '.join(self._message_history[-3:] + [self.message])
+        out = max((msg.rfind(m) for m in self._PIT_OUT), default=-1)
+        into = max((msg.rfind(m) for m in self._PIT_IN), default=-1)
+        if out > into:
+            self._pit_pos = None
+        elif into > out:
+            self._pit_pos = here
+        if self._pit_pos is not None and self._pit_pos != here:
+            self._pit_pos = None
+        return self._pit_pos is not None
+
+    _FLOATING_EYE = None
+
+    def _is_floating_eye_at(self, y, x):
+        if Agent._FLOATING_EYE is None:
+            Agent._FLOATING_EYE = MON.from_name('floating eye')
+        return 0 <= y < self.glyphs.shape[0] and 0 <= x < self.glyphs.shape[1] and \
+            self.glyphs[y, x] == Agent._FLOATING_EYE
+
+    @Strategy.wrap
+    def unsqueeze(self):
+        """UNSQUEEZE: a diagonal step between two rock corners needs <= 600 carried (hack.c cant_squeeze_thru), and the
+        item logic fills up to ~950. Picking up loot in a corridor bend left a base2-public s9 Valkyrie with no
+        way out of its square for 8000 turns (the whole XL7-8 grind, then 4700 turns of its dive; STALL
+        reachable=1, both exits diagonal squeezes); base-public s10, base-jf16 s0 and base-jf26 s12 (Dlvl 1) and
+        base2-public s1 (Mines 1) were boxed in the same way. When a squeeze would open up the level, drop to 550
+        for a while and leave the dropped pile alone."""
+        if not jf_config.UNSQUEEZE or self.inventory.items.total_weight <= 600 or \
+                self.blstats.time < getattr(self, '_squeeze_cap_until', -1) or \
+                self.current_level().dungeon_number == Level.SOKOBAN:
+            yield False
+        reach = int((self.bfs() != -1).sum())
+        if reach > 5:
+            yield False
+        wide = int((self.bfs(force_squeeze=True) != -1).sum())
+        if wide < reach + 10:
+            yield False
+        yield True
+        self.log(f'UNSQUEEZE: boxed in ({reach} squares) carrying {self.inventory.items.total_weight}; a squeeze '
+                 f'reaches {wide}: dropping to 550')
+        self._squeeze_cap_until = self.blstats.time + 300
+        self.inventory.arrange_items().run()
+        self.inventory.unreachable_items_until[self.inventory._here()] = self.blstats.time + 5000
 
     def _fight2_perform_action(self, best_action, wait_counter):
         if best_action[0] == 'move':
@@ -1563,6 +2056,15 @@ class Agent:
         if not utils.any_in(self.glyphs, G.SWALLOW):
             yield False
         yield True
+        if jf_config.ENGULF_WIELD:
+            # a dig-diver is swallowed with the pick-axe in hand (base-jf25 s13: 'You begin bashing monsters
+            # with your pick-axe' inside a fire vortex, dead 2 turns later): every blow from inside hits, so
+            # one turn to take up the real weapon pays for itself
+            best = self.inventory.get_best_melee_weapon()
+            main = self.inventory.items.main_hand
+            if best is not None and main is not best and (main is None or main.status != Item.CURSED):
+                self.log(f'ENGULFED: wielding {best.text!r} instead of {main.text if main else None!r}')
+                self.inventory.wield(best)
         while True:
             mask = utils.isin(self.glyphs, G.SWALLOW)
             if not mask.any():
@@ -1577,8 +2079,15 @@ class Agent:
         starving = jf_config.STARVING_EATS and self.blstats.hunger_state >= Hunger.WEAK and \
             self.blstats.hitpoints > 40 and (jf_config.LATE_FIXES or self.global_logic.dive.diving)
 
+        # POISON_EATS: kobolds are ~15% of the grind's corpse nutrition that nobody eats (a pet won't touch them
+        # either); eat.c: 4 times in 5 -1d4 Str (18/xx points: barely matters) and -1d15 HP -- fine at high HP
+        poison_ok = jf_config.POISON_EATS and not self.global_logic.dive.diving and \
+            self.blstats.hitpoints >= max(jf_config.POISON_EATS_MIN_HP, 0.6 * self.blstats.max_hitpoints) and \
+            getattr(permonst, 'cnutrit', 0) >= 50
+
         # TODO: read intrinsics
-        if self.character.race != Character.ORC and permonst.mflags1 & MON.M1_POIS != 0 and not starving:
+        if self.character.race != Character.ORC and permonst.mflags1 & MON.M1_POIS != 0 and not starving and \
+                not poison_ok:
             return False
 
         # TODO: read intrinsics
@@ -1634,6 +2143,12 @@ class Agent:
         if permonst.mflags2 & race_flag:
             return False
 
+        # a lycanthrope eating its own were family is a cannibal too (eat.c maybe_cannibal: were_beastie(pm)
+        # == u.ulycn): Luck -2..-5 and permanent aggravate monster. Public s13 ate three jackal corpses right
+        # after a werejackal bite and its next prayer failed ('Thou art arrogant'), so did jf25 s10's
+        if jf_config.LYCAN_FIXES and permonst.mname in self.character.were_family():
+            return False
+
         # corpse aging: eat.c taints at rotted = age / (10 + rn2(20)) > 5 (a cursed corpse gets +2) and
         # "rotten" (vomiting, passing out) from rotted > 3 -- 30 turns keeps clear of both
         if self.blstats.time - age_turn >= jf_config.CORPSE_MAX_AGE and \
@@ -1642,9 +2157,34 @@ class Agent:
 
         return True
 
+    RESERVE_CORPSE_IDS = frozenset(MON.id_from_name(n) for n in ('lichen', 'lizard'))
+
+    def carried_reserve_corpses(self):
+        return sum(item.count for item in flatten_items(self.inventory.items)
+                   if item.is_corpse() and item.monster_id in self.RESERVE_CORPSE_IDS)
+
+    def reserve_corpse(self, monster_id):
+        """LICHEN_RESERVE: keep a lichen/lizard corpse (they never rot) instead of eating it off the floor while
+        not Weak. Eaten at once it only lengthens whatever cycle we are in; carried, eat_from_inventory spends it
+        when Weak before a safe prayer gap -- the starved cycles (31% of the base grinds' prayer cycles turned
+        Weak 800-899 turns after the last prayer, 26% fainted, and all 9 fainting deaths came in cycles that
+        had eaten 0-100 nutrition). We ate ~9 lichen corpses per grind (~1800 nutrition)."""
+        if not (jf_config.LICHEN_RESERVE and monster_id in self.RESERVE_CORPSE_IDS and
+                self.blstats.hunger_state < Hunger.WEAK and not self.global_logic.dive.diving and
+                self.carried_reserve_corpses() < jf_config.LICHEN_RESERVE):
+            return False
+        # only if the item priority can keep it (it keeps items in order within character.carrying_capacity):
+        # a heavy pack left a jf14 lichen corpse neither picked up nor eaten while we walked over it for 400 turns
+        try:
+            weight = sum(item.weight() for item in flatten_items(self.inventory.items))
+        except Exception:
+            return False
+        return weight + 2 * MON.permonst(monster_id + nh.GLYPH_MON_OFF).cwt <= self.character.carrying_capacity
+
     @utils.debug_log('eat_corpses_from_ground')
     @Strategy.wrap
-    def eat_corpses_from_ground(self, only_below_me=True):
+    def eat_corpses_from_ground(self, only_below_me=True, max_dist=None, max_age=None):
+        # max_dist / max_age (CLAIM_CORPSES): only fresh corpses a few steps away
         yielded = False
         level = self.current_level()
         to_eat = []  # (y, x, monster_id)
@@ -1657,13 +2197,21 @@ class Agent:
             for monster_id, corpse_age in corpse_mapping.items():
                 if level.shop[y, x]:
                     continue
+                if self.reserve_corpse(monster_id):
+                    continue
                 if self._is_corpse_editable(monster_id, corpse_age):
                     to_eat.append((y, x, monster_id))
 
         else:
             for (y, x), corpse_mapping in level.corpses_to_eat.items():
+                if max_dist is not None and max(abs(y - self.blstats.y), abs(x - self.blstats.x)) > max_dist:
+                    continue
                 for monster_id, corpse_age in corpse_mapping.items():
                     if level.shop[y, x]:
+                        continue
+                    if max_age is not None and self.blstats.time - corpse_age > max_age:
+                        continue
+                    if self.reserve_corpse(monster_id):
                         continue
                     if self._is_corpse_editable(monster_id, corpse_age):
                         to_eat.append((y, x, monster_id))
@@ -1672,7 +2220,8 @@ class Agent:
             yield False
 
         dis = self.bfs()
-        to_eat = sorted(filter(lambda e: dis[e[0], e[1]] != -1, to_eat), key=lambda e: dis[e[0], e[1]])
+        to_eat = sorted(filter(lambda e: dis[e[0], e[1]] != -1 and (max_dist is None or dis[e[0], e[1]] <= max_dist),
+                               to_eat), key=lambda e: dis[e[0], e[1]])
         if not to_eat:
             yield False
 
@@ -1771,11 +2320,18 @@ class Agent:
                 self.pray()
                 return
 
+        # a were form's HP is only a buffer: at 0 we rehumanize with the HP we had before (polyself.c), so
+        # low form HP is no reason to spend healing, a prayer or the last resort (jf16 s11 and jf25 s9 prayed
+        # at 1/11 and 2/13 in rat form: the prayer fixed only the rat's HP, reset the prayer timeout without
+        # fixing hunger, and both starved before the next safe prayer; jf25 s10 zapped its wands and drank
+        # a full healing as a 6-HP jackal)
+        poly_buffer = jf_config.LYCAN_FIXES and self.character.poly_hp_is_buffer()
+
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']]
         if (
                 (self.blstats.hitpoints < 1 / 3 * self.blstats.max_hitpoints
-                 or self.blstats.hitpoints < 8) and items
+                 or self.blstats.hitpoints < 8) and items and not poly_buffer
         ):
             yield True
             self.inventory.quaff(items[0])
@@ -1788,7 +2344,9 @@ class Agent:
             self.inventory.quaff(items[0])
             return
 
-        if jf_config.EARLY_FIXES or jf_config.EXACT_PRAYER:
+        # LOWHP_EXACT: only where pray.c sees TROUBLE_HIT -- the DT6A 'HP < 12' rule prayed at 10/49 HP (no HP
+        # trouble: base2-jf26 s8 got its lycanthropy cured, stayed at 10 HP with the timeout reset, and died)
+        if jf_config.EARLY_FIXES or jf_config.EXACT_PRAYER or jf_config.LOWHP_EXACT:
             low_hp = self._critically_low_hp()
         else:
             # DT6A's absolute 'HP < 12' never at full HP or polymorphed: turned into a wererat (8 max HP), an
@@ -1799,9 +2357,12 @@ class Agent:
                                                  self._monk_meat_meals == 0 else 8) and
                        self.blstats.hitpoints < self.blstats.max_hitpoints and
                        not self.character.prop.polymorph))
+        if poly_buffer:
+            low_hp = False
         if (
                 (self.is_safe_to_pray(500) and low_hp)
                 or self.fainting_prayer_due()
+                or self.threat_prayer_due()
                 or (not self.prayer_failed and self.blstats.hunger_state >= Hunger.WEAK and
                     self.is_safe_to_pray(self._hunger_prayer_gap()) and not self._eat_before_praying())
         ):
@@ -1814,9 +2375,22 @@ class Agent:
         # also banks depth), unknown wands at the attacker, unknown potions, unknown scrolls.
         # Overtaxed or worse: NetHack refuses zapping, reading and quaffing without using a turn, and the last
         # resort looped on it (330 turn-inactivity asserts in one jf24 game)
-        if jf_config.LAST_RESORT and self._critically_low_hp() and self.blstats.carrying_capacity < 4:
+        if jf_config.LAST_RESORT and self._critically_low_hp() and self.blstats.carrying_capacity < 4 and \
+                not poly_buffer:
             y, x = self.blstats.y, self.blstats.x
             adjacent = [m for m in self.get_visible_monsters() if utils.adjacent((m[1], m[2]), (y, x))]
+            # LR_ELBERETH: with every monster close by respecting Elbereth, the Elbereth rest (below us) is the
+            # safer answer: a scared monster doesn't melee, while a zap from the square erases it ('You feel
+            # like a hypocrite') and an unknown ray can bounce back (base2-jf25 s1: a wand of cold at an adjacent
+            # jackal at 2 HP; base2-public s3: zapped from a fresh Elbereth, then a potion of sickness killed
+            # at 3 HP)
+            if adjacent and jf_config.LR_ELBERETH and self.current_level().dungeon_number != 1:  # not Gehennom
+                dive = self.global_logic.dive
+                close = dive._near_hostiles(radius=3)
+                engraving = (self.inventory.engraving_below_me or '').lower()
+                if not any(dive._ignores_elbereth(m[3]) for m in close) and not self.character.prop.blind and \
+                        (engraving == 'elbereth' or self.can_engrave()):
+                    adjacent = []
             if adjacent:
                 level = self.current_level()
                 here = level.objects[y, x]
@@ -1824,6 +2398,20 @@ class Agent:
                 # down/retreat-up at 15 HP until it died, never trying its wands or potions)
                 stairs_ok = self.blstats.time - self._last_resort_stairs_turn > 20
                 dive = self.global_logic.dive
+                # LAST_RESORT_DIG: a known wand of digging zapped down is a way out that also banks a level
+                # (dig.c zap_dig: a hole at once where the floor can be dug; not on stairs, where the beam
+                # bounces). ~12% of castle arrivals carried one, engrave-identified.
+                if jf_config.LAST_RESORT_DIG and here not in G.STAIR_UP and here not in G.STAIR_DOWN and \
+                        level.dungeon_number != Level.SOKOBAN and level.key() not in dive.undiggable:
+                    wand = next((i for i in self.inventory.items if i.category == nh.WAND_CLASS and
+                                 i.is_unambiguous() and i.object.name == 'digging' and
+                                 not self.inventory.is_known_empty(i) and i.comment != 'EMPT'), None)
+                    if wand is not None and self._last_resort_dig_turn != self.blstats.time:
+                        yield True
+                        self._last_resort_dig_turn = self.blstats.time
+                        self.log(f'LAST RESORT: zapping {wand.text!r} down')
+                        self.zap(wand, '>')
+                        return
                 if stairs_ok and here in G.STAIR_DOWN and level.dungeon_number != Level.SOKOBAN:
                     yield True
                     self.log('LAST RESORT: down the stairs')
@@ -1831,12 +2419,34 @@ class Agent:
                     dive._retreat_blocked_until = self.blstats.time + 20
                     self.move('>')
                     return
+                # (not the Valley's '<': it leads to the castle's east edge, with no way back down to Gehennom)
                 if stairs_ok and here in G.STAIR_UP and self.blstats.depth > 1 and \
-                        level.dungeon_number != Level.SOKOBAN:
+                        level.dungeon_number != Level.SOKOBAN and not dive.in_valley():
                     yield True
                     self.log('LAST RESORT: up the stairs')
                     self._last_resort_stairs_turn = self.blstats.time
                     self.move('<')
+                    return
+                # DESPERATE_PRAYER_GAP: a prayer that may come too soon beats dying. pray.c fixes critically low HP
+                # while the timeout is <= 200; after a successful prayer it is rnz(350), which leaves ~62% of
+                # prayers working 250 turns later and ~77% after 400 (the usual rule waits 500: ~87%). A failure
+                # costs Luck -3 and an angry god -- about what dying here costs. In base/base2, 14 deaths came
+                # 250-499 turns after a prayer that had worked, 7 of them with this last resort firing.
+                # (only in the dive below Dlvl 4: the grind's jackals at low HP are usually beaten, and a failed
+                # prayer there ruins the game; and only when Elbereth can't help: against trolls a 12-HP XL8 sat
+                # it out on Elbereth in 8 of 10 harness games -- dive-mid-desperate, off arm)
+                # (hurt while standing on Elbereth counts too: wands and breath ignore it -- base2-jf14 s12 read
+                # five unknown scrolls at 4 HP while a bugbear zapped magic missiles, 364 turns after a prayer)
+                elbereth_futile = any(dive._ignores_elbereth(m[3]) for m in adjacent) or \
+                    self.character.prop.blind or not self.can_engrave() or \
+                    ((self.inventory.engraving_below_me or '').lower() == 'elbereth' and self._hurt_recently(2))
+                if jf_config.DESPERATE_PRAYER_GAP and not self.prayer_failed and level.dungeon_number != 1 and \
+                        dive.diving and self.blstats.depth >= 5 and elbereth_futile and \
+                        self.is_safe_to_pray(jf_config.DESPERATE_PRAYER_GAP):
+                    yield True
+                    gap = None if self.last_prayer_turn is None else self.blstats.time - self.last_prayer_turn
+                    self.log(f'LAST RESORT: desperate prayer (gap {gap})')
+                    self.pray()
                     return
                 # top-level items only: a wand inside a bag has no inventory letter, and zapping one left the
                 # 'What do you want to zap?' prompt looping at 9 HP until a goblin finished the XL6
@@ -1848,7 +2458,13 @@ class Agent:
                 for item in items:
                     if item.category == nh.WAND_CLASS and not item.is_unambiguous() and not watch and \
                             not self.inventory.is_known_empty(item) and item.comment != 'EMPT':
+                        # LR_WAND_ONCE: an attack wand names itself when zapped at a monster (zap.c learn_it),
+                        # so one still unknown after a zap does nothing useful here -- a castle guard game zapped
+                        # the same uranium wand 7 times at 2-3 HP and never reached its potions
+                        if jf_config.LR_WAND_ONCE and item.glyphs[0] in self._last_resort_zapped:
+                            continue
                         yield True
+                        self._last_resort_zapped.add(item.glyphs[0])
                         self.log(f'LAST RESORT: zapping unknown {item.text!r}')
                         self.zap(item, self.calc_direction(y, x, my, mx))
                         return
@@ -1902,6 +2518,34 @@ class Agent:
             return
         yield False
 
+    @utils.debug_log('were_unload')
+    @Strategy.wrap
+    def were_unload(self):
+        """In a were form, drop what the form can't carry so we can eat (LYCAN_FIXES).
+
+        polyself.c polymon() keeps the form for rn1(500, 500) turns unless its HP runs out, and weight_cap()
+        scales with the form's corpse weight: a wererat (cwt 40) carries ~27, so the whole pack Overloads
+        it ('You can't even move a handspan with this load!') and eat.c refuses to eat above Strained ('You
+        can't do that while carrying so much stuff'). Public s4 (5 food items) and jf16 s11 starved that
+        way. arrange_items() is off while polymorphed, so nothing is picked up again until we change back;
+        then the usual pickup logic collects the pile."""
+        if not jf_config.LYCAN_FIXES or not self.character.prop.polymorph or \
+                self.blstats.carrying_capacity < 4 or self.blstats.hunger_state < Hunger.WEAK:
+            yield False
+        food = self.edible_carried_food()
+        if not food:
+            yield False
+        keep = set(id(i) for i in food)
+        to_drop = [item for item in self.inventory.items
+                   if id(item) not in keep and item.can_be_dropped_from_inventory() and
+                   item.category != nh.COIN_CLASS and
+                   not (item.is_container() and any(id(i) in keep for i in flatten_items([item])))]
+        if not to_drop:
+            yield False
+        yield True
+        self.log(f'LYCAN were form Overloaded while hungry: dropping {len(to_drop)} items to eat')
+        self.inventory.drop(to_drop, smart=False)
+
     _TIN_SMELL = re.compile(r'It smells like (?:the )?([A-Za-z -]+?)\.')
     _BAD_TIN_WORDS = ('cockatrice', 'chickatrice', 'Medusa', 'green slime', 'were', 'little dog', 'large dog',
                       'dogs', 'kitten', 'housecat', 'large cat', 'chameleon', 'doppelganger', 'sandestin',
@@ -1918,7 +2562,22 @@ class Agent:
         what = m.group(1)
         if any(w in what for w in self._BAD_TIN_WORDS):
             return True
+        # a lycanthrope's own were family is cannibalism in a tin as well (eat.c maybe_cannibal)
+        if jf_config.LYCAN_FIXES and \
+                any(name in what for name in ('jackal', 'fox', 'coyote', 'rat', 'wolf', 'warg')
+                    if any(name in f for f in self.character.were_family())):
+            return True
         return any(w in what for w in self._CANNIBAL_WORDS.get(self.character.race, ()))
+
+    def carried_food_nutrition(self):
+        """Nutrition of edible_carried_food (corpses by their monster, unidentified items as 0)."""
+        total = 0
+        for item in self.edible_carried_food():
+            if item.is_corpse():
+                total += getattr(MON.permonst(item.monster_id + nh.GLYPH_MON_OFF), 'cnutrit', 0) * item.count
+            elif item.is_unambiguous():
+                total += getattr(item.object, 'nutrition', 0) * item.count
+        return total
 
     def edible_carried_food(self):
         """What eat_from_inventory eats: food, but not wolfsbane or corpses other than lizard/lichen."""
@@ -1947,6 +2606,19 @@ class Agent:
 
             # pray: lycanthropy is a nuisance, not an emergency -- wait for the gap where prayers fail ~1%
             # (at the old 500-turn gap rnz(350) leaves ~12% of these too soon)
+            # pray.c fixes the worst trouble first: in a were form at <= 5 HP (or 1/7) that is TROUBLE_HIT
+            # (7), above TROUBLE_LYCANTHROPE (6), and with Luck 0 only half the prayers fix more than one
+            # trouble -- wait until the form's HP is back up, or it dies and we rehumanize
+            if jf_config.LYCAN_FIXES and self.character.prop.polymorph and \
+                    (self.blstats.hitpoints <= 5 or self.blstats.hitpoints * 7 <= self.blstats.max_hitpoints):
+                yield False
+            # Hungry (minor trouble, not fixed at Luck 0): a cure prayer now restarts the prayer timeout just
+            # before the hunger runs out, so the next ~1000 turns are spent Weak/Fainting with no prayer (gc-lf2
+            # public s4 cured at T10201 while Hungry, fainted at gap 445 among werejackals and died). Wait for
+            # Weak: that hunger prayer fixes starvation and, half the time, the lycanthropy too (pray.c pleased)
+            if jf_config.LYCAN_CURE_WAIT and self.blstats.hunger_state == Hunger.HUNGRY and \
+                    not self.edible_carried_food():
+                yield False
             if self.is_safe_to_pray(jf_config.WEAK_PRAYER_GAP):
                 yield True
                 self.pray()
@@ -2000,7 +2672,13 @@ class Agent:
         if m is not None:
             y, x = int(m.group(1)), int(m.group(2))
             try:
-                self.current_level().forbidden[y, x] = True
+                if jf_config.TEMP_FORBID:
+                    # TEMP_FORBID: the moves usually fail because of our own state -- caught in a bear trap, stuck in
+                    # a web, a were form overloaded -- not because of the square: a permanent forbid boxed a
+                    # base2-jf25 s11 dive in on Mines 6 for 5000+ turns after it wriggled out of a bear trap
+                    self.current_level().forbidden_until[y, x] = self.blstats.time + 100
+                else:
+                    self.current_level().forbidden[y, x] = True
             except Exception:
                 pass
             self.log(f'panic loop: forbidding {(y, x)} ({signature})')
@@ -2043,7 +2721,9 @@ class Agent:
                     self.step(A.Command.ESC)
                     self.step(A.Command.ESC)
 
-                    if not self.resumed_game:
+                    # a new game starts on Dlvl 1's up stairs (they leave the dungeon); a dev scenario
+                    # (dev/scenario.py, JF_SCENARIO) starts wherever the harness put us
+                    if not self.resumed_game and not jf_scenario.active():
                         self.current_level().stair_destination[self.blstats.y, self.blstats.x] = \
                             ((Level.PLANE, 1), (None, None))  # TODO: check level num
                     try:
@@ -2065,6 +2745,7 @@ class Agent:
                 self.handle_exception(e)
 
             assert init_finished
+            jf_scenario.apply(self)
 
             last_step = self.step_count
             inactivity_counter = 0

@@ -6,7 +6,7 @@ import numpy as np
 from nle import nethack as nh
 from nle.nethack import actions as A
 
-from . import utils
+from . import jf_config, utils
 from .character import Character
 from .exceptions import AgentPanic
 from .glyph import G, C, SS
@@ -18,6 +18,47 @@ from .strategy import Strategy
 class ExplorationLogic:
     def __init__(self, agent):
         self.agent = agent
+        self._trap_resort_turn = {}   # level key -> last turn TRAP_LAST_RESORT opened the traps there
+
+    def _trap_last_resort(self, to_visit):
+        """TRAP_LAST_RESORT: nothing is left to explore without stepping on a known trap (the BFS treats them as
+        walls), but unexplored ground lies beyond one: walk through (the safe kinds of) traps for a while.
+        AutoAscend relents only once one square has had ~80 visits' worth of searching more than most; a jf14 s0
+        dive spent 11,000 turns searching a Mines level 3 pocket whose only way out was a trapped gap."""
+        agent = self.agent
+        level = agent.current_level()
+        # the dive only (it needs a way on; the tour's Dlvl 1 grind has seen its level), not Sokoban, and only once
+        # stuck on the level for long: in normal exploration the fallback comes and goes (a guard run walked a
+        # Mines level 1 rolling boulder trap after 400 turns there, for 31 squares it never needed)
+        dive = agent.global_logic.dive
+        if not dive.diving or level.dungeon_number == Level.SOKOBAN or \
+                dive.turns_on_level() < jf_config.TRAP_RESORT_MIN_TURNS or \
+                not utils.isin(level.objects, G.TRAPS).any():
+            return False
+        if agent._last_turn - agent._allow_walking_through_traps_turn <= 50:
+            return False   # already open: the traps aren't what blocks us
+        if agent.blstats.time - self._trap_resort_turn.get(level.key(), -10 ** 9) < 100:
+            return False
+        saved = agent._allow_walking_through_traps_turn
+        agent._allow_walking_through_traps_turn = agent._last_turn
+        agent.last_bfs_step = -1
+        try:
+            dis = agent.bfs()
+        finally:
+            agent._allow_walking_through_traps_turn = saved
+            agent.last_bfs_step = -1   # the BFS cache ignores the flag
+        beyond = to_visit & (dis != -1)
+        if beyond.sum() < 5:   # a lone unexplored square isn't worth a trap (a jf14 smoke test did that on Dlvl 14)
+            return False
+        self._trap_resort_turn[level.key()] = agent.blstats.time
+        if jf_config.TRAP_LAST_RESORT < 0:   # diagnostics only: no behaviour change
+            agent.log(f'TRAPS last resort (log only): {int(beyond.sum())} unexplored squares only beyond known traps')
+            return False
+        agent._allow_walking_through_traps_turn = agent._last_turn
+        agent.last_bfs_step = -1
+        agent.log(f'TRAPS last resort: {int(beyond.sum())} unexplored squares only beyond known traps; '
+                  f'walking through them')
+        return True
 
     # TODO: think how to handle the situation with wizard's tower
     def _level_dfs(self, start, end, path, vis):
@@ -178,8 +219,14 @@ class ExplorationLogic:
                 assert self.agent.current_level().key() in levels_to_search
                 continue
 
+            # jf_config.UPWARD_RETURN: headed up the main line (or out of the Mines) to a shallower main-dungeon
+            # level, a level with no known way there is explored for its up staircase only
+            upward = jf_config.UPWARD_RETURN and dungeon_number == Level.DUNGEONS_OF_DOOM and \
+                self.agent.current_level().dungeon_number in (Level.DUNGEONS_OF_DOOM, Level.GNOMISH_MINES) and \
+                self.agent.blstats.depth > level_number
             explore_strategy.preempt(self.agent, [
-                self.explore_stairs(go_to_strategy, all=True) \
+                (self.explore_stairs(go_to_strategy, up=True) if upward else
+                 self.explore_stairs(go_to_strategy, all=True)) \
                         .condition(lambda: self.agent.current_level().key() in levels_to_search),
                 go_to_least_explored_level(),
             ], continue_after_preemption=False).run()
@@ -406,6 +453,9 @@ class ExplorationLogic:
                     nonzero_y, nonzero_x = ((dis == dis[to_explore].min()) & to_explore).nonzero()
                     if len(nonzero_y) == 0:
                         dynamic_search_fallback = True
+
+                if dynamic_search_fallback and jf_config.TRAP_LAST_RESORT and self._trap_last_resort(to_visit):
+                    continue
 
                 if dynamic_search_fallback:
                     if search_prio_limit is not None and search_prio_limit >= 0:

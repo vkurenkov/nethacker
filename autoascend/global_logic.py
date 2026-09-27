@@ -8,6 +8,7 @@ from . import objects as O
 from . import soko_solver
 from . import utils
 from . import jf_config
+from . import power
 from .character import Character
 from .dive_logic import DiveLogic
 from .exceptions import AgentPanic
@@ -87,6 +88,12 @@ class ItemPriority(ItemPriorityBase):
             if tool is not None:
                 add_item(tool)
 
+        # power: boots that may be levitation or water walking boots, for the Castle's moat (never worn before)
+        if jf_config.KEEP_MAGIC_BOOTS:
+            for item in sorted(items, key=lambda i: i.unit_weight(with_content=False)):
+                if power.is_passage_boots(item) and not item.equipped:
+                    add_item(item)
+
         for item in items:
             if item.is_unambiguous():
                 if item.object in [
@@ -106,6 +113,18 @@ class ItemPriority(ItemPriorityBase):
                 add_item(item)
                 break
 
+        # power (KEEP_POTIONS): in 23 of 90 base games potion types were dropped for good, mostly for daggers
+        # and the dive's pick-axe/mattock (the pack is full: plate mail 450 + tool 100-120). Each unknown potion
+        # is levitation 4.6% of the time, the likeliest Castle passage. While diving (digging, few fights):
+        # food first, then the passage candidates, then the thrown weapons.
+        if jf_config.KEEP_POTIONS and dive is not None and dive.diving:
+            for item in sorted(filter(lambda i: i.is_food() and not i.is_corpse(), items),
+                               key=lambda x: -x.nutrition_per_weight() - 1000 * (x.objs[0].name == 'sprig of wolfsbane')):
+                add_item(item)
+            for item in sorted(filter(power.is_passage_candidate, items),
+                               key=lambda i: i.unit_weight(with_content=False)):
+                add_item(item)
+
         for item in sorted(filter(lambda i: i.is_thrown_projectile(), items),
                            key=lambda i: -utils.calc_dps(*self.agent.character.get_ranged_bonus(None, i))):
             add_item(item)
@@ -113,6 +132,16 @@ class ItemPriority(ItemPriorityBase):
         for item in sorted(filter(lambda i: i.is_food() and not i.is_corpse(), items),
                            key=lambda x: -x.nutrition_per_weight() - 1000 * (x.objs[0].name == 'sprig of wolfsbane')):
             add_item(item)
+
+        if jf_config.LICHEN_RESERVE:
+            # a never-rotting food reserve (lichen, lizard corpses) for the Weak spells before a safe prayer
+            # (agent.reserve_corpse): eaten by eat_from_inventory, like found rations
+            left = jf_config.LICHEN_RESERVE
+            for item in filter(lambda i: i.is_corpse() and i.monster_id in self.agent.RESERVE_CORPSE_IDS, items):
+                if left <= 0:
+                    break
+                add_item(item, count=left)
+                left -= min(item.count, left)
 
         if self._take_sacrificial_corpses:
             for item in filter(self.agent.global_logic.can_sacrify, items):
@@ -179,6 +208,8 @@ class GlobalLogic:
         self._got_artifact = False
         self._milestone_since = {}   # milestone -> turn it began (jf_config.MINES_SEARCH_TURNS)
         self._stall_anchor = None    # (level key, (y, x), turn, milestone) the tour has kept close to
+        self._pick_trip_start = None
+        self._pick_trip_done = False
         self.mines_not_found = False
 
         self.dive = DiveLogic(agent)
@@ -543,6 +574,17 @@ class GlobalLogic:
     def _safe_to_dip(self):
         # SAFE_DIPS (full HP + prayer ready, astra) changes the tour; off until tested on its own
         bl = self.agent.blstats
+        # NO_DIP_WITH_TOOL: a fountain dip curses the sword 1 time in 30, silently (fountain.c case 16), and a
+        # welded weapon can't be swapped for the pick-axe: eg-glh-public seed 6 carried its pick from T6556, dipped
+        # 8 times at XL 7, and dove at XL 8 with 'a cursed thoroughly rusty +1 long sword (weapon in hand)' --
+        # digging_tool() None, a tool-less dive (0.206; base 0.466). A digger doesn't need Excalibur.
+        if jf_config.NO_DIP_WITH_TOOL and self.dive.digging_tool() is not None:
+            return False
+        # DEMON_NO_REDIP: not while a released water demon is about -- when it fled out of the vigil's reach the
+        # bot walked back to the fountain and dipped twice more next to it, then fought it (DEMON_FIX replay of
+        # jf16 s8: killed by the demon 480 turns after the release)
+        if jf_config.DEMON_NO_REDIP and bl.time <= self.dive._demon_vigil_until:
+            return False
         if not jf_config.SAFE_DIPS:
             # a released water demon (1 dip in ~40) is deadlier to a starving or hurt character; dipping
             # can wait for a healthy moment (SAFE_DIPS' prayer-ready rule halved the Excaliburs)
@@ -567,6 +609,50 @@ class GlobalLogic:
                 self.dip_for_excalibur().condition(self._safe_to_dip).every(10),
             ])
         )
+
+    def _pick_trip_active(self):
+        agent = self.agent
+        if not jf_config.PICK_TRIP_XL or self._pick_trip_done:
+            return False
+        if self.dive.digging_tool() is not None:
+            agent.log('TOUR pick trip: got a digging tool, back to the grind')
+            self._pick_trip_done = True
+            return False
+        if agent.prayer_failed or agent.blstats.experience_level < jf_config.PICK_TRIP_XL:
+            return False
+        start = self._pick_trip_start
+        if start is not None and jf_config.PICK_TRIP_END_XL and \
+                agent.blstats.experience_level >= jf_config.PICK_TRIP_END_XL:
+            # an XL-7 character on Dlvl 3-6 meets difficulty-5/6 monsters ((depth + XL) / 2): 4 of 60 pt5/pt6
+            # games died there to killer bees, soldier ants and orcish arrows, none during the XL 5-6 trips
+            agent.log(f'TOUR pick trip: XL {agent.blstats.experience_level} without a tool, back to the grind')
+            self._pick_trip_done = True
+            return False
+        if start is None:
+            self._pick_trip_start = agent.blstats.time
+            agent.log('TOUR pick trip: off to the Mines for a digging tool')
+        elif agent.blstats.time - start > jf_config.PICK_TRIP_TURNS:
+            agent.log('TOUR pick trip: out of time, back to the grind')
+            self._pick_trip_done = True
+            return False
+        return True
+
+    def _grind_level(self):
+        """jf_config.GRIND_LEVELS {min XL: Dlvl}: the grind's main-dungeon level at this XL (None: the flag is off).
+
+        Random monsters are capped at difficulty (depth + XL) / 2 (makemon.c). On Dlvl 1 that cap is 3 at XL 5-6,
+        so XL 5 -> 7 takes ~9,000 turns there (base: ~3,500 + ~5,500) at ~12 hunger prayers per grind, and the
+        prayers' rnz(350) failures end 13 of 45 gc-lf1 games in a rescue. Keeping the cap at 4 instead (Dlvl 3 at
+        XL 5-6, Dlvl 2 at XL 7) doubles XP per spawn at XL 5-6 (monst.c model: 3.8-4.9 -> 8.3-10.8), so fewer
+        turns and prayers, while killer bees, soldier ants and Uruk-hai (difficulty 5-6) stay out: the old
+        Dlvl-3 grind at XL 7 (cap 5) lost 4.9-7.8% of games per 1000 turns. Dwarves (difficulty 4) spawn from
+        XL 5 there, and the pet kills them for their pick-axes as it does on Dlvl 1 from XL 7."""
+        table = jf_config.GRIND_LEVELS
+        if not table:
+            return None
+        xl = self.agent.blstats.experience_level
+        keys = [k for k in table if k <= xl]
+        return table[max(keys)] if keys else 1
 
     def _tour_stalled(self):
         """The tour has kept within 8 squares of one spot on one level, same milestone, TOUR_STALL_TURNS turns."""
@@ -597,11 +683,32 @@ class GlobalLogic:
         yield True
         while 1:
             explore_stairs_condition = lambda: False
-            if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
+            restart = lambda: False   # ends the current strategy without finishing the milestone
+            if self.milestone == Milestone.BE_ON_FIRST_LEVEL and self._pick_trip_active():
+                # PICK_TRIP_XL: a detour from the grind to the Mines for a dwarf's pick-axe, then back to
+                # Dlvl 1. With the pick in hand a failed hunger prayer (a quarter of all games) starts a
+                # dig-dive instead of a starving stairs rescue, and the XL 8 dive needs no Mines trip.
+                self.dive.pick_trip = True
+                condition = lambda: False
+                level = (Level.GNOMISH_MINES, jf_config.PICK_TRIP_LEVEL)
+                restart = lambda: not self._pick_trip_active()
+            elif self.milestone == Milestone.BE_ON_FIRST_LEVEL:
+                self.dive.pick_trip = False
                 condition = self.dive.first_level_done
                 # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
                 #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
-                level = (Level.DUNGEONS_OF_DOOM, 1)
+                # GRIND_DEEP_XL: from that XL the grind goes on on Dlvl GRIND_DEEP_LEVEL -- on Dlvl 1 XL 6->8 takes
+                # a median 11,500 turns (7 of the grind's ~11 hunger prayers): spawns there are too weak
+                deep = bool(jf_config.GRIND_DEEP_XL) and \
+                    self.agent.blstats.experience_level >= jf_config.GRIND_DEEP_XL
+                level = (Level.DUNGEONS_OF_DOOM, jf_config.GRIND_DEEP_LEVEL if deep else 1)
+                if jf_config.GRIND_DEEP_XL and not deep:
+                    restart = lambda: self.agent.blstats.experience_level >= jf_config.GRIND_DEEP_XL
+                grind_level = self._grind_level()
+                if grind_level is not None:
+                    # GRIND_LEVELS: the grind's level follows XL, see _grind_level
+                    level = (Level.DUNGEONS_OF_DOOM, grind_level)
+                    restart = lambda lv=grind_level: self._grind_level() != lv
 
             elif self.milestone == Milestone.FIND_SOKOBAN:
                 condition = lambda: self.agent.current_level().dungeon_number == Level.SOKOBAN
@@ -709,18 +816,32 @@ class GlobalLogic:
                     .until(self.agent, lambda: (self.agent.blstats.y, self.agent.blstats.x) == (y, x))
                 )
 
+            def homebound(lv=level):
+                """In transit to the grind level: don't explore every level passed to exhaustion (the tour's
+                first preempt). UPWARD_RETURN: on the way home from a pick trip (eg-trip5a public seed 9 ended
+                its trip on Mines 1 at XL 7 and explored that level for 3,500 turns instead of climbing to
+                the Dlvl 1 grind). GRIND_LEVELS: moving up to the next grind level (eg-gl-a public seed 11
+                spent 4,000 turns at XL 7 on Dlvl 3 before climbing to Dlvl 2), or out of the Mines a
+                random unexplored '>' took us into (seed 3 died on Mines 1)."""
+                if self.milestone != Milestone.BE_ON_FIRST_LEVEL or self.agent.current_level().key() == lv:
+                    return False
+                if jf_config.UPWARD_RETURN and self._pick_trip_done:
+                    return True
+                cur = self.agent.current_level()
+                return bool(jf_config.GRIND_LEVELS) and lv[0] == Level.DUNGEONS_OF_DOOM and \
+                    (cur.dungeon_number == Level.GNOMISH_MINES or self.agent.blstats.depth > lv[1])
             (
                 self.agent.exploration.go_to_level_strategy(*level, go_to_strategy, exploration_strategy(None))
                 .before(exploration_strategy(None))#.before(self.agent.exploration.patrol())
                 .preempt(self.agent, [
-                    exploration_strategy(0),
+                    exploration_strategy(0).condition(lambda: not homebound()),
                     exploration_strategy(None).until(
                         self.agent, lambda: self.agent.blstats.hitpoints >= 0.8 * self.agent.blstats.max_hitpoints)
                 ])
                 .preempt(self.agent, [
                     self.agent.exploration.explore_stairs(go_to_strategy, all=True).condition(explore_stairs_condition),
                 ])
-                .until(self.agent, condition)
+                .until(self.agent, lambda: condition() or restart())
             ).run()
 
     def global_strategy(self):
@@ -730,6 +851,8 @@ class GlobalLogic:
             .preempt(self.agent, [
                 self.dive.hunt_strategy(),
                 self.dive.ditch_pet_strategy(),
+                # a tour-mode pick trip looks for the Mines branch itself (dive_logic.FAST_BRANCH)
+                self.dive.trip_branch_strategy(),
             ])
             .preempt(self.agent, [
                 self.solve_sokoban_strategy()
@@ -749,12 +872,32 @@ class GlobalLogic:
             ])
             .preempt(self.agent, [
                 self.agent.eat_corpses_from_ground(only_below_me=True).condition(lambda: self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
+                # CLAIM_CORPSES: a fresh kill a few steps away is ours before the pet gets it (the pet ate as many
+                # jackal corpses as we did in the base grinds; 63% of its meals of our kills came 2+ turns after
+                # the kill, while we walked elsewhere)
+                self.agent.eat_corpses_from_ground(only_below_me=False, max_dist=jf_config.CLAIM_DIST,
+                                                   max_age=jf_config.CLAIM_MAX_AGE)
+                .condition(lambda: jf_config.CLAIM_CORPSES and not self.dive.diving and
+                           self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
                 self.agent.eat_corpses_from_ground(only_below_me=not jf_config.EAT_NEARBY_CORPSES).every(5)
                 .condition(lambda: self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
                 # after a failed prayer corpses are the only food left: walk to the ones nearby
                 self.agent.eat_corpses_from_ground(only_below_me=False).every(3)
                 .condition(lambda: self.agent.prayer_failed and self.agent.blstats.hunger_state >= Hunger.HUNGRY),
+                # DIVE_EAT: a hungry dive walks to fresh edible corpses close by (6 of 33 tool dives that died
+                # above Dlvl 25 in base/base2 died Weak or Fainting, between hunger prayers)
+                self.agent.eat_corpses_from_ground(only_below_me=False).every(3)
+                .condition(lambda: jf_config.DIVE_EAT and self.dive.diving and not self.agent.prayer_failed and
+                           self.agent.blstats.hunger_state >= Hunger.HUNGRY and
+                           self.dive.edible_corpse_within(jf_config.DIVE_EAT_RADIUS)),
                 self.agent.eat_from_inventory().every(5),
+                self.agent.inventory.buy_food().every(3),
+                # power (SELL_PRICE_ID): offer unknown potions/rings/boots to a shopkeeper for their price group
+                self.agent.inventory.sell_price_identify().every(3),
+            ])
+            .preempt(self.agent, [
+                # boxed in by diagonal squeezes while carrying > 600 (jf_config.UNSQUEEZE)
+                self.agent.unsqueeze(),
             ])
             .preempt(self.agent, [
                 self.follow_guard(),
@@ -762,8 +905,17 @@ class GlobalLogic:
             .preempt(self.agent, [
                 self.agent.fight2(),
             ])
+            # the Valley of the Dead only (GEHENNOM_DIVE): walk past the graveyards' sleeping undead
+            .preempt(self.agent, [
+                self.dive.valley_sneak(),
+            ])
+            # an Overloaded were form can neither fight nor eat: drop its load first (LYCAN_FIXES)
+            .preempt(self.agent, [
+                self.agent.were_unload().condition(lambda: jf_config.LYCAN_FIXES),
+            ])
             .preempt(self.agent, [
                 self.dive.faint_shelter(),
+                self.dive.faint_guard().condition(lambda: jf_config.FAINT_GUARD),
             ])
             .preempt(self.agent, [
                 self.dive.leave_minetown_hallucinating(),
@@ -781,6 +933,17 @@ class GlobalLogic:
             ])
             .preempt(self.agent, [
                 self.dive.retreat_upstairs().condition(lambda: self.dive.diving or jf_config.SURVIVAL_IN_TOUR),
+                # the Valley of the Dead only (GEHENNOM_DIVE): up its '<' to heal on the castle level
+                self.dive.valley_retreat(),
+            ])
+            # Gehennom only (GEHENNOM_DIVE): a wand of digging down away from a monster we can't outfight
+            .preempt(self.agent, [
+                self.dive.gehennom_escape(),
+            ])
+            # crossing the castle moat (castle_logic.py): above the survival layer and the fight, which
+            # would drag a levitating hero back to land or up the stairs
+            .preempt(self.agent, [
+                self.dive.castle.crossing_strategy(),
             ])
             .preempt(self.agent, [
                 self.agent.engulfed_fight(),
