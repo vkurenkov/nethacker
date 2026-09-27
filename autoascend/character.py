@@ -285,6 +285,21 @@ class Character:
         # dying only rehumanizes us (polyself.c rehumanize) back to this HP (LYCAN_FIXES)
         self.hp_before_poly = None
         self._was_polymorphed = False
+        # intrinsics from corpses (eat.c cpostfx), attrcurse takes them away: read by jf_config.SHOP_GUARD
+        self.teleportitis = False
+        self.teleport_control = False
+
+    def _track_teleport(self, msg):
+        # eat.c cpostfx: 'You feel very jumpy.' (hallucinating: 'diffuse.') gives teleportitis, 'You feel in control
+        # of yourself.' ('centered in your personal space.') teleport control; sit.c attrcurse: 'You feel less jumpy.'
+        if 'You feel very jumpy' in msg or 'You feel diffuse' in msg:
+            if not self.teleportitis:
+                self.agent.log('INTRINSIC teleportitis')
+            self.teleportitis = True
+        if 'You feel less jumpy' in msg:
+            self.teleportitis = False
+        if 'You feel in control of yourself' in msg or 'centered in your personal space' in msg:
+            self.teleport_control = True
 
     _WERE_KIND = re.compile(r'\bwere(rat|jackal|wolf)\b')
     _TURN_INTO_WERE = re.compile(r'You turn into an? were(rat|jackal|wolf)!')
@@ -296,6 +311,7 @@ class Character:
                 self.is_lycanthrope = True
             if 'You feel purified.' in self.agent.message:
                 self.is_lycanthrope = False
+            self._track_teleport(self.agent.message)
             return
         # every message since the last update: infections and changes happen inside atomic operations
         # (fights, searches), and the old check of the last message alone missed some of them
@@ -305,6 +321,7 @@ class Character:
             start = 0
         self._history_seen = len(history)
         msg = ' '.join(history[start:] + [self.agent.message])
+        self._track_teleport(msg)
         # infected while fainted or asleep the message is 'You dream that you feel feverish.' (75 of 591
         # infections in the dev runs): the old exact match never saw it, so no cure prayer came and the
         # bot went on eating jackal corpses (jf25 s10: 'You cannibal!', Luck -2..-5, next prayer failed)

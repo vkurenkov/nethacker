@@ -286,10 +286,12 @@ class ItemManager:
         # TODO: effects, uses
 
         # rings: a foocubus puts one on (s6 dive): an unparsed '(on right hand)' blinded the whole inventory
+        # (polymorphed, a ring sits 'on right foreclaw' / 'on left paw': objnam.c body_part(HAND); the assert
+        # below stalled CASTLE_POLY forms, pwc-dp12 jf27-s8)
         if info in {'being worn', 'being worn; slippery', 'wielded', 'chained to you',
                     'on right hand', 'on left hand'} or info.startswith(
                 'weapon in ') or \
-                info.startswith('tethered weapon in '):
+                info.startswith('tethered weapon in ') or re.fullmatch(r'on (right|left) [a-z ]+', info):
             equipped = True
             at_ready = False
         elif info in {'at the ready', 'in quiver', 'in quiver pouch', 'lit'}:

@@ -41,6 +41,7 @@ MB_AMULET = O.from_name('amulet of magical breathing')
 LS_AMULET = O.from_name('amulet of life saving')
 STRANGLE_AMULET = O.from_name('amulet of strangulation')
 SCARE = O.from_name('scare monster', nh.SCROLL_CLASS)
+POLY_POTION = O.from_name('polymorph', nh.POTION_CLASS)
 UNLOCKERS = frozenset(O.from_name(n) for n in ('skeleton key', 'lock pick', 'credit card'))
 PASSAGE_BOOTS = frozenset((LEV_BOOTS, WW_BOOTS))
 
@@ -54,6 +55,8 @@ WISH_GDSM = 'blessed greased +2 gray dragon scale mail'
 WISH_LEV_RING = 'blessed ring of levitation'
 WISH_LS = 'blessed amulet of life saving'
 WISH_SPEED = 'blessed greased +2 speed boots'
+# wishes whose object has a random appearance (gray dragon scale mail is known on sight)
+WISH_OBJECTS = {WISH_LEV_RING: LEV_RING, WISH_LS: LS_AMULET, WISH_SPEED: SPEED_BOOTS}
 
 
 def _prob(obj):
@@ -128,7 +131,11 @@ def passage_plan(agent, tested=()):
     Items whose glyphs[0] is in `tested` are skipped. Only top-level inventory items (they have letters).
     """
     tested = set(tested)
-    items = [i for i in agent.inventory.items if i.glyphs[0] not in tested and i.category != nh.COIN_CLASS]
+    # a tested item that turned out to be a passage item (a ring of levitation taken off for a rest stop) is still
+    # one: `tested` only removes the unknown ones already tried (pwc-dp5 jf16-s13 gave up with its lev ring)
+    certain_kinds = (LEV_RING, LEV_BOOTS, WW_BOOTS, LEV_POTION, COLD_WAND, FROST_HORN, WISH_WAND)
+    items = [i for i in agent.inventory.items if i.category != nh.COIN_CLASS and
+             (i.glyphs[0] not in tested or (i.is_unambiguous() and i.object in certain_kinds))]
     engraved = agent.inventory.item_manager._already_engraved_glyphs
     plan = []
 
@@ -170,6 +177,11 @@ def passage_plan(agent, tested=()):
         if it.category == nh.TOOL_CLASS and not it.is_unambiguous() and FROST_HORN in it.objs:
             plan.append(('apply', it, f'unknown horn: P(frost)={p_of(it, {FROST_HORN}):.2f} '
                                       f'P(fire)={p_of(it, {FIRE_HORN}):.2f} (a fire ray may bounce back)'))
+    if jf_config.CASTLE_POLY:
+        # a known potion of polymorph: a random form flies, swims or breathes water 20% of the time (castle_power)
+        for it in items:
+            if _certain(it, POLY_POTION):
+                plan.append(('quaff', it, 'potion of polymorph: P(crossing form)=0.20'))
     potions = [i for i in items if i.category == nh.POTION_CLASS and not i.is_unambiguous() and LEV_POTION in i.objs]
     for it in sorted(potions, key=lambda i: (-p_of(i, {LEV_POTION}), _danger(i, _POTION_DANGER), -i.count)):
         plan.append(('quaff', it, f'unknown potion: P(levitation)={p_of(it, {LEV_POTION}):.2f} '
@@ -231,6 +243,49 @@ def door_tools(agent):
 
 def has_object(agent, obj):
     return any(_certain(i, obj) for i in flatten_items(agent.inventory.items))
+
+
+_WISH_GOT = re.compile(r'(?:^|\s)([a-zA-Z]) - ((?:an?|\d+) [^.]+?)\.(?=\s|$)')
+
+
+def note_wish(agent, text):
+    """WISH_LEARN: the wish prompt was answered with `text` (agent.update); learn_wished names the result."""
+    if jf_config.WISH_LEARN:
+        agent._wish_pending = (WISH_OBJECTS.get(text), text, agent.step_count)
+
+
+def learn_wished(agent):
+    """WISH_LEARN, at the end of agent.update: 'p - a granite ring.' after a wish for a ring of levitation.
+    makewish leaves the object unidentified; record its appearance glyph as the wished type so the bot uses it
+    (castle_logic's certain ring, inventory.wear_life_saving) and wish_text moves on to the next wish."""
+    pend = getattr(agent, '_wish_pending', None)
+    if pend is None:
+        return
+    obj, text, step = pend
+    msg = agent.message or ''
+    tail = msg.rsplit(text, 1)[-1] if text in msg else msg
+    m = _WISH_GOT.search(tail)
+    if m is None:
+        if agent.step_count - step > 30:
+            agent._wish_pending = None
+        return
+    agent._wish_pending = None
+    if obj is None:
+        return
+    letter = m.group(1)
+    obs = agent.last_observation
+    glyph = next((int(g) for l, g in zip(obs['inv_letters'], obs['inv_glyphs']) if chr(l) == letter), None)
+    im = agent.inventory.item_manager
+    if glyph is None or not nh.glyph_is_normal_object(glyph) or glyph in im.glyph_to_object or \
+            obj in im.object_to_glyph:
+        return
+    if obj not in O.possibilities_from_glyph(glyph):
+        agent.log(f'POWER wish {text!r} gave {m.group(2)!r}: not a {obj.name}')
+        return
+    im.glyph_to_object[glyph] = obj
+    im.object_to_glyph[obj] = glyph
+    agent.inventory.items._previous_inv_strs = None   # re-parse the inventory with the new name
+    agent.log(f'POWER wished {obj.name}: {letter} - {m.group(2)}')
 
 
 def wish_text(agent, purpose=None):
