@@ -64,6 +64,9 @@ HORN_OF_PLENTY = O.from_name('horn of plenty')
 LEATHER_DRUM = O.from_name('leather drum')
 EARTHQUAKE_DRUM = O.from_name('drum of earthquake')
 CAMERA = O.from_name('expensive camera')
+BUGLE = O.from_name('bugle')
+# BUGLE_SCARE: the mercenaries a bugle wakes and turns hostile (music.c awaken_soldiers: is_mercenary)
+_MERCENARIES = frozenset(('soldier', 'sergeant', 'lieutenant', 'captain', 'watchman', 'watch captain'))
 HORNS = frozenset((TOOLED_HORN, FROST_HORN, FIRE_HORN, HORN_OF_PLENTY))
 DRUMS = frozenset((LEATHER_DRUM, EARTHQUAKE_DRUM))
 
@@ -80,7 +83,8 @@ _WET = frozenset({SS.S_pool, SS.S_water, SS.S_lava})
 _WIPED = re.compile(r'Wiped out (?:all )?([a-zA-Z ]+?)\.')
 _SENT = re.compile(r'Sent in (?:some |an? )([a-zA-Z ]+?)\.')
 SCARE_SOUNDS = _SCARE_SOUNDS = ('You produce a frightful, grave sound', 'You beat a deafening row', 'You pound on the drum',
-                 'You blow into the horn', 'heavy, thunderous rolling')
+                 'You blow into the horn', 'heavy, thunderous rolling') + \
+    (('You extract a loud noise from', 'You blow into the bugle') if jf_config.BUGLE_SCARE else ())
 _DIRS = {'n': (-1, 0), 's': (1, 0), 'e': (0, 1), 'w': (0, -1), 'ne': (-1, 1), 'nw': (-1, -1), 'se': (1, 1),
          'sw': (1, -1)}
 _DIR_KEYS = {'n': 'k', 's': 'j', 'e': 'l', 'w': 'h', 'ne': 'u', 'nw': 'y', 'se': 'n', 'sw': 'b', '>': '>', '<': '<',
@@ -251,6 +255,13 @@ def _castle_depth(agent):
         return False
 
 
+def _in_gehennom(agent):
+    try:
+        return agent.current_level().dungeon_number == 1
+    except Exception:
+        return False
+
+
 def genocide_answer(agent, cls):
     """The text to type at a genocide prompt (class prompt: cls=True), and why."""
     st = state(agent)
@@ -259,6 +270,10 @@ def genocide_answer(agent, cls):
     if cls:
         # only a blessed scroll asks for a class (read.c seffects: sblessed -> do_class_genocide)
         order = [c for c in CLASS_ORDER if c not in st.classes] or list(CLASS_ORDER)
+        if jf_config.GENO_EXTRAS and 'L' not in st.classes and (_on_castle(agent) or _in_gehennom(agent)):
+            # veterans' class: liches (covetous master liches teleport next to the castle landing; they drive the
+            # Valley pile-ups), ahead of 'H' once the mazes' minotaurs are behind us
+            order = ['L'] + [c for c in order if c != 'L']
         text = order[min(n, len(order) - 1)]
         st.answer = (agent.step_count, 'class', text)
         return text, 'class prompt (a blessed scroll)'
@@ -377,6 +392,7 @@ def read_strategy(agent):
             yield False
             return
         item = _known_genocide(agent)
+        why = 'known genocide, not cursed: read at once'
         if item is None:
             yield False
             return
@@ -389,7 +405,7 @@ def read_strategy(agent):
             yield False   # (one read a turn: a refused read passes no time)
             return
         yield True
-        read_scroll(agent, item, 'known genocide, not cursed: read at once')
+        read_scroll(agent, item, why)
 
     return Strategy(f)
 
@@ -407,6 +423,8 @@ def instrument_kind(agent, item):
     if item.is_unambiguous():
         if item.object == TOOLED_HORN:
             return 'scare'
+        if item.object == BUGLE:
+            return 'scare' if jf_config.BUGLE_SCARE and bugle_ok(agent) else None
         if item.object == CAMERA:
             return None if item.text in state(agent).empty else 'camera'
         return None
@@ -418,6 +436,33 @@ def instrument_kind(agent, item):
             return None   # a horn of plenty, or a ray horn the game has named by now
         return 'horn'
     return None
+
+
+def bugle_ok(agent):
+    """BUGLE_SCARE: a bugle also wakes every mercenary on the level and makes them hostile (music.c awaken_soldiers):
+    never on the castle level (its barracks sleep ~40 soldiers) nor with a peaceful watchman or soldier in view (a
+    town's watch turns on us)."""
+    try:
+        dive = agent.global_logic.dive
+        key = agent.current_level().key()
+        if dive.castle.castle_key is not None and key == dive.castle.castle_key:
+            # CL_BUGLE_WEST (castle-lift, main's idea): the castle's soldiers wake and turn hostile, but on the west side
+            # before any crossing they can't reach us -- the drawbridge is raised, the towers open inward, the barracks
+            # and the trap-door hall behind locked doors -- while a minotaur flees the bugle (R176: 14/20 vs 1/20)
+            if not jf_config.CL_BUGLE_WEST:
+                return False
+            castle = dive.castle
+            mx, _ = castle._pos()
+            from .castle_logic import WEST_COURTYARD
+            if castle.committed() or not (mx < 0 or castle._pos() in WEST_COURTYARD):
+                return False
+        peaceful = agent.monster_tracker.peaceful_monster_mask
+        for _, y, x, mon, _ in agent.get_visible_monsters():
+            if getattr(mon, 'mname', '') in _MERCENARIES and peaceful[y, x]:
+                return False
+        return True
+    except Exception:
+        return False
 
 
 def keep_kind(agent, item):

@@ -13,6 +13,7 @@ from . import combat
 from . import jf_config, jf_log, jf_scenario
 from . import power
 from . import power_route
+from . import prep_log
 from . import utils
 from .character import Character
 from .exceptions import AgentPanic, AgentFinished, AgentChangeStrategy
@@ -633,6 +634,10 @@ class Agent:
 
         self.update_state(allow_update=self._atom_operation_allow_update or not self.in_atom_operation,
                           allow_callbacks=not self.in_atom_operation)
+        if jf_config.PREP_LOG:
+            # READINESS checkpoints (prep_log.py): reads the fresh state, logs a line when a checkpoint is due;
+            # never steps, never raises
+            prep_log.note(self)
 
     def update_state(self, allow_update=True, allow_callbacks=True):
         assert not self._no_step_calls
@@ -688,8 +693,10 @@ class Agent:
     def _update_level_items(self):
         level = self.current_level()
 
-        level.items[self.blstats.y, self.blstats.x] = self.inventory.items_below_me
-        level.item_count[self.blstats.y, self.blstats.x] = len(self.inventory.items_below_me)
+        # WR_BLIND_LOOK: a floor we skipped looking at while blind is unknown, not empty -- keep the square's memory
+        if not self.inventory._blind_look_skipped:
+            level.items[self.blstats.y, self.blstats.x] = self.inventory.items_below_me
+            level.item_count[self.blstats.y, self.blstats.x] = len(self.inventory.items_below_me)
 
         # TODO: optimize
         ignore_mask = utils.isin(self.glyphs, G.MONS, G.PETS)  # TODO: effects, etc
@@ -796,6 +803,9 @@ class Agent:
                     self.log(f'CORPSE kill {mname} recorded={recorded} was_at={was} bodies_now={body} '
                              f'me={(self.blstats.y, self.blstats.x)}')
 
+        # WR_BLIND_LOOK: an unlooked floor (blind) is no evidence the corpses under us are gone
+        if self.inventory._blind_look_skipped:
+            return
         old_possible_corpses = level.corpses_to_eat[self.blstats.y, self.blstats.x].copy()
         del level.corpses_to_eat[self.blstats.y, self.blstats.x]
 
@@ -1202,10 +1212,31 @@ class Agent:
                 best = entry
         return best
 
+    def camp_hunger(self):
+        """CAMP_HUNGER_GAP (grind-audit): a tool-less planned dive at depth <= CAMP_HUNGER_MAX_DEPTH (the Mines camp,
+        the tool-less Mines descent after it, a dive stuck on Dlvl 2-4) after its first hunger prayer. Those phases
+        last thousands of turns with no food but prayers, and E2's short Fainting gap (DIVE_FAINT_PRAYER_GAP 850)
+        prays every ~905 turns at ~7.5% risk each (rnz(350)): cand-g's dive hunger prayers at gaps < 1000 failed 20
+        of 220, 0 of 70 at 1000-1300, and at depth <= 12 nearly every failure ended the game (ledger F093; jf60 s5
+        prayed 5 times in a row at gap 907-909 after its camp). E2's short gap stays for the first cycle (the Mines
+        trip's first faints, where it earned its keep); later cycles wait for CAMP_HUNGER_GAP with the faint guard
+        holding Elbereth (dive_logic.faint_guard), as the tour does."""
+        if not jf_config.CAMP_HUNGER_GAP or self.prayer_failed:
+            return False
+        dive = self.global_logic.dive
+        if not dive.diving or dive.rescue or dive.dive_hunger_prayers < 1 or \
+                self.blstats.depth > jf_config.CAMP_HUNGER_MAX_DEPTH or self.character.prop.polymorph:
+            return False
+        if self.current_level().dungeon_number not in (Level.GNOMISH_MINES, Level.DUNGEONS_OF_DOOM):
+            return False
+        return dive.digging_tool() is None
+
     @property
     def SAFE_HUNGER_PRAYER_GAP(self):
         # TOUR_WEAK_PRAYER_GAP: a longer Weak gap in the tour only (the dive has no faint guard);
         # DIVE_WEAK_PRAYER_GAP: a shorter one deep in the dive (castle: a faint beside a troll is worse)
+        if self.global_logic.dive.diving and self.camp_hunger():
+            return max(jf_config.WEAK_PRAYER_GAP, jf_config.CAMP_HUNGER_GAP)
         if not self.global_logic.dive.diving:
             by_xl = self._tour_gaps_by_xl()
             if by_xl is not None:
@@ -1267,6 +1298,8 @@ class Agent:
                     self.current_level().key() == castle.castle_key)
 
     def _faint_prayer_gap(self):
+        if self.global_logic.dive.diving and self.camp_hunger():
+            return jf_config.CAMP_HUNGER_GAP
         if not self.global_logic.dive.diving:
             by_xl = self._tour_gaps_by_xl()
             if by_xl is not None:
@@ -1373,6 +1406,8 @@ class Agent:
             return True
         if self._paralysis_prayer_due():
             return True
+        if self._long_faint_prayer_due():
+            return True
         if not jf_config.STARVE_CLOCK:
             if self.is_safe_to_pray(self._faint_prayer_gap()):
                 return True
@@ -1424,6 +1459,22 @@ class Agent:
             # prayed at gaps of 534, 4, 22, 2 turns and was 'killed by the wrath of Tyr')
             return self.is_safe_to_pray(100, certain_death=True)
         return False
+
+    def _long_faint_prayer_due(self):
+        """TOUR_FAINT_LONG_TURNS (grind-audit): a tour Fainting spell that has lasted that long prays from
+        TOUR_FAINT_LONG_GAP. Deep into a spell the faints last 20-30 turns and come back within a few conscious
+        turns, and the dust Elbereth wears off during one of them: 5 of cand-g's 7 tour fainting deaths came 430-540
+        turns into their spell (see jf_config). A spell's age is the time since Fainting was first seen
+        (dive.update keeps _fainting_since; a meal that lifts us out of Fainting starts a new spell)."""
+        if not jf_config.TOUR_FAINT_LONG_TURNS or self.prayer_failed or self.global_logic.dive.diving:
+            return False
+        since = self._fainting_since
+        if since is None or self.blstats.time - since < jf_config.TOUR_FAINT_LONG_TURNS:
+            return False
+        if not self.is_safe_to_pray(jf_config.TOUR_FAINT_LONG_GAP):
+            return False
+        self._pray_reason = f'faint-long spell={self.blstats.time - since}'
+        return True
 
     def _starvation_near(self):
         """The uhunger estimate from the last faint's length (or 1/turn since Fainting began, if no faint was
@@ -1514,6 +1565,9 @@ class Agent:
                 self.last_prayer_turn = self.blstats.time
                 self.search()
                 return True
+        dive = self.global_logic.dive
+        if dive.diving and self.blstats.hunger_state >= Hunger.WEAK:
+            dive.dive_hunger_prayers += 1   # CAMP_HUNGER_GAP: the dive's hunger cycles so far
         history_len = len(self._message_history)
         self.step(A.Command.PRAY)
         self.last_prayer_turn = self.blstats.time
@@ -1840,6 +1894,15 @@ class Agent:
             return False  # TODO: only for handless monsters (which cannot write)
         if self.no_free_hand():
             return False
+        if jf_config.ELBERETH_FUTILE and self.character.prop.hallu:
+            # engrave.c garbles each engraved letter 1 time in 2 while hallucinating on top of the dust's 1 in 25: an
+            # 'Elbereth' comes out whole ~0.3% of the time. cand-g jf49 s12 wrote 6 of them in 6 turns under a soldier
+            # ant after a black light's blast ('2lb/ZV>h', 'klNek7ch', ...), 63 -> 0 HP. (Not while stunned: 1 in 4, ~7%
+            # whole, and stuns are short and common -- da-all2 blocked 30 stunned engravings for no gain.)
+            if self.blstats.time - getattr(self, '_futile_logged', -1000) >= 100:
+                self._futile_logged = self.blstats.time
+                self.log('ELBERETH_FUTILE: no Elbereth while hallucinating')
+            return False
         return (self.blstats.y, self.blstats.x) != self._forbidden_engrave_position
 
     def engrave(self, text):
@@ -1894,14 +1957,16 @@ class Agent:
 
         return ret
 
-    def bfs(self, y=None, x=None, force_squeeze=False):
+    def bfs(self, y=None, x=None, force_squeeze=False, open_mask=None):
+        # open_mask (grind-audit stall fixes, dive_logic._stall_unblock): squares to treat as walkable on top of the
+        # usual rules (a sessile monster's or a boulder's square) -- computed fresh, never cached; None: as before
         if y is None:
             y = self.blstats.y
         if x is None:
             x = self.blstats.x
 
-        if not force_squeeze and self.last_bfs_step == self.step_count and y == self.blstats.y and \
-                x == self.blstats.x:
+        if open_mask is None and not force_squeeze and self.last_bfs_step == self.step_count and \
+                y == self.blstats.y and x == self.blstats.x:
             return self.last_bfs_dis.copy()
 
         level = self.current_level()
@@ -1953,6 +2018,8 @@ class Agent:
             for (my, mx) in level.sessile:
                 if (my, mx) != (y, x):
                     walkable[my, mx] = False
+        if open_mask is not None:
+            walkable |= open_mask
 
         walkable_diagonally = walkable & ~utils.isin(level.objects, G.DOORS) & (level.objects != -1) \
             & ~level.intact_doors
@@ -1966,7 +2033,7 @@ class Agent:
                         can_squeeze=can_squeeze,
                         )
 
-        if y == self.blstats.y and x == self.blstats.x and not force_squeeze:
+        if y == self.blstats.y and x == self.blstats.x and not force_squeeze and open_mask is None:
             self.last_bfs_dis = dis
             self.last_bfs_step = self.step_count
 
@@ -2918,6 +2985,16 @@ class Agent:
                                                  self._monk_meat_meals == 0 else 8) and
                        self.blstats.hitpoints < self.blstats.max_hitpoints and
                        not self.character.prop.polymorph))
+        # LOWHP_CRIT_XL (grind-audit): from that XL the 'HP < 12' part waits for pray.c's critically_low_hp -- a
+        # prayer without HP trouble only pats us on the head and spends the prayer the next hit makes necessary
+        # (cand-g jf46 s8: 11/58 at XL 6, 'Your long sword softly glows', dead 7 turns later)
+        if jf_config.LOWHP_CRIT_XL and low_hp and self.blstats.experience_level >= jf_config.LOWHP_CRIT_XL and \
+                not self._critically_low_hp():
+            if getattr(self, '_lowhp_crit_logged', None) != self.blstats.time:
+                self._lowhp_crit_logged = self.blstats.time
+                self.log(f'LOWHP_CRIT no prayer at {self.blstats.hitpoints}/{self.blstats.max_hitpoints} '
+                         f'XL {self.blstats.experience_level} (pray.c sees no HP trouble)')
+            low_hp = False
         if poly_buffer:
             low_hp = False
         if (
@@ -2946,6 +3023,16 @@ class Agent:
                 not poly_buffer:
             y, x = self.blstats.y, self.blstats.x
             adjacent = [m for m in self.get_visible_monsters() if utils.adjacent((m[1], m[2]), (y, x))]
+            # WR_GRIND_PRAYER (DT6A's Tourist): in the tour a prayer that may come too soon beats the gambles
+            if adjacent and jf_config.WR_GRIND_PRAYER and not self.global_logic.dive.diving and \
+                    not self.prayer_failed and self.current_level().dungeon_number != 1 and \
+                    self.is_safe_to_pray(jf_config.WR_GRIND_PRAYER):
+                yield True
+                gap = None if self.last_prayer_turn is None else self.blstats.time - self.last_prayer_turn
+                self.log(f'LAST RESORT: grind desperate prayer (gap {gap})')
+                self._pray_reason = 'wr-grind-desperate'
+                self.pray()
+                return
             # LR_ELBERETH: with every monster close by respecting Elbereth, the Elbereth rest (below us) is the
             # safer answer: a scared monster doesn't melee, while a zap from the square erases it ('You feel
             # like a hypocrite') and an unknown ray can bounce back (base2-jf25 s1: a wand of cold at an adjacent

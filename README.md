@@ -1,66 +1,112 @@
-# jawfish s24: a dig-diving Valkyrie (val-dwa-law-fem)
+# jawfish s25: a dig-diving Valkyrie (val-dwa-law-fem)
 
 This bot is a fork of AutoAscend, by way of DT6A's nethacker. It also takes ideas from daglar-dragomirov and
 nethack_astra. All behaviour switches are in `autoascend/jf_config.py`, and the dive's settings are at the top of
-`autoascend/dive_logic.py`. Each switch has a comment that says what it does, why, and what it measured. This file
-covers the parts that are hard to see from the code.
+`autoascend/dive_logic.py`. Each switch has a comment saying what it does, why, and what it measured. s24's README
+covered the plan of a game and why most games stop at Dlvl 29. This file repeats the essentials and adds what we
+learned since.
 
-## Plan of a game
+## What changed since s24, and the evidence
 
-1. Level up on Dlvl 1-4 to XL 7. A Valkyrie becomes intrinsically fast at XL 7. Leaving the grind at XL 6 cost
-   -0.084 on 90 fresh games, because the Gnomish Mines trip that follows is deadly without speed.
-2. Take a pick-axe from a Mines dwarf, then dig-dive. The bot digs straight down every level, rests on Elbereth,
-   and spaces its hunger prayers to respect the prayer timeout.
-3. Get past Medusa's level (digging down, or lift items), then dig down to the Castle (Dlvl 25-29).
-4. At the Castle, try whatever crossing the carried items allow (next section).
+s25 is s24 plus 13 fixes. Most of them came from reviewing, one by one, how s24's games died before the Castle. The
+two sets of fresh pinned seeds below were never used to design anything. Paired against s24 on the same 450 games:
+
+| | s25 | s24 |
+|---|---|---|
+| mean progress | +0.019 (paired t 2.41) | |
+| deaths by Dlvl 12 | 127 | 146 |
+| Castle arrivals | 182 | 173 |
+| Castle crossings started / reached the Valley | 17 / 4 | 12 / 0 |
+| games past Dlvl 29 | 7 | 6 |
+
+s25 had 0 bot failures. The extra passes are two real Castle crossings (Castle on Dlvl 29, then the trap door into
+the Valley on Dlvl 30).
+
+- **Prayers:**
+  - `LOWHP_CRIT_XL`: an "HP < 12" prayer at 10 of 58 HP is not low-HP trouble in pray.c, so it heals nothing and
+    wastes the prayer. The bot now prays only when pray.c agrees.
+  - `TOUR_FAINT_LONG_*`: a long fainting spell prays from a 1200-turn gap instead of waiting for 1600.
+- **Stuck dives on Dlvl 2-4** (`STALL_SESSILE`, `STALL_DOWNSEARCH_TURNS`): the bot clears a mold sitting on the
+  stairs, and searches for the way down when there seems to be none.
+- **Known items** (`KNOWN_ITEMS`): 77 of 171 deaths held a KNOWN teleport scroll, healing potion, or wand of striking
+  or sleep that nothing used. The bot now uses them before gambling on unknown items. It never reads a teleport scroll
+  on a no-teleport level, and never zaps from its own Elbereth square (see below).
+- **Welded cursed weapons** (`WELD_PRAY`, `WELD_HOLD`): an unknown-BUC mattock is two-handed. Once welded, the hero
+  has no free hand for Elbereth, and 7 of 10 such games died by Dlvl 20. The bot now prays, or holds until a prayer
+  is safe.
+- **Shops** (`SHOP_DIG`): the dig-dive sometimes falls into a shop with its pick-axe and sat there for thousands of
+  turns. It now digs out after 300 turns if it owes nothing.
+- **Medusa's level** (`DEEP_ITEMS`, `DEEP_BLIND_LOOK`). Medusa-3 harness, flag off → on:
+  - charging an empty wand of digging: 18 → 34 of 49 passes;
+  - blowing an unknown horn that turns out to be frost (it freezes the moat): 21 → 33 of 49;
+  - a tooled horn (the ravens flee): 51 → 68 of 127.
+  - A blind `:` costs a full turn in 3.6.6, so the bot no longer looks at the floor while blind.
+- **At the Castle** (`CL_POTION_EARLY`, `CL_ROUTE`): lift candidates are tried at once, and the hero floats straight
+  to a far channel entry. On 45 real lift kits × 10 level variants, passes rose from 28 to 36-37 of 450.
 
 ## Why nearly every game stops at or below 0.647 (Dlvl 29)
 
-The Castle is the bottom level of the Dungeons of Doom, so `Can_dig_down` is false there. The level is no-teleport,
-and its walls cannot be dug. The Valley below it is reached only through the Castle's trap doors or by a level
-teleport into Gehennom. The Castle is at Dlvl 29 in only 20% of games, so 0.647 is the usual ceiling.
+- The Castle (Dlvl 25-29) is the bottom level of the Dungeons of Doom, so `Can_dig_down` is false there.
+- The level is no-teleport, its walls cannot be dug, and a moat surrounds it.
+- The Valley below is reached only through the 5 trap doors inside the Castle, or by a level teleport into Gehennom.
+- In 20% of games the Castle is on Dlvl 29, and only there does reaching the Valley (Dlvl 30) score higher.
+- XL 17 would also score above 0.647, but it needs 640,000 experience points.
 
-What gets past it, measured by starting a harness hero at the Castle with the item (P(pass)):
+## What gets past it
+
+We measured this by starting a harness hero at the Castle with its REAL kit. Items keep their true identification
+state. An earlier harness bug identified BUC-known items and made lifts look 2-4× better than they are.
 
 | Carried at the Castle | P(pass) | How |
 |---|---|---|
-| wand of wishing | 0.95 | Wish for 2 blessed scrolls of charging, then a ring of teleport control, then "2 cursed scrolls of teleportation". A cursed (or confused) read is a level teleport. With control, a level below the Castle sends you to the Valley (`find_hell`), and a second read in Gehennom reaches Dlvl ~45-50. |
-| teleport control + 2 known-cursed teleport scrolls | 0.90 | Same route, from any level. |
-| polymorph control + a polymorph source | 0.48 | Become a xorn. Walk through the Castle's walls (castle.des has no NON_PASSWALL) to a trap door, which drops you into the Valley. Phase through the Valley's rock to its down stairs, then dig down in Gehennom. |
-| a known lasting lift (levitation ring, water walking boots), Castle at Dlvl 29 | 0.46 | Float round the moat to the back door at (56,08) and drop through the trap door behind it into the Valley, which is Dlvl 30. With the Castle at Dlvl 25-28 the Valley is Dlvl 26-29, still at or under 0.647, and our bot cannot walk out of it alive. |
-| XL 12-14, AC -10, HP 150, Excalibur, no helper items | 0 of 40 | The front door. Opening the drawbridge works; holding the doorway against ~50 soldiers, xorns that walk through walls, and dragons does not. |
-| the same + 3 identified scare monster scrolls, speed boots, magic resistance | 0.33 | The front door, holding squares covered by scare monster scrolls. |
+| wand of wishing | ~1.0 (20/20) | Wish for charging, a ring of teleport control and 2 cursed scrolls of teleportation, then level-teleport: a level below the Castle lands you in the Valley, and a second read reaches Dlvl ~45-50. |
+| unidentified ring of levitation, Castle on Dlvl 29 | 0.175 | Float round the moat to the back door (56,08); the trap door (55,08) is behind it. |
+| potion of levitation, Castle on Dlvl 29 | 0.06 | Same route. |
+| cold wand or frost horn / magical breathing amulet | ~0.01 / 0 of 40 | |
+| XL 12-14, AC -10, Excalibur, no helper items | 0 of 40 | The front door. |
 
-Our bot's real Castle arrivals are XL 6-10, about 84 max HP, and AC around +1. **Passes are gated by items, not by
-strength.** On unselected fresh seeds, every pass so far came from a wand of wishing found early.
+Every real-seed pass except the two Castle crossings came from a wand of wishing found early.
+
+## Castle facts that decide a crossing
+
+- **Timing.** Crossings that reach the moat within 30 turns of landing pass 55/167. After 60 turns it is 10/116.
+  Throne-room xorns walk through the walls and reach the west channels' tower walls after about 30 turns. Once
+  timing is accounted for, HP at the moat entry hardly matters.
+- **Sharks.** Each channel's shark homes on the hero and waits at the entry square, and the channels are one square
+  wide. The two east sharks swim west along the moat's north and south rows and meet early crossers mid-strip.
+- **Levitation.** An uncursed potion of levitation cannot be ended early. Only a blessed one lets `>` bring you
+  down. A floating hero does not fall through a trap door and cannot kick a door. A web cancels levitation while it
+  holds you.
+- **Testing unknown potions** on the landing: hallucination, sleep and blindness from the tests killed nearly every
+  game they hit.
+- **Minotaurs.** A west-maze minotaur appears in about half of all Castles and usually strikes within 2-9 turns. In
+  the dark maze it is first seen 2 squares away.
+- **The wand of wishing.** It sits in a chest in one of the four corner towers. The towers connect only through the
+  throne room's locked doors (32,04)/(32,12).
 
 ## READINESS: measuring preparation when passes are rare
 
-Real passes are too rare for an A/B test to detect: about 3 per 270 fresh games. We score each game by the state
-it reaches instead. The value is R = 1 - (1 - P_anywhere) x (1 - P_reach x P_castle), where:
-
-- P_anywhere comes from the routes that work from any level (the first two rows above).
-- P_castle comes from the Castle routes.
-- P_reach is the chance of reaching the Castle alive from that state, taken from baseline runs. AC at Medusa adds
-  about 0.029 per point below 0.
-
-The mean over games is the expected number of passes per game. It is compared on the same fresh seeds between two
-bots. s24 roughly doubles s23 on it (0.0033 vs 0.0015 per game, paired t 3.1 over 270 fresh games). s24 also
-reaches Castle depth 13% more often and scores +0.020 in progress.
-
-Strength-first preparation was READINESS-neutral and cost progress. Earlier Excalibur cost 0.04-0.06, and an
-XP-farming middle game on Dlvl 5-12 cost 0.07. At XL 7-8 and AC 0, the bot cannot farm those levels safely.
+Real passes are about 1-2 per 100 games. We score each game by the state it reaches instead: R = 1 - (1 -
+P_anywhere) × (1 - P_reach × P_castle). P_anywhere covers the wish and teleport-control routes. P_castle uses the
+per-kit rates above. P_reach is the chance of reaching the Castle alive. The mean over games is the expected number of
+passes per game. On it, s24 was about 2× s23, and s25 matches s24: its gains are more arrivals and better Castle
+play, which fixed weights don't show.
 
 ## Mechanics that cost us time (NetHack 3.6.6 / NLE)
 
-- NLE fixes the moon phase from the seed (`fix_moon_phase=True`). Full moon, new moon and Friday the 13th come
-  from the seed, not the wall clock.
-- Hitting an Elbereth-respecting monster while standing on Elbereth costs 5 alignment and erases the engraving
-  (`mon.c setmangry`, "You feel like a hypocrite"). This also makes the next prayer riskier.
-- With teleport control and confusion, a level teleport becomes random unless `rnl(5)` is 0 ("Oops...").
-  Known-cursed scrolls avoid that.
-- Cursed gloves or a welded weapon block putting on a ring without using a move. A retry loop there never
-  advances the game.
-- A box whose lock was forced or kicked open is named "broken chest".
-- The 15 public seeds are few. A program tuned on them scores well above its level on fresh seeds (s23: 0.526
-  public vs ~0.37 fresh). Judge changes by paired runs on fresh seeds.
+- **Moon phase:** NLE fixes it from the seed (`fix_moon_phase=True`), not the clock.
+- **Elbereth:**
+  - Hitting an Elbereth-respecting monster while standing on Elbereth costs 5 alignment and erases the engraving
+    (mon.c setmangry).
+  - Elbereth does not work in Gehennom.
+  - Blinded monsters ignore it. A cobra's spit that misses you can blind the monster next to you.
+- **Scare monster scroll:** onscary checks it BEFORE the Elbereth exceptions, so it also scares minotaurs and @
+  soldiers, and it works in Gehennom. A scroll that has already been picked up once turns to dust when picked up again.
+- **Eyewear:** any worn eyewear (lenses included) stops a raven's blinding claw and a cobra's blinding spit.
+- **Teleport control and confusion:** a level teleport is random unless rnl(5) == 0. Known-cursed scrolls avoid that.
+- **Shop prices:**
+  - Sell offers are base/2, or 3/8 of base for 1 shopkeeper in 4 when the item is unidentified.
+  - Buy prices carry a 4/3 surcharge on 1 object in 4.
+  - Potions at 200 zm are enlightenment, full healing, levitation, polymorph or speed, all safe to drink.
+- **Public seeds:** 15 is few. A program tuned on them scores well above its level on fresh seeds. Judge changes by
+  paired runs on fresh seeds.

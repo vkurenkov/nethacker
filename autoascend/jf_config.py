@@ -230,7 +230,7 @@ BREACH_PROBE_STALE = 25
 BREACH_WANDS = False
 # BREACH_RESUME: a passage given up for want of a way across ('nothing that crosses water', 'stranded') resumes when one
 # turns up later (a wand named by a zap at a monster, a lift from a last-resort quaff, a crossing polymorph form)
-BREACH_RESUME = False
+BREACH_RESUME = True
 # BREACH_COLD_FIRST: with a known wand of cold (or frost horn) and only untested potions/amulets left, freeze the west
 # channel first (a ray freezes ~3 squares; the ice has no water beside it) and try the potions at the strip's east end
 # on Elbereth: a lift then only has to cover the 13-square east channel (an uncursed potion lasts 11-150 turns, the whole
@@ -322,6 +322,16 @@ CLAIM_MAX_AGE = 15
 # a prayer is the only other cure the bot has). s23, 360 pinned games: 4 'petrified by a chickatrice' deaths (Mines and
 # castle), 2 of them in games that had eaten lizard corpses before (jf50 s4, jf54 s1); 57 lizard corpses eaten, 0 kept
 LIZARD_KEEP = True
+# ARMOR_UP (off, verified-tier; strength for Medusa -- F067: AC +4/0/-4/-8 -> 14/15/18/22 of 30 falls pass): s23's 123
+# castle arrivals (360 games) had median AC 0; 28 wore no body armour and 36 carried unworn armour -- mostly the Mines
+# dwarves' kit ('a dwarvish mithril-coat', 'a pair of iron shoes', 'a dwarvish iron helm'). BUC is not the reason
+# (item_manager treats unknown BUC as uncursed); the dig-dive never runs gather_items, so wear_best_stuff never sees
+# what the Mines trip picked up. With the flag:
+#  - the dive runs wear_best_stuff every 25 turns with no hostile within 6 (not levitating); a tie keeps what is worn;
+#  - a known scroll of enchant armor (not known cursed) is read while every worn piece is +3 or less (7 were carried
+#    unread by 5 of the 123 arrivals).
+# (Excalibur: fight2's melee already wields the best known weapon -- Excalibur over the pick-axe -- in fights.)
+ARMOR_UP = False
 # eat poisonous corpses (not only when Weak) at HP >= max(POISON_EATS_MIN_HP, 60%) during the tour
 POISON_EATS = False
 POISON_EATS_MIN_HP = 40
@@ -344,6 +354,82 @@ TOUR_FAINT_PRAYER_GAP = 1600
 TOUR_GAPS_BY_XL = []
 # the low-HP prayer only at pray.c's critically_low_hp (EXACT_PRAYER's HP rule without its turn-100 first prayer)
 LOWHP_EXACT = False
+# LOWHP_CRIT_XL (off, grind-audit): from this XL on (0: off) the low-HP prayer waits for pray.c's critically_low_hp
+# (HP <= 5, or HP * 5 <= maxHP at XL 1-5, HP * 6 <= maxHP at XL 6-13). DT6A's 'HP < 12' rule prays at 10-11 HP of a
+# 54-58 max: pray.c sees no trouble, so the prayer only pats us on the head (a weapon glow; 1 time in 3 the golden
+# glow heals) and resets the timeout, and the real emergency one HP band later has no prayer left. cand-g fresh sets
+# (270 pinned games, jf43-60): 3 such prayers at XL 5+, 2 died within 10 turns -- jf46 s8 prayed at 11/58 beside a
+# homunculus ('Your long sword softly glows'), fell to 8 HP and the last resort's unknown potions put it to sleep;
+# jf49 s2 prayed at 10/54 beside a gnomish wizard's wand of striking. Below XL 5 the old rule stays (LOWHP_EXACT's
+# XL-1 skips were inconclusive, R109).
+# Validated (grind-audit bundles GA-B2/GA-B3, 270 fresh pinned games each vs cand-g, ledger R191/R196): first to fire in
+# 3 games, +0.97 / +0.81 net (jf46 s8 0.037 -> 0.507, jf49 s2 0.051 -> 0.554). Candidate value: 5.
+LOWHP_CRIT_XL = 5
+# TOUR_FAINT_LONG_TURNS (off: 0, grind-audit): in the tour, a Fainting spell this many turns old prays from gap
+# TOUR_FAINT_LONG_GAP instead of waiting for TOUR_FAINT_PRAYER_GAP (1600). eat.c: a faint lasts 10 - uhunger/10 turns
+# and starts on a conscious turn with rn2(20 - uhunger/10) >= 19, so deep into a spell (uhunger ~ -100) we lie fainted
+# ~90% of the time in 20-30-turn faints; the dust Elbereth under us wears (allmain.c: 1/(40 + 3 Dex) per turn) and
+# the next monster gets a whole faint of free hits. cand-g fresh sets: 335 tour fainting spells, 7 ended in death, 5
+# of them 430-540 turns into the spell (jf47 s5, jf49 s3, jf51 s1, jf55 s1, jf59 s14; killed at gaps 1392-1610 by a
+# hobgoblin, rothe, giant rat, little dog, werejackal) -- two of them fainted at the very moment the 1600 gap came.
+# Replaying the 335 spells with this rule (350 turns, gap 1200): it fires in 115, catches those 5, and costs ~0.8
+# expected extra prayer failures (rnz(350): a Fainting prayer fails 2.3% at gap 1200, 1.3% at 1600) -- net ~+4
+# games per 270. Short spells keep the long gap (their faints are short and their risk low: 0 of 7 deaths).
+# Validated (GA-B2/GA-B3, ledger R191/R196): tour fainting deaths 7 -> 2 per 270, tour losses 39 -> 33, tour prayer
+# failures 14 = 14 (99 faint-long prayers, 1 failed); first to fire in 69 games (net +1.49 in GA-B2, -0.20 in GA-B3,
+# i.e. chaos around a small gain). Candidate values: 350 / 1200.
+TOUR_FAINT_LONG_TURNS = 350
+TOUR_FAINT_LONG_GAP = 1200
+# --- grind-audit: dives stuck on one level (dive_logic._stall_*; all off) ---
+# cand-g fresh sets (270 pinned games): 10 of 231 planned dives stayed 1500+ turns on Dlvl 1-4 and 6 of them died
+# there -- the dive hunger prayer every ~900 turns fails sooner or later (ledger F090). The BFS never enters a boulder
+# square nor the square of a monster fight2 won't melee (molds, floating eyes, gas spores, blobs, jellies; also
+# remembered out of sight), so one of those in a corridor or on the stairs walls the way off for good.
+# STALL_SESSILE: the stairs we need are cut off (or a hostile sessile monster sits on them): hit what blocks the way --
+# molds, lichens, blobs, cold/spotted jellies in melee at >= 50% HP; a floating eye only blind, blindfolded or with a
+# thrown missile; a gas spore only at >= max(40, 60%) HP with nothing tame or peaceful next to it and not in
+# Minetown. cand-g jf49 s10: a yellow mold on Dlvl 3's '<' (a gas spore beside it) held the XL-7 dive's way to the
+# Mines 2500 turns, then a dive hunger prayer failed; jf45 s13 starved in a corridor between floating eyes and gas
+# spores; jf43 s10 spent 9400 dive turns on Dlvl 1 behind a floating eye in the '<' room's only corridor
+# Validated with the thresholds below (GA-B3, ledger R196): dives stalled 3000+ turns on Dlvl 1-4 6 -> 1 per 270 (with
+# STALL_DOWNSEARCH); at STALL_MIN_TURNS 500 (GA-B2) it fired on 7 cut-offs of 501-670 turns that resolved by themselves
+# (net -1.26), none of which fire at 1500. Candidate value: True.
+STALL_SESSILE = True
+# STALL_BOULDER: ...or boulders: push the first boulder on the way (hack.c moverock: it moves on unless rock, a wall,
+# another boulder or a monster is behind it). cand-g jf44 s12 stood 6000 turns in a doorway between four boulders
+# (the BFS reached 1 square), praying every 909 turns until an orc-captain came
+# Not validated: jf44 s12's four boulders all have rock behind them in the push direction (the push can't help); pushing
+# in the Mines untested. Keep off.
+STALL_BOULDER = False
+# the way cut off this long first: detours turn up -- ga-b1 jf43 s14 acted at 113 turns, ga-b2 jf46 s1 / jf48 s1 at
+# 570-670 turns, each a game the base finished on its own; the stalls this is for lasted 2000-19000 turns
+STALL_MIN_TURNS = 1500
+STALL_MAX_TRIES = 12        # attempts on one blocker before leaving it alone for 300 turns
+STALL_STAIRS_WAIT = 20      # a mold/jelly (speed 0) on the stairs this long: it never leaves
+STALL_STAIRS_WAIT_MOVER = 400  # ...a floating eye, gas spore, lichen or blob: they drift off in time
+# STALL_DOWNSEARCH_TURNS (0: off): no '>' seen on a main-line level after this many turns of the dive trying to
+# descend: search the walls next to the largest unseen region (HIDDEN_SEARCH2's _search_toward_void) instead of
+# AutoAscend's nearest-first search. cand-g jf55 s12 never saw Dlvl 2's '>' (the east half of the map blank) in 9000
+# grind and 6000 dive turns, then a hunger prayer failed
+# Validated (GA-B2/GA-B3, ledger R191/R196): first to fire in 4 games, +0.50 net (jf55 s12 0.051 -> 0.554, the others
+# equal). Candidate value: 1000.
+STALL_DOWNSEARCH_TURNS = 1000
+STALL_DOWNSEARCH_MAX_DEPTH = 10
+# CAMP_HUNGER_GAP (0: off, grind-audit): a tool-less planned dive at depth <= CAMP_HUNGER_MAX_DEPTH (the Mines camp,
+# the tool-less Mines descent after it, a dive stuck on Dlvl 2-4) prays for hunger from this gap -- Weak and Fainting
+# -- once it has made one hunger prayer in the dive, holding Elbereth meanwhile (the faint guard; idle only while
+# Fainting, never with a dwarf to hunt in view). E2's DIVE_FAINT_PRAYER_GAP 850 keeps the first cycle. cand-g fresh
+# sets: dive hunger prayers at gaps < 1000 failed 20 of 220 (9.1%), 0 of 70 at 1000-1300 (rnz(350): 7.5% at 900,
+# 2.3% at 1200); at depth <= 12 12 of 261 failed and nearly every failure ended the game at 0.05-0.12 -- tool-less
+# camps pray every ~905 turns (jf60 s5: 907, 909, 909, 909, 907 after its camp) and the risk compounds (ledger F093).
+# NOT validated -- keep off (GA-B3 vs GA-B2, ledger R196): the shallow dive prayer failures halve (12 -> 7 per 270), but the
+# Elbereth holds through the longer Fainting waits cost games: the bundle with it -0.0046 vs without (t -0.76), the 18
+# games where it fired first -0.70 (4 better / 6 worse), 9 of 34 games with camp holds died within 300 turns of one.
+# jf60 s8: a non-hunger prayer reset the clock without fixing hunger and the camp held Fainting 550 turns on Elbereth
+# until a smudge let a red naga hatchling, a lizard and a kobold in. Untested fixes: only after a hunger prayer; a
+# spell-age cap like TOUR_FAINT_LONG_TURNS.
+CAMP_HUNGER_GAP = 0
+CAMP_HUNGER_MAX_DEPTH = 12
 # hunger-prayer gaps while diving at depth >= DIVE_GAP_MIN_DEPTH (0: WEAK_PRAYER_GAP / FAINT_PRAYER_GAP)
 DIVE_WEAK_PRAYER_GAP = 0
 DIVE_FAINT_PRAYER_GAP = 850
@@ -490,6 +576,17 @@ DEMON_NO_REDIP = True
 # the last resort (unknown wands/potions/scrolls) yields to the Elbereth rest while everything close respects
 # Elbereth and we are on one or can engrave (a zap erased it, a bounced ray / potion of sickness killed at 2-3 HP)
 LR_ELBERETH = False
+# weak-role lane (DT6A's Tourist leader, GRIND_DESPERATE_PRAYER_GAP 200; 0: off): the tour's own desperate prayer --
+# critically low HP, a hostile adjacent, no prayer yet failed and at least this many turns since the last one ->
+# pray before the unknown-item gambles (and before LR_ELBERETH). The dive has DESPERATE_PRAYER_GAP (depth >= 5, only
+# when Elbereth is futile); the tour had nothing but the 500-turn HP rule, then the gambles: on fresh jf43-60 (E2)
+# 26 of 72 early deaths fired the gambles first (the tour's quaffs put jf46 s8 to sleep beside a homunculus), and
+# rnz(350) still answers a prayer ~55% of the time 200 turns on, ~77% 400 turns on (pray.c: timeout <= 200)
+WR_GRIND_PRAYER = 0
+# weak-role lane (DT6A's Tourist and vlomshakov's Healer leaders): no floor look (':') while blind in the dive -- in 3.6.6
+# a blind look is a real move (invent.c look_here returns !!Blind) that reads no dust engraving; see
+# inventory._blind_look_skip
+WR_BLIND_LOOK = False
 # the Elbereth rest never hides from a lone monster one blow kills (difficulty <= 2, not fast), at any HP
 REST_FIGHT_WEAK = False
 # never kill a gas spore whose blast reaches any @, a shop's squares (its shopkeeper may be out of view) or anything in
@@ -538,7 +635,7 @@ CAMP_GUARD = False
 # turns after the last prayer, all within 3 turns of the dive start
 # t36: uncursed the mattock in 3 of 4 welded games, but jf16 s8 0.602 -> 0.445 and s10 0.353 -> 0.206 (the spent prayer),
 # arm-jf14 s8 +0.015 -- off
-WELD_PRAY = False
+WELD_PRAY = True
 WELD_PRAY_GAP = 1100
 # engraving (Elbereth, wand engrave-tests) follows engrave.c freehand(): a welded one-handed weapon (a cursed pick-axe the
 # dive applied) beside an uncursed shield still leaves a hand to write with; hands_welded() counted any shield, so such a
@@ -569,6 +666,24 @@ WISH_TELEPORT_ROUTE = True
 # spe < 3, and a second recharge explodes it. So c + 2 wishes instead of c: a 1-charge wand (1 in 3) got only the
 # teleport-control ring before (tele_route.py).
 WISH_CHARGING_FIRST = True
+# ROUTE_GLOVES_FIX (front-strong lane, off): cursed gloves or a welded weapon block the teleport-control ring without
+# using a move ('You cannot remove your gloves to put on the ring.'), and the route's ring step retried forever (fs7-k6
+# s9: 385k steps after the castle wand; any wand-of-wishing game with cursed gloves). Then the next wish is a blessed
+# scroll of remove curse, read at once; with no wish left the step yields instead of looping.
+ROUTE_GLOVES_FIX = True
+# FRONT_DOOR (castle-front lane, research F076, castle_front.py): a castle kit whose lift plan gave up and that holds a
+# known wand of striking or opening goes in by the front -- a boulder pushed onto the drawbridge span (or a cold ray),
+# the bridge destroyed/lowered from (03,08), the soldiers held at (04,08) as they come over the span one at a time,
+# then along row 08 to the throne room. The castle depth is already scored: a death here costs nothing.
+FRONT_DOOR = False
+# FRONT_V3 (front-strong lane, castle_front.py; needs FRONT_DOOR): the front door for a strong kit. After the bridge
+# opens we hold the west maze's mouth (-2,10) -- the only square from which the courtyard's single exit (-1,10) is
+# the one castle-side neighbour (sp_lev.c walkfrom carves odd cells; the diagonals are wall), no water beside it --
+# with Elbereth rests against the court, a known scroll of scare monster dropped there, a scroll of taming when 2+
+# are next to us; then in along row 08 (back to the mouth when badly hurt west of the hallway), and on to the wand:
+# the locked door (32,04)/(32,12), a hallway, the corner towers; the chest under the burned Elbereth and the cursed
+# scare monster scroll is forced open, the wand taken and engrave-tested (the wish: WISH_TELEPORT_ROUTE).
+FRONT_V3 = False
 
 # Never dig or zap digging down on a staircase (rescue agent, 78a30e1; ported by hand for train 2): the square
 # under '@' is unknown on arrival, so _diggable_spot took the arrival '<' for floor, and a wand of digging
@@ -792,6 +907,91 @@ LIFT_NEAR_WATER = False
 # (TC_WEAR, CFP's kept rings, SPARE_WISHES' amulet) can start it
 WORN_KEEP = True
 
+# --- castle-lift (castle_cross.py): use the kit's real lift before the castle's west side kills us ---
+# CL_POTION_EARLY (castle_cross.early_potion, in CFP_RUSH's plan after the lasting lifts and the polymorph-control zap):
+# on the castle's west side, not floating, a potion that may be levitation is quaffed WHERE WE STAND at the first quiet
+# moment (no monster glyph within 3, 4 for a known one; HP >= 50%, 70% for a known one; not next to water; not blind,
+# hallucinating, confused or stunned), on Elbereth, instead of only at castle_logic's TEST_SPOT after the walk through
+# the west maze. A potion that floats us hands over to the rush (dig/float straight onto the moat's west column).
+# Why (castle-lift census, 105 cand-g castle arrivals x true kits): 13 held a real potion of levitation and 10 never
+# quaffed it -- the walk to the courtyard loses to the preempt layers (scare-pile holds, Elbereth rests, fights, poly
+# escapes): jf43 s14 (castle 29) lived 1377 turns with it untried and found it by a LAST RESORT quaff at 1 HP; jf53 s3
+# held a KNOWN potion of levitation and sat 90 turns on a scare pile. 38 of 73 arrivals with unknown potions never
+# quaffed one (20 of them alive 50+ turns). The tests wait while castle_power's polymorph drill is still running (a known
+# wand of polymorph: castle-29 benchmark cfpf-s4 quaffed between two self-zaps and lost base's poly pass).
+# Result (faithful lift suite dev/scenario.py kit_type_faithful, 45 real castle kits x 10 level salts, 450 games): alone
+# 29 passes vs 28; with CL_ROUTE 37 (and 35 in a replicate) -- see CL_ROUTE. The tests make 42 of 450 heroes
+# hallucinate (26 of them within 22 turns of the landing), and waiting that out (600-800 turns) kills 35 of the 42; with
+# BREACH_NOWAIT the tests and the crossing go on (145 crossings vs 131) but the passes stay 36 vs 36 -- the hallucinated
+# crossings die in the west channel like the others.
+CL_POTION_EARLY = True
+# CL_ROUTE (castle_cross.cl_route, in CFP_RUSH's floating branch): a floating hero's way from the west maze onto the moat
+# is planned over the maze's real structure -- mkmaze.c carves cells at odd level coordinates (map (even x, even y)),
+# pillars (odd, odd) are always wall, the boundary column x = -1 is wall but for the courtyard exit (-1,10) -- with dig
+# costs, to the moat square whose rest of the west channel is cheapest (water moves x 0.75), sea monsters seen by an
+# entry costing extra; a known wand of digging with a charge to spare tunnels a straight run of 2+ walls in one zap; a
+# form that can't swing the pick walks to (-1,10) and floats onto (0,11). The old rows-first dig to (-1,2)/(-1,14)
+# took 11-54 turns (median ~20) from 'floating' to the first moat square in the harness's potion kits (cm-jf40-s5~2:
+# 7 digs up the pillar column x = -5), turns a potion's 10-149 of lift can't spare. Entries far from the courtyard's
+# channel mouths (0,5)/(0,11) are preferred: the west sharks home in on us and settle at the water square nearest us
+# (monmove.c m_move), and crossings entering at (0,5) passed 2 of 38 vs (0,1) 11 of 18. Known webs are routed round (a
+# web drops Levitation while it holds -- trap.c float_vs_flight -- and castle_logic then gave the passage up); polymorph
+# forms keep castle_power's way. Result with CL_POTION_EARLY (lift suite, 450 games): 37 passes vs 28 (paired +20/-11;
+# 35 in a replicate); per kind (landing deaths / crossings / moat within 30 turns / passes): potions 95/69/23/14 vs
+# 93/46/12/12 of 250, rings 38/31/25/12 vs 38/32/21/7 of 80. Castle-29 full-game benchmark (76 pinned seeds, 40
+# arrivals, few holding a lift): 1 pass as base, landing deaths 10 vs 13.
+CL_ROUTE = True
+# CL_MB_ROUTE (with CL_ROUTE and CFP_MB): the unknown amulet's magical-breathing water test (castle_cross.rush_strategy)
+# walks cl_route's maze-aware way on foot to the chosen far entry and dunks there, instead of the rows-first dig to the
+# fixed launch squares. Census: the 4 real MB amulets of the cand-g arrivals were never tried (the test waits for the
+# potions: a dunk dilutes them; CL_POTION_EARLY clears them sooner). Not adopted: in a bundle with CFP_DUEL,
+# BREACH_LEVWARN and LIFT_COLD the lift suite fell to 27 passes from 35 (rings 11 -> 6), and the MB kits stayed 0 of 20.
+CL_MB_ROUTE = False
+# CL_LAUNCH (with CL_ROUTE; castle_cross.cl_launch_plan, first in CFP_RUSH's plan while not floating): with unknown rings
+# or potions that may be levitation left, walk/dig ON FOOT cl_route's way to the land square next to the chosen far
+# channel entry, write Elbereth there, and try the lifts on that square; a lift steps straight onto the water.
+# Harness lift suite (cl-t10-*, 45 real kits x 10 salts): crossings entering the moat within 30 turns of the landing
+# pass 59/157 at the far entries vs 12/82 after 60 turns (the throne room's xorns reach the west towers after ~30
+# turns); a potion found in the maze burned ~15 of its 10-149 turns afloat on the way; 26 floating heroes died on the
+# launch square fighting the channel's shark, which a hero on Elbereth scares off (monmove.c distfleeck: monflee).
+# Not adopted: with BREACH_NOWAIT the lift suite gave 31 passes vs 35 for CL_POTION_EARLY + CL_ROUTE -- more crossings
+# (135 vs 120) but later ones: the walk to the launch square costs the turns the early potion saves.
+CL_LAUNCH = False
+# CL_STRIP (castle_logic._rest_stop): a lasting lift doesn't stop to rest on the dry strip (rows 0/16) while a sea
+# monster is on its tail (bit us within 3 turns, or shows within 2): taking the ring off and writing Elbereth costs two
+# turns of bites; afloat we outrun a shark (12 vs 12 + intrinsic Fast). Early crossings (moat <= 30 turns after the
+# landing) in the harness lift suite died on the strips 30 times, sharks and eels 22 of them (cl-t10-rt/pe/launch).
+# Not adopted: CL_STRIP + CL_SENSE + CL_EAST_WAIT on top of CL_POTION_EARLY + CL_ROUTE gave 35 passes vs 37 (more heroes
+# reached the strips, 82 vs 69, and more died there: sharks 14 and eels 6 vs 6 and 2).
+CL_STRIP = False
+# CL_SENSE (with LIFT_KNOWN_RUSH; castle_cross.known_rush_strategy 'listen'): at a castle-likely landing (Dungeons, depth
+# >= 25, bot x <= 9, below a known Medusa) with lifts to test (unknown rings, potions that may be levitation), listen up
+# to LIFT_LISTEN turns for the castle's door sounds instead of the recognition dig; a sound recognises the castle at once
+# (the dig takes +6 turns median and leaves a pit). castle-first-pass CFP_SENSE: a door sound within 3 turns in 101 of
+# 101 castle arrivals, 1 of 185 filler maze levels. Silence: the dive digs as usual. Not adopted (see CL_STRIP): the
+# landing's minotaur deaths only moved later (killed before any try 38 -> 14, after trying or afloat +16/+11).
+CL_SENSE = False
+# CL_EAST_WAIT (castle_logic._door_step): afloat on a potion at the back door, when it is open, or on the trap door:
+# '>' once (a blessed potion lets us down), else wait for the lift to end at SAFE_EAST (59,08) instead of hovering over
+# the trap door (55,08), where the castle's own monsters reach us through the hall's walls. cl-t10-rt: 4 of the 13
+# east-side deaths hovered on (55,08) (xorns x2, a fire elemental, a red naga). Not adopted (see CL_STRIP): east-side
+# deaths 18 vs 16 -- the east courtyard's own visitors (the east maze's minotaur, leocrottas) find us at SAFE_EAST.
+CL_EAST_WAIT = False
+# CL_FLEE (with CL_ROUTE): floating with an Elbereth-ignorer on land within 5 (a minotaur: 3d10/3d10/2d8 a turn, it can't
+# enter the water), cl_route takes the nearest water: the mouth penalty x0.2 and the channel length x0.3. Harness lift
+# suite: minotaurs are the top killer of floating heroes before the moat (cl-t10-rt: 18 of 112 afloat-stage deaths).
+# Not adopted: 440 of 450 games identical with it, 36 passes vs 35 -- a floating hero rarely sees the minotaur in time
+# (79 of 106 minotaur deaths saw it first at distance <= 2 and lived a median 2 turns more).
+CL_FLEE = False
+# CL_BUGLE_WEST (opp_items.bugle_ok, main's idea): BUGLE_SCARE's bugle is also blown at a minotaur on the recognised castle
+# level while we are on its west side (maze or west courtyard, not yet on the moat). The bugle wakes the castle's
+# soldiers and turns them hostile (music.c awaken_soldiers), but they are walled in (raised drawbridge, towers opening
+# inward, locked barracks and secret doors), and a minotaur flees it with no timer (R176: 14/20 vs 1/20). Note: 0 of
+# the 105 cand-g castle arrivals carried a bugle (ItemPriority keeps horns, drums and cameras, not bugles). Lift suite
+# with a bugle added to every kit (225 games an arm): minotaur deaths 55 -> 46, passes 17 -> 18; parked until the
+# dive keeps bugles.
+CL_BUGLE_WEST = False
+
 # --- power-route (power_route.py): teleport control + a level-teleport trigger from what the dive carries ---
 # TC_ROUTE (off): learn which ring gives teleport control from the game's prompts ('Where do you want to be
 # teleported?' / 'To what level do you want to teleport?' with one unknown ring worn) and the tengu message, identify
@@ -918,6 +1118,13 @@ WARM_JIT = True
 # don't exist yet: fill_empty_maze makes no genocided minotaurs). Harness (A083): 2 unknown uncursed -> 'Wiped out all
 # giant eels' then 'all minotaurs' 9/9; cursed -> 'Sent in some giant eels' 9/9, no deaths from them.
 GENOCIDE_POLICY = True
+# GENO_EXTRAS (off, with GENOCIDE_POLICY; verified-tier, from the r/nethack research F085; mechanism-only, rare): the blessed
+# (class) prompt answers 'L' first on the castle level and in Gehennom (covetous master liches teleport next to the castle
+# landing and drive the Valley pile-ups); 'H' (the mazes' minotaurs) stays first above; never 'h' (dwarves: our race).
+# (Tried and dropped: a known cursed scroll reverse-genociding 'wraith' for XL / 'tengu' for teleport control -- harness
+# geno-rev, 4/4 'Sent in some wraiths.', but the dig-dive digs away from the fleeing wraiths: no corpse eaten, no XL,
+# 2 of 4 dead in the mazes below; it would need a hunt-and-eat mode.)
+GENO_EXTRAS = True
 # HORN_SCARE (needs MINO_GUARD): a tooled horn or any drum makes every minotaur in range flee (music.c
 # awaken_monsters: MR 0 never resists, monflee with no timer) -- mino_guard blows it at first sight, before any wand
 # or scroll, then digs while it flees (a cornered one next to us: step out of its reach; blown again when it comes
@@ -929,6 +1136,12 @@ GENOCIDE_POLICY = True
 # landings): escaped down horn 0 -> 14/20, drum 1 -> 13/20, camera 0 -> 6/20. Real (cand-f cfg, jf43-48): fired in 4
 # of 90 games, jf43 s7 0.445 -> 0.466 (a drum at a Dlvl-24 maze minotaur, dug on to the castle), the rest equal.
 HORN_SCARE = True
+# BUGLE_SCARE (off, with HORN_SCARE; verified-tier, from the r/nethack research F085): a bugle is a scare instrument too --
+# music.c awaken_soldiers (3.6.6): every non-mercenary within distu < XL*10 that fails resist(TOOL_CLASS) flees with no
+# timer (minotaurs, MR 0, never resist; no onscary check in this path), the same reach as a tooled horn. It also wakes
+# every mercenary on the level and makes it hostile, so never on the castle level (barracks) nor with a peaceful
+# watchman/soldier in view (opp_items.bugle_ok). Bugles are the commonest instrument in our dives.
+BUGLE_SCARE = True
 # HORN_KEEP (off): once diving, keep one horn / drum / camera in the pack (ItemPriority). Instruments are rarely shed (3
 # drop messages in 180 cmp-main games) and a keep reorders a shed: on90a jf47 s0 (Mines, diving) kept one of two
 # horns, dropped a second looking glass instead, and the whole game reshuffled (0.602 -> 0.117, chaos not cause).
@@ -941,6 +1154,14 @@ HORN_REFRESH = 15          # turns a flee (or a blow in range) holds before the 
 # half the time. Hostile mid-dive tengu meet ~1.6% of games; the fight costs 10-25 HP at the dive's start.
 TENGU_EAT = False
 TENGU_CORPSE_AGE = 25      # a tengu corpse older than this is left (CORPSE_MAX_AGE is 30)
+# CASTLE_TREASURY (off; castle_treasury.py, imported from vlomshakov f84a81b -- elite scan F075): a wall-walker on the
+# castle (CFP_XORN / POLY_XORN) first walks through the walls to the four tower cells (castle.des $place: one holds a
+# chest with the wand of wishing, locked 4 times in 5), opens it (key / #force with a sword / kick), takes the wand
+# and names it by one zap -- that wish and the rest are WISH_TELEPORT_ROUTE's (a wall-walker may run the route with
+# this flag on): TC ring + cursed teleport scrolls read on the castle -> Valley -> Dlvl ~50 (0.78-0.81) instead of
+# the trap door's Valley (0.691). Budgets 240 actions / 400 turns, HP >= 45%. Their ascension wish list is not
+# imported (it switched our teleport route off).
+CASTLE_TREASURY = True
 
 # ROBUST_FIXES2 (off, robustness-audit lane): stalls found by a census of the botlogs of 5456 unique dev games
 # (1047 of them since s23; $SCR/robust). Each piece acts only where the old code asserted or spun without a turn.
@@ -992,6 +1213,190 @@ WATCHDOG_WAIT = 20
 # ROBUST_FIXES2 vs cand-f, jf40/42-48) 50 diverged at its first firing, mean -0.006 there; pooled -0.002 (t -0.09);
 # early deaths 39 vs 39, D>=25 62 vs 63.
 GRIND_SESSILE = False
+# PREP_LOG (off; readiness lane, logging only): write a 'PREP {json}' state line into the dev bot log at turn
+# checkpoints (every 2500 turns) and on each new deepest level of every dungeon branch -- blstats, the inventory as the
+# game shows it, the bot's item knowledge (P(item is a lift / TC ring / wand of wishing ...)), intrinsics, the last
+# prayer. prep/readiness.py turns those lines into the READINESS metric. prep_log.py only reads state (never steps,
+# never draws a random number); runs with it on replay the flag-off games byte-identically. A no-op in the arena
+# (agent.log writes nothing without JF_LOG_DIR).
+PREP_LOG = False
+
+# ---------------------------------------------------------------------------------------------------------------------
+# PREP track (prep lane, all off): a better-prepared character at the castle -- measured by READINESS (prep-metric's
+# readiness.py: expected passes implied by the state at castle arrival, from the team's harness evidence) with the
+# progress score and early deaths as guardrails. Today (cand-g, 270 fresh pinned games jf43-60) castle arrivals are
+# XL 7 / AC 0 (median), 12 of 87 carry Excalibur, 5 know a lift; a strong Valkyrie reaches the castle at XL 12-14 /
+# AC <= -10 with Excalibur (ledger F084, R172, F085).
+# RESULT (ledger R173, R178, R180, F087): every arm below is READINESS-neutral or worse and costs 0.04-0.07 progress on
+# fresh seeds. Pass potential is item-bound (teleport control + known-cursed teleport scrolls, polymorph control + a
+# polymorph source, a known lift when the castle is at Dlvl 29); strength (XL, HP, Excalibur) is worth ~0 at the castle
+# for this bot, and only AC helps -- by getting past Medusa.
+#
+# PREP_EXCAL_XL: the lowest XL for a fountain dip (0 = the old 7). fountain.c dipfountain grants Excalibur to a lawful
+# XL >= 5 hero dipping a single long sword 1 time in 6 (a fountain dries up 1 dip in 3, so ~3/8 per fountain). The bot
+# waited for XL 7 (SAFE_DIPS' water-demon caution) -- but E2's DIVE_XL 7 starts the dive at XL 7 and NO_DIP_WITH_TOOL
+# stops all dips once a pick is carried, so cand-g made Excalibur in 22 of 270 fresh games vs s23's 60 (same seeds).
+# From XL 5 the grind's Dlvl-3 XL 5-6 stretch dips too. Excalibur (+d5 to-hit, +d10 damage, drain resistance while
+# wielded) is the one piece a strong castle kit cannot drop (R172: 0/30 Valley exits without it, level drain).
+# MEASURED (R173, XL 5 vs cand-g, 90 fresh pinned games jf43-48): Excalibur made 39 vs 8, but progress -0.058 (t -2.2)
+# and READINESS Cprep -0.0045 (t -2.9), Cx -0.0005 (t -1.1): 7 water demons in 262 dips killed 5 XL 5-6 dippers (AC -4 demons summon more),
+# water moccasins 3 more. Keep 0.
+PREP_EXCAL_XL = 0
+# PREP_EXCAL_DIVE: the dive dips for Excalibur at every fountain it sees within PREP_EXCAL_DIST steps on a Dungeons level
+# (dive_logic.prep_fountain_dip), and the tour-style dips (dip_for_excalibur) are no longer stopped by NO_DIP_WITH_TOOL:
+# the digging tool (or bare hands) goes in hand before every dip, so the dip's silent curse (fountain.c rnd(30) == 16,
+# NO_DIP_WITH_TOOL's reason: a welded sword locks the pick out) can't weld the sword; the starting sword's BUC is known,
+# so a curse shows and get_best_melee_weapon never wields it again. Conditions: HP >= 70%, not Weak, no hostile within
+# PREP_EXCAL_CALM squares, no released water demon about. The dig-dive passes ~20 levels; the Oracle level (Dlvl 5-9)
+# alone has 4 fountains (P(Excalibur) ~ 1 - (5/8)^4 = 85% when all are reached).
+# MEASURED (R178, vs cand-g, 90 fresh pinned games jf43-48): Excalibur carried at castle arrival 22 of 41 vs 5 of 36,
+# READINESS -0.0002 (t -0.4, neutral), progress -0.037 (t -2.45): the pre-pick dips on Dlvl 2-4 reshuffle the Mines
+# trip. Off.
+PREP_EXCAL_DIVE = False
+PREP_EXCAL_DIST = 30
+PREP_EXCAL_CALM = 7
+# PREP_MID: the XP-earning middle game. With a digging tool in the pack (the way out), each main-line level from
+# PREP_MID_MIN_DEPTH to PREP_MID_MAX_DEPTH is explored fully (the tour's explore1: items picked up and worn, fountains
+# dipped, fights fought) while XL < PREP_MID_XL, up to PREP_MID_TURNS turns per level and until turn PREP_MID_TURN_CAP;
+# then the dig-dive goes on as before. A level is left at once (dig_first digs out) at a danger: HP below
+# PREP_MID_ESCAPE_HP, PREP_MID_CROWD+ hostiles within 6, a boss kind, anything that fights through Elbereth (@ humans
+# and elves, minotaurs), or a monster of difficulty above XL + PREP_MID_DIFF. Why: castle arrivals are XL 7 / HPmax 77
+# / AC 0 (s23 median, ledger F084); a strong castle kit is XL 12-14 / AC -10 / Excalibur (R172, F085), and astra's
+# real dwarven Valkyrie mapped every level to reach the castle at XL 12 / AC -10 by T21.6k.
+# MEASURED (R180, with PREP_EXCAL_DIVE + ARMOR_UP vs cand-g, 90 fresh pinned games jf43-48): castle arrivals XL 8 vs 7,
+# HPmax 82 vs 77, AC unchanged; 1 death per 10k turns on the band for ~+0.5 XL per game (Elvenking, elves, wolves,
+# wargs, leocrotta, gargoyle...); early deaths 37 vs 25, progress -0.070 (t -3.15), READINESS -0.0003 (neutral). At
+# XL 7-8 / AC ~0 Dlvl 5-12 spawns are too strong to farm and too weak to level on (as DIVE_SUPPLY R081, F042). Off.
+PREP_MID = False
+PREP_MID_MIN_DEPTH = 5
+PREP_MID_MAX_DEPTH = 12
+PREP_MID_XL = 10
+PREP_MID_TURNS = 1500
+PREP_MID_TURN_CAP = 30000
+PREP_MID_ESCAPE_HP = 0.4
+PREP_MID_CROWD = 3
+PREP_MID_DIFF = 2
+# PREP_DIVE_PICKUP: the dig-dive picks up the rings, wands, amulets, potions and scrolls it sees within PREP_PICKUP_DIST
+# steps (Dungeons/Mines levels down to PREP_PICKUP_MAX_DEPTH, above Medusa; no hostile within 7, HP >= 60%, not Weak,
+# never in a shop; arrange_items' item priority decides what stays -- dive_logic.prep_dive_pickup). The dive never ran
+# item pickup, so a castle kit is ~all from the Dlvl 1-3 grind (cand-g castle arrivals: 0.9 rings, 4.6 potions, 5.4
+# scrolls, 1.8 wands, 5 of 87 with a known lift). Each unknown potion is levitation 4.2% of the time, each ring
+# levitation or teleport control 1/28 each, each wand cold 4% -- and the castle's lift plan tries unknown ones.
+# MEASURED: the dig-dive lands and digs within a few turns and almost never has such an item in view (1 level with any
+# candidate in a whole jf43 s0 game, 40+ steps away), so this adds ~nothing. Off.
+PREP_DIVE_PICKUP = False
+PREP_PICKUP_DIST = 12
+PREP_PICKUP_MAX_DEPTH = 20
+# DEEP_ITEMS (off, deep-arrivals, ledger F095; dive_logic.deep_items_strategy): on Medusa's level, the kit's scare and
+# cure items before the next dig or Elbereth. cand-g's 45 Medusa deaths on fresh jf43-60 were mostly the pick-only
+# flood lottery and the Medusa-3 raven swarm (M3 passes 41% vs its 0.54-0.57 flood-only ceiling, F074), but 7 of them
+# held an item that answers the swarm and never used it: a KNOWN scroll of scare monster (jf53 s2 raven, jf52 s5
+# snakes, jf59 s5), a bugle (jf58 s7), an unknown horn (jf47 s0, jf47 s12, jf59 s12: tooled 5/11, frost 2/11), two
+# unicorn horns through raven blindness (jf53 s2), two scrolls of charging beside an empty wand of digging (jf59 s5).
+#  - blind: a unicorn horn not known cursed (apply.c use_unihorn: an uncursed one fixes blindness ~65% of the time)
+#    -- a raven's claw re-blinds for d6 per hit, and a blind dust Elbereth holds 1 time in 3 (engrave.c);
+#  - hostiles pressing (one adjacent, two within 2, or blind and hurt): a scare instrument (music.c: a tooled horn,
+#    a drum or a bugle makes every MR-0 monster within ~XL*10 distu flee with no timer -- ravens, snakes, eels) blown
+#    again after HORN_REFRESH turns or a hit; an unknown horn is improvised, its ray (a frost or fire horn) aimed at
+#    a moat neighbour (frost: 'The water freezes', a flood roll less; the horn is then MEDUSA_FREEZE's cold source);
+#  - a KNOWN scroll of scare monster dropped on the square we are about to dig (or, blind and hurt, where we stand):
+#    monmove.c onscary counts a scroll on the square for every monster but Rodney/minions/Angels/Riders, and unlike
+#    a dust Elbereth the pit doesn't delete it (dig.c del_engr_at only removes engravings). We rest on it while blind
+#    or below DEEP_ITEMS_REST_UNTIL HP (at most DEEP_ITEMS_REST_MAX turns, and not while something still hurts us),
+#    then dig from it;
+#  - anywhere in the dive, at a quiet moment: a scroll of charging (not known cursed) on a known wand of digging that
+#    is known empty or down to 1 charge (read.c recharge: blessed 4-8 charges, uncursed 1-8; each zap on Medusa's
+#    level is one flood roll instead of the pick's two).
+DEEP_ITEMS = True
+DEEP_ITEMS_REST_UNTIL = 0.6
+DEEP_ITEMS_REST_MAX = 150
+DEEP_ITEMS_UNIHORN_TRIES = 3   # unicorn horn applications per blind spell
+# DEEP_BLIND_LOOK (off, deep-arrivals, F095): WR_BLIND_LOOK's floor-look skip while blind in the dive, at depth >=
+# DEEP_BLIND_LOOK_DEPTH only. 34 of cand-g's 45 fresh Medusa deaths spent 3-12 of their last 50 turns on blind ':'
+# looks (invent.c look_here returns !!Blind: a whole turn, and no dust engraving is read), so each blind Elbereth
+# cost two turns. WR_BLIND_LOOK everywhere was neutral (R183: the Mines' blind moments reshuffle games); its Dlvl>=21
+# subset was 6 better / 4 worse, net +0.23 over 46 diverged games. Deep only, a game is unchanged until its first blind
+# moment below Dlvl 20.
+DEEP_BLIND_LOOK = True
+DEEP_BLIND_LOOK_DEPTH = 21
+# RAVEN_GAP (off, deep-arrivals, F095): on Medusa-3, before a fresh pit on the chosen dig square, stay on our intact
+# (read-back) Elbereth while a raven is within RAVEN_GAP_RADIUS, at most RAVEN_GAP_MAX turns per square. Why: the pit
+# deletes the engraving (dig.c del_engr_at) and a flood (1 - 1/(k+1) per roll, k >= 1 everywhere on the island) puts
+# us on a fresh square with none, and a raven next to us then gets a free round -- 8 of cand-g's 13 raven deaths were
+# first blinded in the round right after a flood's crawl-out (jf46 s9, jf47 s0, jf45 s7, jf56 s12, jf58 s7, jf59 s6)
+# or in the fresh pit (jf47 s4). Ravens flee an Elbereth (monflee rnd(10), 3 in 10 rnd(100)) and fly off; a raven 4+
+# squares away needs 2+ turns to come back (speed 20).
+RAVEN_GAP = False
+RAVEN_GAP_RADIUS = 3
+RAVEN_GAP_MAX = 12
+# PARKED (harness, F097): M3 pick-only 20 -> 18 of 49 with RAVEN_GAP -- waiting lets ravens gather, and the flood
+# lottery, not the ravens, caps Medusa-3.
+# DEEP_WAND_TEST (off, deep-arrivals, F097 follow-up): WAND_ENGRAVE_TEXT's quiet-moment dive test also takes wands that
+# were never engrave-tested at all (inventory.wand_retest_wanted). 18 unknown wands at cand-g's 171 Medusa arrivals had
+# no engrave test (jf53 s1, jf55 s7 uranium, jf47 s4 marble...); digging (5.5% of wands) names itself on the test and
+# cold (4%) says 'ice cubes' -- the flood-reducers that lift Medusa-3 in the harness (charging an empty wand of digging
+# 18 -> 34 of 49, a frost horn 21 -> 33 of 49). Small (~1 flood-reducer per 270 games), cheap.
+DEEP_WAND_TEST = False
+
+# ---------------------------------------------------------------------------------------------------------------
+# dive-audit lane (2026-09-30; ledger F092): a death-by-death review of cand-g's 53 fresh deaths at max depth 5-20
+# (cand-g = s24 = 6ec6675, 270 pinned games jf43-60). Every flag below is off by default.
+#
+# KNOWN_ITEMS (known_items.py): in mortal danger while diving, use the KNOWN item that ends it -- a scroll of
+# teleportation, a wand of teleportation at ourselves, a wand of digging down, a potion of full/extra healing, a wand
+# of sleep / striking / cold / fire at the attacker -- before emergency_strategy's last resort gambles on UNKNOWN ones.
+# 77 of the 171 cand-g deaths with an inventory log (prep-metric's PREP_LOG twins, jf43-54) held a known escape or
+# attack item they never used (~30 scrolls of teleportation, ~15 wands of striking): the last resort only tries unknown
+# wands, potions and scrolls; fight2 zaps only rays (never striking, never sleep); nothing reads a known teleport scroll.
+# Examples: jf45 s14 (a mumak: 79 -> 43 -> 15 -> dead, a known wand of sleep and a blessed scroll of teleportation in
+# the pack), jf52 s9 (a soldier ant while blind, 2 uncursed scrolls of teleportation), jf54 s14 (killer bees while
+# blind: a scroll of teleportation, wands of cold and fire), jf49 s7 (stuck to a giant mimic: a scroll of teleportation),
+# jf48 s8 (a soldier: a scroll of teleportation). Danger = a hostile next to us and either critically low HP (the last
+# resort's own trigger) or a burst: we lost at least our remaining HP over the last KNOWN_ITEMS_BURST_TURNS turns and
+# are below KNOWN_ITEMS_BURST_FRAC of max HP -- a mumak, soldier ant or elf-lord takes 20-40 a turn, so jf45 s14 went
+# 43 -> 15 -> dead without ever being inside the last resort's window. A due emergency prayer always goes first.
+KNOWN_ITEMS = True
+KNOWN_ITEMS_BURST_TURNS = 2
+KNOWN_ITEMS_BURST_FRAC = 0.5
+KNOWN_ITEMS_RAY_RUN = 6      # free squares behind the target before a sleep/fire/lightning ray is safe from its bounce
+#
+# WELD_HOLD (with WELD_PRAY): welded to a cursed two-hander while diving (the first apply of a dwarvish mattock of
+# unknown BUC: 14% of dwarves' weapons are cursed) -> no free hand, so no Elbereth for the rest of the dive (engrave.c
+# freehand), and the Valkyrie's pick-axe skill starts Unskilled. cand-g: 10 of 197 diggers welded a mattock, mean 0.270
+# vs 0.510 for the rest; 7 of the 10 died at Dlvl <= 20 (vs 12 of 185): jf43 s13 (a jaguar, 2 hits in 10), jf47 s10
+# (an ice troll), jf48 s10 and jf53 s9 (a quasit, killer bees), jf50 s7 (a troll), jf56 s5. Two others got the mattock
+# uncursed by a later Weak/HP prayer (pray.c fix_worst_trouble: TROUBLE_UNUSEABLE_HANDS is major trouble). WELD_PRAY
+# (off since t36: it prayed only once WELD_PRAY_GAP had passed, and the dive dug on welded until then -- jf48 s10 and
+# jf50 s7 welded at gaps 864 and 805 and died 65 and 60 turns later, Dlvl 8 and 11) is now paired with a hold: while
+# welded, not deeper than WELD_HOLD_MAX_DEPTH, the dive neither descends nor digs out (dig_first) until WELD_PRAY's
+# prayer frees the hands, a prayer fails or comes without freeing them (a Weak prayer fixes hunger first: pray.c ranks
+# TROUBLE_STARVING above TROUBLE_UNUSEABLE_HANDS), or WELD_HOLD_MAX_WAIT turns pass; fight2 and the emergency prayer act
+# as usual. Pinned replays of the 8 welded cand-g games (19b5f85, WELD_PRAY + WELD_HOLD): 0.262 -> 0.394 mean; jf43 s13
+# 0.206 -> 0.466, jf47 s10 0.379 -> 0.554, jf48 s4 0.393 -> 0.647, jf53 s9 0.126 -> 0.445, jf56 s5 0.292 -> 0.466;
+# jf50 s7 0.161 -> 0.051 and jf48 s10 0.075 -> 0.075 held on after a hunger prayer left the weld (now ends the hold).
+WELD_HOLD = True
+WELD_HOLD_MAX_DEPTH = 12
+WELD_HOLD_MAX_WAIT = 1500
+#
+# SHOP_DIG: fell into a shop with a digging tool while diving -- its shopkeeper holds the door against a pick
+# (shk.c shk_move: badinv, satdoor) and the dive never digs in a shop, so the game sat there until it starved or was
+# killed: jf46 s13 (9324 turns on Dlvl 14, starved to a barrow wight), jf50 s6 (4210 turns on Dlvl 8), jf60 s6 (3135
+# turns on Dlvl 9), jf43 s8 (4229 turns on Dlvl 18); 64 shop landings in the 270 games. A hole in a shop floor costs
+# nothing without a bill (shk.c shopdig(1) grabs the pack only with billct or debit) and nothing falls with us from an
+# empty square (dokick.c impact_drop: goods on the hole's square are stolen, the shopkeeper chases us): so, with
+# nothing unpaid in the pack and no diggable square outside the shop within reach, dig down from an empty shop square.
+# Pinned replays of the 4 stalled games (19b5f85): jf46 s13 0.292 -> 0.602, jf50 s6 0.075 -> 0.445, jf60 s6 0.098 ->
+# 0.445, jf43 s8 unchanged. Only after SHOP_DIG_AFTER turns inside the shop: 60 of the 64 shop landings walked out
+# within 30-230 turns, and digging at once there only reshuffled those games (da-all1 jf43-48: 17 firings, net -0.12).
+SHOP_DIG = True
+SHOP_DIG_AFTER = 300
+#
+# ELBERETH_FUTILE: no Elbereth while hallucinating (agent.can_engrave): engrave.c garbles every letter 1 time in 2 while
+# hallucinating besides the dust's 1 in 25, so 'Elbereth' comes out whole ~0.3% of the time and each try is a turn
+# handed to whatever is attacking. cand-g jf49 s12 (a black light's blast on Dlvl 11) engraved 6 times in 6 turns under a
+# soldier ant, 63 -> 0 HP (replay: 0.206 -> 0.507); 5 of 270 games were killed while hallucinating. The first version
+# also blocked it while stunned (1 in 4 per letter, ~7% whole): 30 stunned blocks in da-all2's 270 games, no gain.
+ELBERETH_FUTILE = True
 
 _raw = os.environ.get('JF_CFG')
 if _raw:

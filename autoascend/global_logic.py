@@ -11,8 +11,10 @@ from . import jf_config
 from . import power
 from . import castle_power
 from . import castle_cross
+from . import castle_front
 from . import castle_landing
 from . import mino_guard
+from . import known_items
 from . import opp_items
 from . import tele_route
 from . import power_route
@@ -285,6 +287,7 @@ class GlobalLogic:
         self.dive = DiveLogic(agent)
         self.landing = castle_landing.LandingGuard(self.dive)   # jf_config.LANDING_GUARD (valley-exit)
         self.mino = mino_guard.MinoGuard(self.dive)   # jf_config.MINO_GUARD (minotaur lane)
+        self.known = known_items.KnownItemsGuard(self.dive, self.mino)   # jf_config.KNOWN_ITEMS (dive-audit)
 
     def update(self):
         self.dive.update()
@@ -530,6 +533,16 @@ class GlobalLogic:
         if candidate is None:
             return
 
+        # PREP_EXCAL_DIVE: the digging tool (or bare hands) goes in hand first -- a dip's silent curse must not weld
+        # the sword (NO_DIP_WITH_TOOL's reason: a welded sword locks the pick out); a sword that can't be swapped out
+        # is not dipped
+        tool = self.dive.digging_tool()
+        main = self.agent.inventory.items.main_hand
+        if jf_config.PREP_EXCAL_DIVE and main is not None and main is candidate:
+            if main.status == Item.CURSED or not self.agent.inventory.wield(tool):
+                self.dive._prep_dip_block_until = self.agent.blstats.time + 500
+            return
+
         # TODO: refactor
         with self.agent.atom_operation():
             candidate = self.agent.inventory.move_to_inventory(candidate)
@@ -663,19 +676,24 @@ class GlobalLogic:
         # welded weapon can't be swapped for the pick-axe: eg-glh-public seed 6 carried its pick from T6556, dipped
         # 8 times at XL 7, and dove at XL 8 with 'a cursed thoroughly rusty +1 long sword (weapon in hand)' --
         # digging_tool() None, a tool-less dive (0.206; base 0.466). A digger doesn't need Excalibur.
-        if jf_config.NO_DIP_WITH_TOOL and self.dive.digging_tool() is not None:
+        # (PREP_EXCAL_DIVE: the tool goes in hand before the dip instead, see dip_for_excalibur)
+        if jf_config.NO_DIP_WITH_TOOL and self.dive.digging_tool() is not None and not jf_config.PREP_EXCAL_DIVE:
             return False
         # DEMON_NO_REDIP: not while a released water demon is about -- when it fled out of the vigil's reach the
         # bot walked back to the fountain and dipped twice more next to it, then fought it (DEMON_FIX replay of
         # jf16 s8: killed by the demon 480 turns after the release)
         if jf_config.DEMON_NO_REDIP and bl.time <= self.dive._demon_vigil_until:
             return False
+        if jf_config.PREP_EXCAL_DIVE and bl.time <= self.dive._prep_dip_block_until:
+            return False
+        # PREP_EXCAL_XL: dip from that XL (fountain.c's minimum is 5) instead of 7, see jf_config
+        min_xl = jf_config.PREP_EXCAL_XL or 7
         if not jf_config.SAFE_DIPS:
             # a released water demon (1 dip in ~40) is deadlier to a starving or hurt character; dipping
             # can wait for a healthy moment (SAFE_DIPS' prayer-ready rule halved the Excaliburs)
-            return bl.experience_level >= 7 and bl.hunger_state < Hunger.WEAK and \
+            return bl.experience_level >= min_xl and bl.hunger_state < Hunger.WEAK and \
                 bl.hitpoints >= 0.7 * bl.max_hitpoints
-        return bl.experience_level >= 7 and bl.hitpoints >= 0.9 * bl.max_hitpoints and \
+        return bl.experience_level >= min_xl and bl.hitpoints >= 0.9 * bl.max_hitpoints and \
             self.agent.is_safe_to_pray(800)
 
     def exploration_strategy(self, search_prio_limit):
@@ -983,6 +1001,13 @@ class GlobalLogic:
                 self.agent.inventory.sell_price_identify().every(3),
                 # lift-ready (WAND_ENGRAVE_TEXT): once diving, re-test with text the wands the grind's test left unnamed
                 self.agent.inventory.wand_text_retest(),
+                # ARMOR_UP: the dig-dive never explores, so gather_items' wear_best_stuff never runs there (castle
+                # arrivals carried unworn mithril coats, iron shoes, iron helms); and known enchant armor gets read
+                self.agent.inventory.wear_best_stuff().every(25)
+                .condition(lambda: jf_config.ARMOR_UP and self.dive.diving and not self.dive.levitating() and
+                           not self.dive._near_hostiles(radius=6)),
+                self.agent.inventory.read_enchant_armor().every(10)
+                .condition(lambda: jf_config.ARMOR_UP and not self.dive._near_hostiles(radius=6)),
                 # opp-items (GENOCIDE_POLICY): a known scroll of genocide proven not cursed is read at once
                 opp_items.read_strategy(self.agent),
             ])
@@ -1072,6 +1097,12 @@ class GlobalLogic:
             .preempt(self.agent, [
                 castle_cross.rush_strategy(self.dive),
             ])
+            # castle-front (FRONT_DOOR, castle_front.py): the lift plan gave up and a known wand of striking/opening is in
+            # hand -> fill the drawbridge span, open the front, hold the doorway, in -- above fight2, elbereth_rest and
+            # the retreat, which would pull us off the hold square
+            .preempt(self.agent, [
+                castle_front.strategy(self.dive),
+            ])
             # valley-exit (LANDING_GUARD, castle_landing.py): a minotaur (or another big Elbereth-ignorer) at the castle
             # depth -- heal early, strike it frozen, zap the best known wand at it (beams, cold; other rays only with
             # room to die out) -- above the rush, which yields while its lift phase has items to try
@@ -1115,8 +1146,22 @@ class GlobalLogic:
             .preempt(self.agent, [
                 power_route.levelport_strategy(self.agent),
             ])
+            # deep-arrivals (DEEP_ITEMS, dive_logic.deep_items_strategy): on Medusa's level a unicorn horn when blind, a
+            # scare instrument or unknown horn when hostiles press us, a known scroll of scare monster under the dig
+            # square; a scroll of charging on an empty wand of digging -- below the emergency (a due prayer first),
+            # above dig_first, the Elbereth rest and fight2
+            .preempt(self.agent, [
+                self.dive.deep_items_strategy().condition(lambda: jf_config.DEEP_ITEMS),
+            ])
             .preempt(self.agent, [
                 self.agent.emergency_strategy(),
+            ])
+            # dive-audit (KNOWN_ITEMS, known_items.py): in mortal danger while diving (critically low HP, or the last
+            # turns' loss >= the HP left), a known teleport scroll / teleport or digging wand / healing potion / sleep,
+            # striking, cold or fire wand -- above the emergency, whose last resort gambles only on unknown items; it
+            # lets a due emergency prayer go first (below the minotaur guard, which has its own item plan)
+            .preempt(self.agent, [
+                self.known.strategy(),
             ])
             # minotaur lane (MINO_GUARD, mino_guard.py): a minotaur in view -- a known way out first (digging down, the
             # up stairs, teleport/sleep/polymorph at it, teleport ourselves, genocide, scare monster), then gambles;

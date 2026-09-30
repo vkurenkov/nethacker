@@ -993,6 +993,13 @@ def _castle_gamble_step(agent):
                 _log(agent, f'castle gamble: {spare.text!r} is not TC, making room for {ring.text!r}')
                 _remove(agent, spare)
                 return True
+    # ROUTE_GLOVES_FIX: the wish route's own TC ring is carried but not on yet (cursed gloves: the route wishes a
+    # remove curse first) -- no uncontrolled jump with its scrolls (fs8t-k6 s9 read them and left for Dlvl 17)
+    if jf_config.ROUTE_GLOVES_FIX:
+        from . import tele_route
+        tcr = tele_route.tc_ring(agent)
+        if tcr is not None and not tcr.equipped and not getattr(agent, '_tele_route_done', False):
+            return False
     # 3. the triggers (TC known or not: an uncontrolled jump from here costs nothing we still had)
     if not prop.confusion and cursed_tele_scrolls(agent):
         _read_trigger(agent, cursed_tele_scrolls(agent)[0], 'castle gamble: cursed teleport scroll')

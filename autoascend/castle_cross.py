@@ -40,13 +40,15 @@ CFP_ZAP: a sea monster (or anything) blocking the way round is zapped with the b
 lightning/magic missile rays only along a stretch long enough that the ray can't bounce back at us.
 """
 
+import re
+
 import nle.nethack as nh
 from nle.nethack import actions as A
 
 from . import jf_config
 from .castle_logic import OUTSIDE, WEST_COURTYARD, map_char, to_bot
 from .exceptions import AgentChangeStrategy, AgentFinished, AgentPanic
-from .glyph import G
+from .glyph import G, SS
 from .strategy import Strategy
 
 # launch squares (maze side, dug if need be) and the first moat square beyond them
@@ -55,6 +57,7 @@ SOUTH_LAUNCH, SOUTH_ENTRY = (-1, 14), (0, 15)
 MAGIC_BOOTS = ("combat boots", "jungle boots", "hiking boots", "mud boots", "buckled boots", "riding boots",
                "snow boots")
 M1_SWIM, M1_AMPHIBIOUS, M1_BREATHLESS = 0x2, 0x200, 0x400
+M1_NOHANDS, M1_NOLIMBS = 0x2000, 0x6000   # (monflag.h: no hands to apply a digging tool)
 MB_NAME = 'amulet of magical breathing'   # (objects' full name, power.MB_AMULET)
 DIRS8 = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
 
@@ -382,14 +385,26 @@ def rush_strategy(dive):
             return None
         pos = castle._pos()
         floating = castle._floating()
+        if jf_config.CL_ROUTE and not floating and _cl_webbed(castle):
+            return ('cl_web',)
         if jf_config.CFP_INVIS and not castle._tries.get('cfp_invis_done') and invis_source(castle) is not None:
             return ('invis',)
         if not floating:
+            if jf_config.CL_LAUNCH and jf_config.CL_ROUTE:
+                # castle-lift: walk to the far launch square first and try the lifts there on Elbereth (see cl_launch_plan)
+                lp = cl_launch_plan(castle)
+                if lp is not None:
+                    return lp
             cands = lift_candidates(castle)
             if cands:
                 return ('lift',) + cands[0]
             if _poly_now(castle):
                 return ('poly',)
+            if jf_config.CL_POTION_EARLY:
+                # castle-lift: a potion that may be levitation, right here at the first quiet moment (see early_potion)
+                pot = early_potion(castle)
+                if pot is not None:
+                    return ('cl_potion', pot)
             if jf_config.CFP_PRUSH and (pos[1] <= 5 or pos[1] >= 11) and pos not in WEST_COURTYARD:
                 # (only off the courtyard's rows 6-10: from there castle_logic's walk east to TEST_SPOT is the short way
                 # -- harness cfp-real jf25-s0 met a troll digging from the courtyard rows up to (-2,2))
@@ -402,7 +417,8 @@ def rush_strategy(dive):
                 return None
         if castle._tries.get('cfp_stuck', 0) >= 3:
             return None
-        if pos in WEST_COURTYARD and floating:
+        if pos in WEST_COURTYARD and floating and \
+                not (jf_config.CL_ROUTE and not castle.committed() and not castle._tries.get('cl_court_off')):
             return None   # the courtyard: castle_logic floats us on from here (committed)
         if jf_config.LIFT_POLY_PICKY and floating:
             # an eyeless / sessile / non-digging form: castle_power zaps the wand of polymorph again instead
@@ -446,6 +462,52 @@ def rush_strategy(dive):
                     castle._tries['cfp_potion_stuck'] = castle._tries.get('cfp_potion_stuck', 0) + 1
                     _log(castle, f'potion rush stuck at {castle._pos()}')
                     return
+            elif p[0] == 'cl_potion':
+                _early_potion_step(castle, p[1])
+                if agent.step_count == before:
+                    agent.search()
+                last = None   # (quaffing in place is not 'no progress': the rush's stuck count stays for the float)
+                p = plan()
+                continue
+            elif p[0] == 'cl_web':
+                # CL_ROUTE: a web holds us and hides the lift (see _cl_webbed); castle_logic would give the passage up
+                t = castle._tries
+                t['cl_web_tries'] = t.get('cl_web_tries', 0) + 1
+                _log(castle, f'cl route: held in a web at {castle._pos()}: pulling free ({t["cl_web_tries"]})')
+                _cl_web_pull(castle)
+                if agent.step_count == before:
+                    agent.search()
+                last = None
+                p = plan()
+                continue
+            elif p[0] in ('cl_walk', 'cl_elbereth', 'cl_wait'):
+                t = castle._tries
+                if p[0] == 'cl_walk':
+                    t['cl_launch_steps'] = t.get('cl_launch_steps', 0) + 1
+                    r = cl_route_step(castle, on_foot=True, goals=p[1])
+                    if r is None:
+                        t['cl_launch_off'] = 1
+                        _log(castle, f'cl launch: no way to the water from {castle._pos()}: lifts tried here')
+                    elif r == 'launch':
+                        last = None
+                elif p[0] == 'cl_elbereth':
+                    t['cl_launch_elb'] = t.get('cl_launch_elb', 0) + 1
+                    if t['cl_launch_elb'] == 1:
+                        _log(castle, f'cl launch: on the launch square {castle._pos()} for the moat at '
+                                     f'{t.get("cl_launch")}: Elbereth, then the lifts')
+                    castle._set_state('cl launch: Elbereth on the launch square')
+                    agent.engrave('Elbereth')
+                    last = None
+                else:
+                    t['cl_launch_rest'] = t.get('cl_launch_rest', 0) + 1
+                    castle._set_state('cl launch: resting before the lift tests')
+                    agent.search()
+                    last = None
+                if agent.step_count == before:
+                    agent.search()
+                if p[0] != 'cl_walk':
+                    p = plan()
+                    continue
             elif jf_config.CFP_DUEL and _duel_flee(castle):
                 p = plan()
                 last = None
@@ -475,7 +537,33 @@ def rush_strategy(dive):
                     last = None   # (the duel stands on the launch square on purpose: not 'no progress')
                     p = plan()
                     continue
-                r = _toward(castle, launch, entry)
+                r = None
+                if jf_config.CL_ROUTE and not testing and castle._floating():
+                    # castle-lift: the maze-aware way to the cheapest moat entry (see cl_route)
+                    r = cl_route_step(castle)
+                    if r is None and castle._pos() in WEST_COURTYARD:
+                        # no way back out from the courtyard: castle_logic's crossing goes round the corner as before
+                        castle._tries['cl_court_off'] = 1
+                        _log(castle, f'cl route: none from the courtyard at {castle._pos()}: crossing from here')
+                        return
+                elif jf_config.CL_ROUTE and jf_config.CL_MB_ROUTE and testing:
+                    # castle-lift CL_MB_ROUTE: the magical-breathing water test walks the same maze-aware way on foot and
+                    # dunks at the chosen entry (if the amulet works, that entry is where the moat-bottom walk starts)
+                    cplan = cl_route(castle)
+                    into_water = cplan is not None and map_char(*cplan[0][0]) == '}'
+                    if into_water and agent.blstats.carrying_capacity > 1 and not castle._tries.get('cfp_mb_unload'):
+                        castle._tries['cfp_mb_unload'] = 1
+                        _log(castle, f'encumbrance {agent.blstats.carrying_capacity} before the water test: unloading')
+                        _unload(castle)
+                        p = plan()
+                        continue
+                    r = cl_route_step(castle)
+                    if r is not None and into_water:
+                        _water_test_result(castle, pos_before)
+                        r = True
+                        pos_before = None
+                if r is None:
+                    r = _toward(castle, launch, entry)
                 if r is None:
                     castle._tries['cfp_stuck'] = castle._tries.get('cfp_stuck', 0) + 1
                     _log(castle, f'rush stuck at {castle._pos()} toward {launch}')
@@ -762,6 +850,640 @@ def _potion_step(castle, item):
     return True
 
 
+# ------------------------------------------------------------------------------------------------ CL_POTION_EARLY
+#
+# castle-lift: the kit's potions that may be levitation are quaffed where we stand at the first quiet moment on the
+# castle's west side (see jf_config.CL_POTION_EARLY for the census behind it). castle_logic tries them only at
+# TEST_SPOT (1,7), after the walk or dig through the west maze, and that walk runs at the very bottom of the preempt
+# chain: in the fresh cand-g games 10 of 13 kits holding a real potion of levitation never quaffed it. A levitation
+# potion found in the maze floats us at once, and rush_strategy's floating branch digs/floats straight onto the moat.
+
+CL_QUIET = 3         # no monster glyph (not known peaceful) within this many squares before an unknown potion...
+CL_QUIET_KNOWN = 4   # ...and a known potion of levitation (its turns start at once)
+CL_HP = 0.5          # HP fraction for an unknown potion (a potion of sleeping/paralysis leaves us helpless 25-34 turns)
+CL_HP_KNOWN = 0.7    # ...and for a known one (straight into the west channel's sharks)
+
+
+def _hostile_glyphs_within(castle, r):
+    """Monster glyphs (and remembered invisible ones) within r squares, not known peaceful, not in the water beyond reach
+    (a sea monster two squares off can't bite a hero who isn't next to the water). Read from the glyphs, not
+    get_visible_monsters: that drops monsters whose neighbourhood the BFS can't reach (the dark maze, minotaur lane)."""
+    agent = castle.agent
+    y0, x0 = int(agent.blstats.y), int(agent.blstats.x)
+    peaceful = agent.monster_tracker.peaceful_monster_mask
+    h, w = agent.glyphs.shape
+    out = []
+    for y in range(max(0, y0 - r), min(h, y0 + r + 1)):
+        for x in range(max(0, x0 - r), min(w, x0 + r + 1)):
+            if (y, x) == (y0, x0):
+                continue
+            g = agent.glyphs[y, x]
+            if not (nh.glyph_is_monster(g) or g == nh.GLYPH_INVISIBLE) or peaceful[y, x]:
+                continue
+            mx, my = _to_map(y, x)
+            if _wet(castle, mx, my) and max(abs(y - y0), abs(x - x0)) > 1:
+                continue
+            out.append((y, x))
+    return out
+
+
+def _poly_drill_pending(castle):
+    """castle_power's polymorph drill (CASTLE_POLY: a known wand of polymorph with charges, zapped at ourselves until a
+    form that crosses water comes up, at most 12 zaps) still runs: the potions wait for it, as they do without
+    CL_POTION_EARLY (castle_logic tests them after the drill). The castle-29 benchmark cl-fin-all cfpf-s4 quaffed its
+    potion in a white unicorn form between two self-zaps: the forms that followed differed (a green mold, a panther
+    fight, 2213 turns on the west side) and base's pass (an earth elemental through the walls, a couatl over the trap
+    door) was lost; cfpj-s11 quaffed two potions as a 2-HP manes between zaps."""
+    if not jf_config.CASTLE_POLY or castle._tries.get('pw_polyzaps', 0) >= 12:
+        return False
+    try:
+        from . import castle_power
+        if castle_power._poly_wand(castle.agent) is None:
+            return False
+        form = form_permonst(castle.agent)
+        if form is not None and (castle_power.crosses(form) or amphibious(castle) or wallwalker(castle.agent)):
+            return False   # (a form that crosses or walks the walls: the drill is over)
+        return True
+    except Exception:
+        return False
+
+
+def early_potion(castle):
+    """CL_POTION_EARLY: the potion to quaff right here, or None (not quiet, hurt, next to water, no candidate)."""
+    if not jf_config.CL_POTION_EARLY:
+        return None
+    agent = castle.agent
+    bl = agent.blstats
+    prop = agent.character.prop
+    if castle.levitating() or prop.confusion or prop.stun:
+        return None
+    if (prop.hallu or prop.blind) and not jf_config.BREACH_NOWAIT:
+        # (hallucination lasts 600-800 turns, a potion of blindness 250-450: the next potion only when those turns aren't
+        # waited out anyway -- cl-t10-pe: 29 'hallucinogen-distorted' deaths among potion testers that never floated)
+        return None
+    t = castle._tries
+    if t.get('cl_pot_n', 0) >= 30:
+        return None
+    if _poly_drill_pending(castle):
+        return None
+    from .power_route import known_cursed
+    # (a known potion of polymorph stays power's; a known-cursed potion of levitation lifts for one turn: potion.c)
+    pots = [p for p in potion_candidates(castle) if 'levitation' in _names(p) and not known_cursed(p)]
+    if not pots:
+        return None
+    item = pots[0]
+    known = item.is_unambiguous()
+    if bl.hitpoints < (CL_HP_KNOWN if known else CL_HP) * bl.max_hitpoints:
+        return None
+    if castle._wet_around(*castle._pos()):
+        return None   # next to the moat: a confused or stunned step walks into it, an eel wraps us while we sleep
+    if _hostile_glyphs_within(castle, CL_QUIET_KNOWN if known else CL_QUIET):
+        return None
+    return item
+
+
+def _early_potion_step(castle, item):
+    """Elbereth under us (a potion of sleeping or paralysis leaves us helpless 25-34 turns; scared monsters don't
+    melee), then quaff. True: acted."""
+    agent = castle.agent
+    t = castle._tries
+    engraving = (agent.inventory.engraving_below_me or '').lower()
+    # (blind -- BREACH_NOWAIT goes on testing -- a dust engraving can't be read back (engrave.c read_engr_at senses DUST
+    # only with sight): one Elbereth, not eight, before each potion)
+    elb_max = 1 if agent.character.prop.blind else 8
+    if engraving != 'elbereth' and agent.can_engrave() and t.get('cl_pot_elb', 0) < elb_max:
+        t['cl_pot_elb'] = t.get('cl_pot_elb', 0) + 1
+        castle._set_state('cl: Elbereth before an early potion test')
+        agent.engrave('Elbereth')
+        return True
+    t['cl_pot_n'] = t.get('cl_pot_n', 0) + 1
+    t['cl_pot_elb'] = 0
+    bl = agent.blstats
+    _log(castle, f'early potion: quaffing {item.text!r} at {castle._pos()} hp {bl.hitpoints}/{bl.max_hitpoints} '
+                 f'turn {bl.time}')
+    castle._try('potion', item)
+    if castle._floating():
+        _log(castle, f'early potion: floating on {item.text!r} at {castle._pos()}: to the moat')
+    return True
+
+
+# ------------------------------------------------------------------------------------------------ CL_ROUTE
+#
+# castle-lift: a floating hero's way from the west maze onto the moat, planned over the maze's real structure instead of
+# rush_strategy's straight rows-first dig to the fixed launch squares (-1,2)/(-1,14). mkmaze.c walkfrom carves cells at
+# odd LEVEL coordinates (sp_lev.c spo_mazewalk forces the odd parity), i.e. castle map squares (even x, even y) for
+# x in -6..-2: a cell is always open, a pillar (odd x, odd y) is always wall, a square between two cells is open about
+# half the time (a spanning tree), and the boundary column x = -1 is wall except the courtyard's exit (-1,10). The old
+# rows-first path from cl-h-pe1 cm-jf40-s5~2 (-5,8) dug up the pillar column x = -5: 7 digs, 37 turns from 'floating'
+# to the first moat square (median 20 over the harness's floating potion kits) -- turns a potion's 10-149 of lift can't
+# spare and a maze minotaur uses. Dijkstra over the maze squares with dig costs, to the moat square whose rest of the
+# west channel is cheapest (water moves to the dry strip x 0.75 turns), sea monsters seen by an entry cost extra.
+
+CL_DIG = 3.0          # turns a dwarf's pick takes through a maze wall (dig.c: effort += 2 x (10 + d5 + bonuses) > 100)
+CL_WATER = 0.75       # turns per moat square afloat with intrinsic speed
+CL_SEA = 8.0          # extra cost of an entry square with a sea monster on or next to it (seen lately)
+CL_WET_DIG = 10.0     # extra cost of a dig made from a square beside the water (the bites stop the dig)
+CL_MAZE_X = (-6, -1)  # the west maze's columns (level x 3..8)
+_CL_WATER_DIST = None
+
+
+def _cl_mouth(w):
+    """Extra cost of entering the moat at w by how close it is to the courtyard's moat (row 5, column x 5, row 11): the
+    west sharks home in on us (monmove.c m_move: gx,gy = mux,muy, always our square) and settle at the water square
+    nearest us, which from the courtyard or the maze's middle rows is the channel mouth (0,5)/(1,5) or (0,11)/(1,11); and
+    the column there is 4-5 squares longer. Harness crossings by entry (castle-lift cl-h-base2/pe1/rt1, pooled):
+    (0,5) 2 of 38 passed, (1,5) 1/6, (0,4) 1/4, (0,13) 0/3 -- but (0,1) 11/18 and (0,15) 8/19."""
+    x, y = w
+    if x == 0 and y <= 16:
+        far = min(y, 16 - y) if y <= 5 or y >= 11 else 99
+        return {0: 0.0, 1: 0.0, 2: 3.0, 3: 8.0}.get(far, 15.0)
+    return 15.0   # row 5, column x 5, row 11: the courtyard's own moat
+
+
+def _cl_water_dist():
+    """Moat square (west part) -> moves afloat to the first dry strip square (9,0) / (9,16)."""
+    global _CL_WATER_DIST
+    if _CL_WATER_DIST is None:
+        from .castle_logic import MAP_H
+        dist = {}
+        todo = []
+        for start in ((9, 0), (9, 16)):
+            dist[start] = 0
+            todo.append(start)
+        i = 0
+        while i < len(todo):
+            x, y = todo[i]
+            i += 1
+            for dx, dy in DIRS8:
+                n = (x + dx, y + dy)
+                if n in dist or not (0 <= n[0] <= 8 and 0 <= n[1] < MAP_H) or map_char(*n) != '}':
+                    continue
+                dist[n] = dist[(x, y)] + 1
+                todo.append(n)
+        _CL_WATER_DIST = {p: d for p, d in dist.items() if map_char(*p) == '}'}
+    return _CL_WATER_DIST
+
+
+def _cl_kind(castle, mx, my):
+    """'open' / 'wall' / 'unknown' / 'boulder' / None (off the land we plan over) for a west maze or west courtyard
+    square, from the map memory and the maze's parity."""
+    court = 0 <= mx <= 4 and 6 <= my <= 10
+    if not court and not (CL_MAZE_X[0] <= mx <= CL_MAZE_X[1] and 0 <= my <= 16):
+        return None
+    agent = castle.agent
+    level = agent.current_level()
+    y, x = to_bot(mx, my)
+    g = agent.glyphs[y, x]
+    obj = level.objects[y, x]
+    if g in G.BOULDER or obj in G.BOULDER:
+        return 'boulder'
+    if court or level.walkable[y, x]:
+        return 'open'
+    if (mx % 2 == 0 and my % 2 == 0 and mx <= -2) or (mx, my) == (-1, 10):
+        return 'open'      # a maze cell (carved by walkfrom), or the courtyard's exit (castle.des MAZEWALK:(00,10),west)
+    if (mx % 2 and my % 2) or (mx == -1 and my != 10):
+        return 'wall'      # a pillar, or the boundary column beside the map (only (-1,10) is carved)
+    if g in G.WALL or obj in G.WALL:
+        return 'wall'
+    return 'unknown'
+
+
+def _cl_rock(castle, mx, my):
+    """Wall or rock for the diagonal-squeeze rule (maze walls and unknown squares count; floor and water don't)."""
+    if mx >= 0:
+        return map_char(mx, my) not in '.}'
+    return _cl_kind(castle, mx, my) in ('wall', 'unknown', None)
+
+
+def _cl_threat(castle):
+    """A land monster that ignores Elbereth (minotaur, @, ...) within 5 squares, from the glyphs (the dark maze hides
+    them from get_visible_monsters' BFS filter)."""
+    agent = castle.agent
+    bl = agent.blstats
+    for m in agent.get_visible_monsters():
+        if max(abs(m[1] - bl.y), abs(m[2] - bl.x)) <= 5 and castle.dive._ignores_elbereth(m[3]) and \
+                not _wet(castle, *_to_map(m[1], m[2])):
+            return True
+    try:
+        from . import mino_guard
+        mask = mino_guard._MINO_GLYPHS
+        y0, x0 = int(bl.y), int(bl.x)
+        g = agent.glyphs[max(0, y0 - 5):y0 + 6, max(0, x0 - 5):x0 + 6]
+        import numpy as np
+        return bool(np.isin(g, list(mask)).any())
+    except Exception:
+        return False
+
+
+def _cl_can_dig(castle):
+    """A digging tool we can swing. A form without hands can't (cl-pe1-c29 jf43 s14, castle 29: a golden naga floated on
+    its potion of levitation one square from the launch square it had to dig, 'rush stuck', until the potion ran out):
+    then the route walks the maze's corridors to the open courtyard exit (-1,10) and floats onto (0,11) from there."""
+    if castle.dive.digging_tool() is None:
+        return False
+    form = form_permonst(castle.agent)
+    if form is not None and (castle._tries.get('cfp_nodig') == form.mname or form.mflags1 & M1_NOHANDS):
+        return False
+    return True
+
+
+def _cl_wet_adj(castle, p):
+    """A moat square that is still water next to map square p: sea monsters bite anything standing on p."""
+    return any(_wet(castle, p[0] + dx, p[1] + dy) for dx, dy in DIRS8)
+
+
+# a known trap on a maze square: a web holds a floating hero and takes the lift away while it holds (trap.c
+# float_vs_flight: 'being trapped on the ground ... overrides floating' -- BLevitation, the status line drops Lev);
+# cl-fin-all jf48-s12 (castle 29) floated into a web at (-4,2) on its way to the moat, castle_logic saw no lift and
+# gave the passage up, BREACH_RESUME brought it back 15-25 turns later, and cl_route led it into the same web six times
+# until the potion ran out. Pits, holes, trap doors, bear traps, squeaky boards and land mines don't touch a levitator.
+_CL_WEB = frozenset({SS.S_web})
+_CL_TRAP_HURTS = frozenset({SS.S_sleeping_gas_trap, SS.S_polymorph_trap, SS.S_magic_trap, SS.S_anti_magic_trap,
+                            SS.S_fire_trap, SS.S_level_teleporter, SS.S_teleportation_trap, SS.S_rust_trap,
+                            SS.S_arrow_trap, SS.S_dart_trap, SS.S_falling_rock_trap, SS.S_statue_trap,
+                            SS.S_rolling_boulder_trap, SS.S_magic_portal})
+CL_TRAP_WEB = 25.0    # route cost of a known web (a way round it through the maze is nearly always cheaper)
+CL_TRAP = 5.0         # ...and of the other traps a levitator sets off
+
+
+def _cl_trap_cost(castle, mx, my):
+    agent = castle.agent
+    y, x = to_bot(mx, my)
+    seen = (agent.glyphs[y, x], agent.current_level().objects[y, x])
+    if any(g in _CL_WEB for g in seen):
+        return CL_TRAP_WEB
+    if any(g in _CL_TRAP_HURTS for g in seen):
+        return CL_TRAP
+    return 0.0
+
+
+WEB_IN = ('into a spider web', 'into your spider web', 'You are stuck to the web')
+WEB_OUT = ('You disentangle yourself', 'You tear through', 'cuts through the web', 'You are no longer stuck',
+           'You float gently to the', 'You float down')
+
+
+def _cl_webbed(castle):
+    """CL_ROUTE: held in a web on the way to the moat (the last messages), the status line's Lev gone while it holds."""
+    agent = castle.agent
+    if castle.levitating():
+        return False
+    held = False
+    for m in agent._message_history[-6:] + [agent.message or '']:
+        if any(s in m for s in WEB_IN):
+            held = True
+        if any(s in m for s in WEB_OUT):
+            held = False
+    return held and castle._tries.get('cl_web_tries', 0) < 12
+
+
+def _cl_web_pull(castle):
+    """One move attempt out of the web (trap.c trapmove: each attempt takes one off u.utrap, which a St 18+ hero's web
+    starts at 1, and the attempt itself doesn't move us), toward a dry square: toward the route's next square when it is
+    dry land (never the water: an attempt made after the web already let go is a real step, on foot)."""
+    pos = tuple(int(v) for v in castle._pos())
+    plan = cl_route(castle)
+    cands = []
+    if plan is not None and _cl_kind(castle, *plan[0][0]) == 'open' and not _wet(castle, *plan[0][0]):
+        cands.append(plan[0][0])
+    for dx, dy in DIRS8:
+        n = (pos[0] + dx, pos[1] + dy)
+        if _cl_kind(castle, *n) == 'open' and not _wet(castle, *n) and not castle._monster_at(*n) and \
+                not (dx and dy and _cl_rock(castle, pos[0] + dx, pos[1]) and _cl_rock(castle, pos[0], pos[1] + dy)):
+            cands.append(n)
+    if not cands:
+        castle.agent.search()
+        return
+    castle._set_state(f'cl route: pulling out of the web toward {cands[0]}')
+    castle._step_to(*cands[0])
+
+
+def cl_route(castle, goals=None):
+    """Cheapest (turns) plan from our square to a moat entry: (path [squares, the last one the moat square], half,
+    cost), or None (not in the west maze, or no way to the water). goals: only these moat squares (a kept target)."""
+    import heapq
+    pos = tuple(int(v) for v in castle._pos())
+    if _cl_kind(castle, *pos) is None:
+        return None
+    dig = _cl_can_dig(castle)
+    wdist = _cl_water_dist()
+    agent = castle.agent
+    now = agent.blstats.time
+    seen = castle._tries.setdefault('cl_sea_seen', {})
+    blocked = castle._tries.setdefault('cl_blocked', {})
+    # CL_FLEE: an Elbereth-ignorer on land close by (a minotaur: 3d10/3d10/2d8 a turn, it can't follow into the water) --
+    # the nearest water wins over the far channel entry (a mouth entry's waiting shark is the lesser evil)
+    flee = jf_config.CL_FLEE and castle._floating() and _cl_threat(castle)
+    mouth_w = 0.2 if flee else 1.0
+
+    def step_cost(p, n):
+        k = _cl_kind(castle, *n)
+        if k is None:
+            return None
+        c = 1.0
+        digging = False
+        if k == 'wall':
+            if not dig:
+                return None
+            c += CL_DIG
+            digging = True
+        elif k == 'boulder':
+            if not dig:
+                return None
+            c += CL_DIG
+            digging = True
+        elif k == 'unknown':
+            if not dig:
+                c += 2.0
+            else:
+                c += 0.5 * CL_DIG
+                digging = True
+        if castle._monster_at(*n):
+            c += 4.0
+        c += _cl_trap_cost(castle, *n)
+        if _cl_wet_adj(castle, n):
+            c += 1.0   # a square on the moat's edge: eels and sharks bite from the water
+        if digging and _cl_wet_adj(castle, p):
+            # digging from a square beside the water: each bite stops the dig (cl-t10-rt cg-jf55-s6~2 dug (-1,14) from
+            # (-1,13) through four 'The shark bites!  You stop digging.' and died there)
+            c += CL_WET_DIG
+        return c
+
+    def entry_cost(w):
+        c = 1.0 + CL_WATER * wdist[w] * (0.3 if flee else 1.0) + _cl_mouth(w) * mouth_w
+        for p, t in seen.items():
+            if now - t <= 30 and max(abs(p[0] - w[0]), abs(p[1] - w[1])) <= 1:
+                c += CL_SEA
+        if blocked.get(w, 0) >= 2:
+            c += 20.0
+        return c
+
+    best = None
+    dist = {pos: 0.0}
+    prev = {}
+    heap = [(0.0, pos)]
+    while heap:
+        d, p = heapq.heappop(heap)
+        if d > dist.get(p, 1e9):
+            continue
+        if best is not None and d >= best[0]:
+            break
+        for dx, dy in DIRS8:
+            n = (p[0] + dx, p[1] + dy)
+            if n in wdist and not castle._dry(*n):
+                if goals is not None and n not in goals:
+                    continue
+                if dx and dy and _cl_rock(castle, p[0] + dx, p[1]) and _cl_rock(castle, p[0], p[1] + dy):
+                    continue   # (a squeeze between two walls: hack.c test_move refuses it when heavily loaded)
+                tot = d + entry_cost(n)
+                if best is None or tot < best[0]:
+                    best = (tot, p, n)
+                continue
+            if dx and dy:
+                # diagonal steps only between known open squares (no digging diagonally, no squeezes)
+                if _cl_kind(castle, *n) != 'open' or _cl_kind(castle, p[0] + dx, p[1]) != 'open' and \
+                        _cl_kind(castle, p[0], p[1] + dy) != 'open':
+                    continue
+            c = step_cost(p, n)
+            if c is None:
+                continue
+            nd = d + c
+            if nd < dist.get(n, 1e9):
+                dist[n] = nd
+                prev[n] = p
+                heapq.heappush(heap, (nd, n))
+    if best is None:
+        return None
+    _, last, w = best
+    path = [w, last]
+    while path[-1] != pos:
+        path.append(prev[path[-1]])
+    path.reverse()
+    half = 'north' if w[1] <= 8 else 'south'
+    return path[1:], half, best[0]
+
+
+def _cl_zap_dig(castle, n, path):
+    """A known wand of digging with a charge to spare tunnels the straight run of walls ahead in one zap (zap.c zap_dig:
+    through every diggable wall until its range, 8..25, runs out; the castle map itself is NON_DIGGABLE and stops it).
+    True: zapped."""
+    agent = castle.agent
+    wand = next((i for i in castle._items() if castle._usable_wand(i, 'digging')), None)
+    if wand is None:
+        return False
+    m = re.search(r'\(\d+:(\d+)\)', wand.text or '')
+    if m and int(m.group(1)) < 2:
+        return False   # (keep the last charge: the back door, LIFT_DOOR_RAYS/door_names)
+    pos = castle._pos()
+    d = (int(n[0] - pos[0]), int(n[1] - pos[1]))
+    if d[0] and d[1]:
+        return False
+    walls = 0
+    cur = (int(pos[0]), int(pos[1]))
+    for sq in path:
+        if (sq[0] - cur[0], sq[1] - cur[1]) != d:
+            break
+        if _cl_kind(castle, *sq) in ('wall', 'unknown'):
+            walls += 1
+        cur = sq
+    if walls < 2 or castle._tries.get('cl_zapdig', 0) >= 3:
+        return False
+    castle._tries['cl_zapdig'] = castle._tries.get('cl_zapdig', 0) + 1
+    y, x = to_bot(*n)
+    direction = agent.calc_direction(agent.blstats.y, agent.blstats.x, y, x)
+    castle._set_state(f'cl route: zapping {wand.text!r} {direction} through {walls} walls')
+    agent.zap(wand, direction)
+    _log(castle, f'cl route: zap dig {direction} from {pos}: {agent.message[:90]!r}')
+    if 'Nothing happens' in agent.message or 'You wrest' in agent.message:
+        agent.inventory.empty_wands.add(wand.text)
+    agent.last_bfs_step = -1
+    return True
+
+
+def _cl_note_sea(castle):
+    """Sea monsters seen on moat squares within 3 of us: square -> turn (cl_route's entry costs)."""
+    agent = castle.agent
+    seen = castle._tries.setdefault('cl_sea_seen', {})
+    pos = castle._pos()
+    for dx in range(-3, 4):
+        for dy in range(-3, 4):
+            p = (int(pos[0]) + dx, int(pos[1]) + dy)
+            if map_char(*p) == '}' and not castle._dry(*p) and castle._monster_at(*p):
+                seen[p] = agent.blstats.time
+
+
+def cl_route_step(castle, on_foot=False, goals=None):
+    """CL_ROUTE: one step, dig or zap along cl_route. True: acted; None: no plan (the caller's old way); 'launch' (on
+    foot): the next step would be the water -- we stand on the launch square."""
+    agent = castle.agent
+    t = castle._tries
+    pos = castle._pos()
+    now = agent.blstats.time
+    if form_permonst(agent) is not None:
+        # a polymorph form: castle_power's (castle-poly) way, as without CL_ROUTE -- cl-best-old cfpf-s4's green mold
+        # 'walked' in place until it starved, and cl-fix5 cfpf-s4 walked its 29-HP energy vortex into a panther in the
+        # maze where base waited the form out and passed on the forms that followed
+        return None
+    # no progress: the same square for 8 route steps -> no route for 20 turns (the caller's old way, whose stuck count
+    # hands over to castle_power's re-polymorph / castle_logic)
+    key = tuple(int(v) for v in pos)
+    if t.get('cl_same_pos') == key:
+        t['cl_same_n'] = t.get('cl_same_n', 0) + 1
+    else:
+        t['cl_same_pos'] = key
+        t['cl_same_n'] = 0
+    if now < t.get('cl_route_off_until', -1):
+        return None
+    if t['cl_same_n'] >= 8:
+        t['cl_same_n'] = 0
+        t['cl_route_off_until'] = now + 20
+        _log(castle, f'cl route: no progress at {key}: off for 20 turns')
+        return None
+    _cl_note_sea(castle)
+    plan = cl_route(castle, goals=goals)
+    if plan is None and goals is not None:
+        plan = cl_route(castle)
+    if plan is None:
+        return None
+    path, half, cost = plan
+    n = path[0]
+    if t.get('cl_route_logged') != path[-1]:
+        t['cl_route_logged'] = path[-1]
+        _log(castle, f'cl route: from {pos} to the moat at {path[-1]} ({half}), ~{cost:.0f} turns: {path}')
+    if map_char(*n) == '}' and on_foot:
+        return 'launch'
+    if map_char(*n) == '}':
+        castle._half = half
+        if castle._monster_at(*n):
+            blocked = t.setdefault('cl_blocked', {})
+            blocked[n] = blocked.get(n, 0) + 1
+        castle._set_state(f'cl route: onto the moat at {n}')
+        castle._step_to(*n)
+        return True
+    if castle._monster_at(*n):
+        if not t.get('wielded'):
+            t['wielded'] = 1
+            if agent.wield_best_melee_weapon():
+                return True
+        castle._set_state(f'cl route: attacking what blocks {n}')
+        castle._step_to(*n)
+        return True
+    k = _cl_kind(castle, *n)
+    y, x = to_bot(*n)
+    g = agent.glyphs[y, x]
+    level = agent.current_level()
+    if k in ('wall', 'boulder') or (k == 'unknown' and (g in G.WALL or g in G.STONE)):
+        if not _cl_can_dig(castle):
+            # no pick we can swing: remember the wall, the next plan goes round it
+            level.walkable[y, x] = False
+            level.objects[y, x] = SS.S_vwall
+            t[('cl_wall', n)] = 1
+            return True
+        if k != 'boulder' and _cl_zap_dig(castle, n, path):
+            return True
+        key = ('cl_dig', n)
+        if t.get(key, 0) >= 5:
+            level.walkable[y, x] = False
+            return None
+        t[key] = t.get(key, 0) + 1
+        castle._set_state(f'cl route: digging {n}')
+        if not _dig(castle, n):
+            return True   # (_dig noted a form that can't hold the pick: cfp_nodig -> the next plan walks)
+        return True
+    castle._set_state(f'cl route: to {n}')
+    before = castle._pos()
+    castle._step_to(*n)
+    if castle._pos() == before and not castle._monster_at(*n):
+        # the move didn't happen (an unseen wall): treat it as wall from now on
+        key = ('cl_nomove', n)
+        t[key] = t.get(key, 0) + 1
+        if t[key] >= 2:
+            level.walkable[y, x] = False
+            level.objects[y, x] = SS.S_vwall
+    return True
+
+
+# ------------------------------------------------------------------------------------------------ CL_LAUNCH
+#
+# castle-lift: the kit's lifts are tried ON the launch square, not where we landed. On foot the hero walks/digs
+# cl_route's way to the land square next to the chosen far channel entry, writes Elbereth there and only then tries
+# the unknown rings and the potions that may be levitation; a lift steps straight onto the water. Why (the harness
+# lift suite, 45 real kits x 10 salts, cl-t10-*): (1) crossings that reach the moat within 30 turns of the landing
+# pass far more often (far entries 59/157 vs 12/82 after 60 turns: the throne room's xorns reach the west towers'
+# walls after ~30 turns), and a potion found in the maze burned ~15 turns of its 10-149 afloat on the way to the water;
+# (2) the channel's shark waits at the water square next to the hero, and 26 floating heroes died on the launch square
+# fighting it (cl-t10-rt) -- a sea monster next to our Elbereth is scared (monmove.c distfleeck: monflee rnd(10), no
+# attack) and keeps fleeing for a few turns after we step off it; (3) on foot we can write Elbereth for the tests
+# (a potion of sleeping or paralysis: 25-34 helpless turns).
+
+CL_LAUNCH_KEEP = 8.0   # a new plan replaces the kept launch target only when it is this much cheaper
+
+
+def _cl_lift_potions(castle):
+    from .power_route import known_cursed
+    return [p for p in potion_candidates(castle) if 'levitation' in _names(p) and not known_cursed(p)]
+
+
+def _cl_launch_target(castle):
+    """(L, W, path) -- the launch square L (land, next to the entry W) and cl_route's path to W from here, kept from step
+    to step unless a new plan is CL_LAUNCH_KEEP cheaper or the kept entry is blocked. None: no way to the water."""
+    t = castle._tries
+    plan = cl_route(castle)
+    if plan is None:
+        return None
+    path, half, cost = plan
+    cur = t.get('cl_launch')
+    if cur is not None and cur != path[-1] and t.setdefault('cl_blocked', {}).get(cur, 0) < 2:
+        keep = cl_route(castle, goals={cur})
+        if keep is not None and keep[2] <= cost + CL_LAUNCH_KEEP:
+            path, half, cost = keep
+    w = path[-1]
+    t['cl_launch'] = w
+    land = path[-2] if len(path) >= 2 else tuple(int(v) for v in castle._pos())
+    return land, w, path
+
+
+def cl_launch_plan(castle):
+    """CL_LAUNCH, not floating (see the section comment): ('cl_walk', goals), ('cl_elbereth',), ('lift', kind, item),
+    ('cl_potion', item), ('cl_wait',) or None (no lift left to try here, a fight next to us, no way to the water)."""
+    agent = castle.agent
+    bl = agent.blstats
+    t = castle._tries
+    cands = lift_candidates(castle)
+    pots = _cl_lift_potions(castle)
+    if not cands and not pots:
+        return None
+    if t.get('cl_launch_off') or t.get('cl_launch_steps', 0) > 400:
+        return None
+    tgt = _cl_launch_target(castle)
+    if tgt is None:
+        return None
+    land, w, path = tgt
+    pos = tuple(int(v) for v in castle._pos())
+    prop = agent.character.prop
+    ignorers = [m for m in agent.get_visible_monsters()
+                if max(abs(m[1] - bl.y), abs(m[2] - bl.x)) <= 3 and castle.dive._ignores_elbereth(m[3]) and
+                not _wet(castle, *_to_map(m[1], m[2]))]
+    if pos != land:
+        if _land_hostiles_within(castle, 1) or ignorers or prop.confusion or prop.stun:
+            return None   # a fight: the usual layers (fight2, the scare hold, MINO_GUARD)
+        if bl.hitpoints < 0.4 * bl.max_hitpoints and t.get('cl_launch_rest', 0) < 150:
+            return ('cl_wait',)
+        return ('cl_walk', {w})
+    # on the launch square
+    engraving = (agent.inventory.engraving_below_me or '').lower()
+    if engraving != 'elbereth' and agent.can_engrave() and t.get('cl_launch_elb', 0) < 12:
+        return ('cl_elbereth',)
+    if ignorers or prop.confusion or prop.stun:
+        return None
+    if cands:
+        return ('lift',) + cands[0]
+    if bl.hitpoints < 0.4 * bl.max_hitpoints and t.get('cl_launch_rest', 0) < 150:
+        return ('cl_wait',)
+    if prop.hallu and not jf_config.BREACH_NOWAIT:
+        return ('cl_wait',) if t.get('cl_launch_rest', 0) < 150 else None
+    return ('cl_potion', pots[0])
+
+
 def _land_hostiles_within(castle, r):
     agent = castle.agent
     bl = agent.blstats
@@ -913,8 +1635,9 @@ def _in_room(mx, my, pad=0):
     return any(x0 - pad <= mx <= x1 + pad and y0 - pad <= my <= y1 + pad for x0, y0, x1, y1 in DANGER_ROOMS)
 
 
-def _xorn_path(castle, start):
-    """Cheapest way for a wall-walker from start to a trap door (40..55,08): through walls, doors and rock, around the
+def _xorn_path(castle, start, goals=None, blocked=(), moat_cost=20, moat_side_cost=4):
+    """Cheapest way for a wall-walker from start to a trap door (40..55,08) -- or to `goals` (CASTLE_TREASURY: the
+    tower cells), never through `blocked` (the trap doors on the way there): through walls, doors and rock, around the
     rooms with monsters (a xorn in the wall beside a room is in reach of it) and well away from the moat. The solid
     stone above and below the castle map (level rows 1-2 and 20, map y -2..-1 and 17; bound_digging makes it
     undiggable, not unpassable: hack.c may_passwall only refuses W_NONPASSWALL, which castle.des never sets) runs the
@@ -935,18 +1658,19 @@ def _xorn_path(castle, start):
         elif _in_room(mx, my, pad=1):
             c += 12
         if map_char(mx, my) == '}':
-            c += 20
+            c += moat_cost
         elif any(map_char(mx + dx, my + dy) == '}' for dx, dy in DIRS8):
             # beside the moat: its sharks and eels bite into the wall (harness cfp-xorn1 lost 36 of 44 form HP along
             # row 2, next to the moat's row 1; the corridor on row 3 has walls on both sides)
-            c += 4
+            c += moat_side_cost
         if p in mons:
             c += 60
         elif any((mx + dx, my + dy) in mons for dx, dy in DIRS8):
             c += 8
         return c
 
-    goals = set(TRAPDOORS)
+    goals = set(TRAPDOORS if goals is None else goals)
+    blocked = set(blocked)
     dist = {start: 0}
     prev = {}
     heap = [(0, start)]
@@ -962,6 +1686,8 @@ def _xorn_path(castle, start):
         for dx, dy in DIRS8:
             n = (p[0] + dx, p[1] + dy)
             if not (-8 <= n[0] <= 70 and -2 <= n[1] <= 17):
+                continue
+            if n in blocked:
                 continue
             nd = d + cost(n)
             if nd < dist.get(n, 1 << 30):
@@ -993,8 +1719,20 @@ def xorn_strategy(dive):
         same = 0
         while steps < 600 and wallwalker(agent) and agent.current_level().key() == castle.castle_key:
             steps += 1
+            # CASTLE_TREASURY (castle_treasury.py, from vlomshakov f84a81b): first through the walls to the four tower
+            # cells, whose chest holds the castle's wand of wishing (castle.des) -- a bounded detour that hands back
+            # to this walk on success or failure
+            if jf_config.CASTLE_TREASURY:
+                from . import castle_treasury
+                if castle_treasury.step(castle):
+                    continue
             pos = castle._pos()
-            path = _xorn_path(castle, pos)
+            if jf_config.CASTLE_TREASURY and getattr(castle, '_treasury', None) is not None:
+                # after the tower detour: the way on from an east tower runs along the corner moat (real arm jf16 s0:
+                # the wand in hand, 38 -> 15 form HP at (55,1) beside it in 2 turns); inside the castle instead
+                path = _xorn_path(castle, pos, moat_cost=60, moat_side_cost=20)
+            else:
+                path = _xorn_path(castle, pos)
             if not path or len(path) < 2:
                 _log(castle, f'xorn: no way to a trap door from {pos}')
                 agent.search()
@@ -1738,6 +2476,21 @@ def known_rush_strategy(dive):
                 return
             lift = _known_lasting_lift(castle)
             ring = _early_ring(castle) if lift is None and jf_config.LIFT_EARLY_RINGS else None
+            if lift is None and ring is None and jf_config.CL_SENSE and not castle.levitating() and \
+                    (_cl_lift_potions(castle) or lift_candidates(castle)):
+                # castle-lift CL_SENSE: a kit with lifts to test listens for the castle's doors instead of digging the
+                # recognition pit (+6 turns median to 'too hard to dig', then a pit to climb out of): the lift tests
+                # start as soon as a door sound confirms the castle, and crossings that reach the moat within 30
+                # turns of the landing pass far more often (lift suite: 59/157 vs 12/82 after 60 turns)
+                yield True
+                marked = key not in dive.undiggable
+                dive.undiggable.add(key)
+                h0 = max(0, len(agent._message_history) - 2)
+                st[key] = {'state': 'listen', 't0': now, 'ta': now, 'h0': h0, 'marked': marked}
+                _log(castle, f'cl sense: listening for the castle at depth {agent.blstats.depth} '
+                             f'(bot x {agent.blstats.x}, Medusa {dive.medusa_level})')
+                agent.search()
+                return
             if (lift is None and ring is None) or castle.levitating():
                 st[key] = {'state': 'done'}
                 yield False
@@ -1763,6 +2516,36 @@ def known_rush_strategy(dive):
             _log(castle, f'known lift: {kind} {item.text!r} on at once at depth {agent.blstats.depth} '
                          f'(bot x {agent.blstats.x}, Medusa {dive.medusa_level})')
             castle._try(kind, item)
+            return
+        if entry.get('state') == 'listen':
+            heard = [m for m in agent._message_history[entry['h0']:] + [agent.message or '']
+                     if any(s in m for s in DOOR_SOUNDS)]
+            if heard or castle.castle_key == key:
+                entry['state'] = 'done'
+                if castle.castle_key != key:
+                    inv = '; '.join(f'{agent.inventory.items.get_letter(i)} - {i.text}'
+                                    for i in agent.inventory.items.all_items)
+                    _log(castle, f'cl sense: {heard[0][:60]!r} +{now - entry["t0"]}: the castle')
+                    # (the line the dig failure writes: the kit tools read the castle kit from it)
+                    agent.log(f'DIVE bottom reached at depth {agent.blstats.depth}; inventory: {inv}')
+                    castle.on_bottom(key)
+                dive.undiggable.add(key)
+                yield False
+                return
+            if now >= entry['t0'] + LIFT_LISTEN:
+                entry['state'] = 'done'
+                if entry.get('marked'):
+                    dive.undiggable.discard(key)
+                _log(castle, f'cl sense: no door sound in {now - entry["t0"]} turns at depth {agent.blstats.depth}: '
+                             f'digging as usual')
+                yield False
+                return
+            if [m for m in agent.get_visible_monsters()
+                    if max(abs(m[1] - agent.blstats.y), abs(m[2] - agent.blstats.x)) <= 1]:
+                yield False   # something next to us: the usual layers deal with it (we keep listening)
+                return
+            yield True
+            agent.search()
             return
         if entry.get('state') == 'rings':
             if castle.levitating():

@@ -60,6 +60,8 @@ WISH_OBJECTS = {WISH_LEV_RING: LEV_RING, WISH_LS: LS_AMULET, WISH_SPEED: SPEED_B
 # WISH_TELEPORT_ROUTE (tele_route.py): a ring of teleport control and cursed scrolls of teleportation
 WISH_OBJECTS.update({tele_route.WISH_TC_RING: tele_route.TC_RING, tele_route.WISH_TELE_SCROLLS: tele_route.TELE_SCROLL,
                      tele_route.WISH_CHARGING: tele_route.CHARGING_SCROLL})
+# ROUTE_GLOVES_FIX: only ever asked for with the flag on (tele_route.route_wish), so the entry is inert otherwise
+WISH_OBJECTS[tele_route.WISH_REMOVE_CURSE] = tele_route.REMOVE_CURSE
 
 
 def _prob(obj):

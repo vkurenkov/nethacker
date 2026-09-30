@@ -41,6 +41,12 @@ WISH_TELE_SCROLLS = '2 cursed scrolls of teleportation'
 # WISH_CHARGING_FIRST: one scroll recharges the wand; the second is a spare (a lost one, the castle's own wand)
 CHARGING_SCROLL = O.from_name('charging', nh.SCROLL_CLASS)
 WISH_CHARGING = '2 blessed scrolls of charging'
+# ROUTE_GLOVES_FIX: do_wear.c puts a ring on under uncursed gloves, but cursed gloves ('You cannot remove your gloves
+# to put on the ring.') or a welded weapon block it without using a move -- the ring step looped (front-strong
+# fs7-k6 s9: 385k steps after the castle wand). A blessed scroll of remove curse uncurses the whole pack.
+REMOVE_CURSE = O.from_name('remove curse', nh.SCROLL_CLASS)
+WISH_REMOVE_CURSE = 'blessed scroll of remove curse'
+PUTON_BLOCKED = ('cannot remove your gloves', 'cannot free your weapon hand')
 MAX_WREST_ZAPS = 500       # P(no wrest in 500 zaps) = (120/121)^500 ~ 1.6%
 
 DUNGEONS_OF_DOOM, GEHENNOM = 0, 1
@@ -109,6 +115,8 @@ def note_asked(agent, text):
     """The wish prompt was answered with `text` (power.note_wish)."""
     if text == WISH_CHARGING:
         agent._charging_asked = True
+    elif text == WISH_REMOVE_CURSE:
+        agent._remove_curse_asked = True
 
 
 def _wand_source(agent):
@@ -140,9 +148,23 @@ def route_wish(agent):
         # of them cursed, which the castle gamble / identify / altar tests turn into jumps; power-route's estimate
         # of P(score > 0.647): TC ring 8-10%, levitation ring ~5%, gray dragon scale mail ~1%
         return WISH_TC_RING if (_wand_source(agent) or jf_config.TC_ROUTE) else None
+    if jf_config.ROUTE_GLOVES_FIX and getattr(agent, '_tele_puton_blocked', False) and \
+            not getattr(agent, '_remove_curse_asked', False) and remove_curse_scroll(agent) is None:
+        return WISH_REMOVE_CURSE
     scrolls = tele_scrolls(agent)
     if scrolls is None or scrolls.count < 2:
         return WISH_TELE_SCROLLS
+    return None
+
+
+def remove_curse_scroll(agent):
+    """ROUTE_GLOVES_FIX: the stack the remove curse wish went to."""
+    letter = getattr(agent, '_remove_curse_letter', None)
+    if letter is None:
+        return None
+    for it in _items(agent):
+        if agent.inventory.items.get_letter(it) == letter and it.category == nh.SCROLL_CLASS:
+            return it
     return None
 
 
@@ -153,6 +175,9 @@ def note_wished(agent, text, letter):
     elif text == WISH_CHARGING:
         agent._charging_letter = letter
         agent.log(f'TELEPORT route: blessed scrolls of charging at {letter!r}')
+    elif text == WISH_REMOVE_CURSE:
+        agent._remove_curse_letter = letter
+        agent.log(f'TELEPORT route: blessed remove curse at {letter!r}')
 
 
 def _read_charging(agent, wand, scroll):
@@ -174,10 +199,23 @@ def _read_charging(agent, wand, scroll):
     agent.inventory.items.update(force=True)
 
 
+def _wallwalker_ok(agent):
+    """CASTLE_TREASURY: a wall-walking form runs the route too -- the xorn that took the castle's wand of wishing has
+    hands, eyes and fingers (monst.c: no M1_NOHANDS/NOEYES/NOLIMBS), so it zaps, reads and puts the ring on, and the
+    Valley below is where its form would run out before the route could start."""
+    if not jf_config.CASTLE_TREASURY:
+        return False
+    try:
+        from . import castle_cross
+        return castle_cross.wallwalker(agent)
+    except Exception:
+        return False
+
+
 def teleport_route_strategy(agent):
     def f():
         if not jf_config.WISH_TELEPORT_ROUTE or getattr(agent, '_tele_route_done', False) or \
-                agent.character.prop.polymorph:
+                (agent.character.prop.polymorph and not _wallwalker_ok(agent)):
             yield False
             return
         bl = agent.blstats
@@ -190,7 +228,32 @@ def teleport_route_strategy(agent):
         near = [m for m in agent.get_visible_monsters() if max(abs(m[1] - bl.y), abs(m[2] - bl.x)) <= 3]
 
         # 1) wear the ring of teleport control (the prompt needs it on; a cursed one staying on is fine)
-        if ring is not None and not ring.equipped:
+        blocked = jf_config.ROUTE_GLOVES_FIX and getattr(agent, '_tele_puton_blocked', False)
+        if blocked and ring is not None and not ring.equipped and remove_curse_scroll(agent) is None and \
+                getattr(agent, '_remove_curse_asked', False) and not getattr(agent, '_puton_retried', False):
+            # the scroll is gone (read by us or by another strategy -- power_route's castle gamble reads unknown
+            # scrolls): try the ring once more
+            agent._puton_retried = True
+            agent._tele_puton_blocked = blocked = False
+        if ring is not None and not ring.equipped and blocked:
+            rc = remove_curse_scroll(agent)
+            if rc is not None:
+                yield True
+                rl = agent.inventory.items.get_letter(rc)
+                agent.log(f'TELEPORT route: reading {rc.text!r} ({rl}): the ring is blocked')
+                with agent.atom_operation():
+                    agent.step(A.Command.READ)
+                    agent.type_text(rl)
+                agent.log(f'TELEPORT route: remove curse -> {agent.message[:120]!r}')
+                agent._tele_puton_blocked = False
+                agent._remove_curse_letter = None
+                agent.inventory.items.update(force=True)
+                return
+            if route_wish(agent) != WISH_REMOVE_CURSE or wand is None:
+                yield False   # nothing left to lift the curse: no loop on a put-on that takes no time
+                return
+            # else: on to step 2, which zaps the wand for the remove curse
+        elif ring is not None and not ring.equipped:
             worn = [i for i in _items(agent) if i.category == nh.RING_CLASS and i.equipped]
             if len(worn) >= 2:
                 agent.log('TELEPORT route: both ring fingers busy, cannot put the ring of teleport control on')
@@ -209,6 +272,9 @@ def teleport_route_strategy(agent):
             agent.log(f'TELEPORT route: putting on {ring.text!r}')
             with agent.atom_operation():
                 agent.step(A.Command.PUTON, gen())
+            if jf_config.ROUTE_GLOVES_FIX and any(w in (agent.message or '') for w in PUTON_BLOCKED):
+                agent.log(f'TELEPORT route: the ring is blocked: {agent.message[:120]!r}')
+                agent._tele_puton_blocked = True
             agent.inventory.items.update(force=True)
             return
 
