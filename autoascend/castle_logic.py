@@ -178,6 +178,7 @@ class CastlePassage:
         self._held_turn = None         # last turn a sea monster held us ('swings itself around you')
         self._resting = False          # a rest stop on the way across (lift off, Elbereth, search)
         self._last_dnum = None         # dungeon of the previous step (Gehennom -> Dungeons: the castle)
+        self._last_depth = None        # depth of the previous step (VALLEY_LOTTERY: one level up from the Valley)
         self._half = 'north'           # CASTLE_SEA_SWITCH: the way round ('north' | 'south')
         self._sea = {}                 # CASTLE_SEA_SWITCH: moat square -> last turn a monster was seen on it
         self._sea_retreat = False      # CASTLE_SEA_SWITCH: backing out of a held channel to the courtyard
@@ -197,7 +198,11 @@ class CastlePassage:
         Valley's '<' is its only way up), even if we never dug into its west side."""
         level = self.agent.current_level()
         dnum = level.dungeon_number
-        if self._last_dnum == 1 and dnum == Level.DUNGEONS_OF_DOOM:
+        depth = self.agent.blstats.depth
+        # (VALLEY_LOTTERY: a random level teleport from the Valley lands on any Dungeons level 1..V-1 -- the castle only
+        # when one level up, as the '<' goes; vw-lot6-dev jf14-s8 ran the castle gamble on Dlvl 9)
+        if self._last_dnum == 1 and dnum == Level.DUNGEONS_OF_DOOM and \
+                (not jf_config.VALLEY_LOTTERY or self._last_depth is None or depth == self._last_depth - 1):
             self.castle_key = level.key()
             self.given_up = False
             self._tries = {}
@@ -205,6 +210,11 @@ class CastlePassage:
             self._stuck = 0
             self._log(f'back from Gehennom: {level.key()} (depth {self.agent.blstats.depth})')
         self._last_dnum = dnum
+        self._last_depth = depth
+        if getattr(self.dive, '_scenario_castle', False) and self.castle_key is None and \
+                dnum == Level.DUNGEONS_OF_DOOM and self.agent.blstats.depth >= 25:
+            # dev harness only (jf_scenario 'castle_known'): the arena never sets it
+            self.on_bottom(level.key())
 
     def _maybe_resume(self):
         """BREACH_RESUME: a passage given up for want of a way across comes back once one turns up (a wand of cold
@@ -417,11 +427,18 @@ class CastlePassage:
         self._tested.add(item.glyphs[0])
         nxt = ROUTE[ROUTE_INDEX[CORNER] + 1]
         d = agent.calc_direction(agent.blstats.y, agent.blstats.x, *to_bot(*nxt))
-        with agent.atom_operation():
-            agent.step(A.Command.APPLY)
-            agent.type_text(agent.inventory.items.get_letter(item))
-            if 'In what direction?' in agent.single_message:
-                agent.direction(d)
+        if jf_config.HORN_SCARE:
+            # music.c do_play_instrument asks 'Improvise? [ynq]' first: the keys below answered it with the
+            # direction's letter ('n' -> the tune prompt -> 'Never mind.', cmp-main0-jf44 s0) and no horn was ever
+            # blown here; opp_items.play answers y, then the direction a frost horn asks
+            from . import opp_items
+            opp_items.play(agent, item, d)
+        else:
+            with agent.atom_operation():
+                agent.step(A.Command.APPLY)
+                agent.type_text(agent.inventory.items.get_letter(item))
+                if 'In what direction?' in agent.single_message:
+                    agent.direction(d)
         self._log(f'blew {item.text!r} {d}: {agent.message!r}')
         if self._dry(*nxt) and map_char(*nxt) == '}':
             self._cold_glyphs.add(item.glyphs[0])
@@ -1224,6 +1241,16 @@ class CastlePassage:
             self._set_state('resting before the crossing')
             agent.search(5)
             return True
+        if jf_config.LIFT_POTION_HP and kind == 'potion' and \
+                bl.hitpoints < jf_config.LIFT_POTION_HP * bl.max_hitpoints and not self._hostiles_near(2) and \
+                self._tries.get('potion_rest', 0) < 400:
+            # lift-ready: a potion that turns out to be levitation floats us at once into the west channel (shark, eel,
+            # the tower wall's xorns: 40 of 66 failed crossings died there, F065): not at low HP. cmp-main jf40-s5 quaffed
+            # its potion of levitation at 29/71 HP on the Elbereth square and died two squares into the channel.
+            self._tries['potion_rest'] = self._tries.get('potion_rest', 0) + 1
+            self._set_state('resting before the potion tests')
+            agent.search(5)
+            return True
         if kind == 'potion' and self._hostiles_near(6) and self._tries.get('potion_wait', 0) < 20:
             # a potion may put us to sleep or paralyse us: not with a hostile about (fight2 deals with it)
             self._tries['potion_wait'] = self._tries.get('potion_wait', 0) + 1
@@ -1359,8 +1386,14 @@ class CastlePassage:
         msg = agent.message
         if 'swings itself around you' in msg or 'cannot escape from' in msg:
             self._held_turn = agent.blstats.time
-        if self._held_turn is not None and agent.blstats.time - self._held_turn <= 3 and self._attack_holder():
-            return
+        if self._held_turn is not None and agent.blstats.time - self._held_turn <= 3:
+            if jf_config.CFP_EEL:
+                # castle-first-pass: on foot a held hero writes Elbereth (the holder lets go), see castle_cross
+                from . import castle_cross
+                if castle_cross.held_elbereth(self):
+                    return
+            if self._attack_holder():
+                return
         if self._stuck > 80:
             self._give_up(f'no progress at {pos}')
             agent.search()
@@ -1632,7 +1665,13 @@ class CastlePassage:
                 self._set_state('Elbereth at the back door')
                 agent.engrave('Elbereth')
                 return
-        for name in ('striking', 'digging', 'opening'):
+        door_names = ('striking', 'digging', 'opening')
+        if jf_config.LIFT_DOOR_RAYS and not (self.levitating() and self._timed_levitation()):
+            # lift-ready: fire / lightning / cold rays break a closed door too (castle_cross.door_wands) -- not while a
+            # potion's levitation still holds us up: an open door took harness lift-dr2 heroes to hover over the trap
+            # door inside, where the castle's own monsters came (4 of 14 died there vs waiting at SAFE_EAST)
+            door_names += ('fire', 'lightning', 'cold')
+        for name in door_names:
             wand = next((i for i in self._items() if self._usable_wand(i, name)), None)
             if wand is not None and tries.get(name, 0) < 2:
                 tries[name] = tries.get(name, 0) + 1
@@ -1671,6 +1710,11 @@ class CastlePassage:
             self._set_state('coming down to kick the door')
             self._stop_levitating()
             return
+        if jf_config.CFP_EEL:
+            # castle-first-pass: the eels next to this square before the kick that wakes them (see castle_cross)
+            from . import castle_cross
+            if castle_cross.door_sea_fight(self):
+                return
         if jf_config.BREACH_DOOR:
             # on Elbereth only what ignores it is worth a blow (hitting a scared monster erases it: mon.c setmangry)
             near = [m for m in self._hostiles_near(1) if self.dive._ignores_elbereth(m[3])]

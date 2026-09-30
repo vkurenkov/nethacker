@@ -64,7 +64,13 @@ class Item:
                 (isinstance(self.objs[0], (O.Weapon, O.WepTool)) and self.status == Item.CURSED and self.equipped) or
                 (isinstance(self.objs[0], O.Armor) and self.equipped) or
                 (self.is_unambiguous() and self.object == O.from_name('loadstone') and self.status == Item.CURSED) or
-                (self.category == nh.BALL_CLASS and self.equipped)
+                (self.category == nh.BALL_CLASS and self.equipped) or
+                # WORN_KEEP (ledger B019): a worn ring / amulet / blindfold can't be dropped either ('You cannot drop
+                # something you are wearing.', no game time) -- arrange_items dropped the worn ring of teleport control
+                # in a loop, ~700 steps per game turn, 850 turns in 20 wall minutes (sd-id-C public-s7~1)
+                (jf_config.WORN_KEEP and self.equipped and
+                 (self.category in (nh.RING_CLASS, nh.AMULET_CLASS) or
+                  (self.category == nh.TOOL_CLASS and not isinstance(self.objs[0], O.WepTool))))
         )
 
     def weight(self, with_content=True):

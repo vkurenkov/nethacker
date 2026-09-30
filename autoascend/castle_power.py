@@ -120,9 +120,57 @@ def _engrave_test(passage, item):
 
 def _untested_wands(agent):
     im = agent.inventory.item_manager
+    inv = agent.inventory
     return [i for i in agent.inventory.items if i.is_wand() and not i.is_unambiguous() and len(i.glyphs) == 1
-            and i.glyphs[0] not in im._already_engraved_glyphs and i.comment != 'EMPT' and
-            not agent.inventory.is_known_empty(i)]
+            and (i.glyphs[0] not in im._already_engraved_glyphs or inv.wand_retest_wanted(i)) and
+            i.comment != 'EMPT' and not agent.inventory.is_known_empty(i)]
+
+
+M1_NOEYES = 0x1000
+
+
+def unusable_form(passage):
+    """LIFT_POLY_PICKY: our polymorph form 'crosses water' but can't make the crossing -- the permonst, or None.
+    Eyeless forms are blind for their whole life (global_logic waited the blindness out: amd cfph-s6's black light
+    stood 43 turns in the west maze, harness lift-fly1 s0 300 turns), sessile ones (brown mold: mmove 0, cfpf-s1)
+    can't move, and a form without hands can't apply the pick through the west maze's walls (castle_cross._dig:
+    'You can't hold it strongly enough.' -- cfpf-s4's energy vortex: 'rush stuck' and 740 turns in the maze)."""
+    from . import castle_cross
+    agent = passage.agent
+    form = castle_cross.form_permonst(agent)
+    if form is None:
+        return None
+    crossing = crosses(form) or castle_cross.amphibious(passage) or castle_cross.wallwalker(agent)
+    if not crossing:
+        return None   # (a form that doesn't cross is the old self-zap loop's business)
+    if form.mflags1 & M1_NOEYES or getattr(form, 'mmove', 1) <= 0:
+        return form
+    if passage._tries.get('cfp_nodig') == form.mname and passage._pos() not in _west_courtyard():
+        return form
+    return None
+
+
+def _west_courtyard():
+    from .castle_logic import WEST_COURTYARD
+    return WEST_COURTYARD
+
+
+def _repoly_step(passage):
+    """LIFT_POLY_PICKY: a crossing form that can't make the crossing (unusable_form) zaps the wand of polymorph again (a
+    form's death only returns us to our own form, and 48% of the 278 polyok forms fly, swim, breathe water or walk
+    walls: monst.c, lift-ready polyforms.py). True: acted."""
+    t = passage._tries
+    form = unusable_form(passage)
+    if form is None:
+        return False
+    wand = _poly_wand(passage.agent)
+    if wand is None or t.get('pw_polyzaps', 0) >= 12:
+        return False
+    t['pw_polyzaps'] = t.get('pw_polyzaps', 0) + 1
+    why = 'eyeless' if form.mflags1 & M1_NOEYES else ('sessile' if getattr(form, 'mmove', 1) <= 0 else "can't dig")
+    passage._log(f'lift: the {form.mname} form crosses water but is {why}: zapping the wand of polymorph again')
+    _zap_self(passage, wand)
+    return True
 
 
 def arrival_step(passage):
@@ -131,6 +179,8 @@ def arrival_step(passage):
     drill, poly = jf_config.CASTLE_ARRIVAL_DRILL, jf_config.CASTLE_POLY
     if not (drill or poly):
         return False
+    if poly and jf_config.LIFT_POLY_PICKY and _repoly_step(passage):
+        return True
     if passage._floating():
         return False   # castle_logic takes a floating hero to the corner (CASTLE_WEST_DIG digs through the maze)
     t = passage._tries
@@ -321,6 +371,111 @@ def zap_breach_wand(agent, wand, why, target, direction):
     agent.inventory.items.update(force=True)
 
 
+# ---------------------------------------------------------------------------------------------- zap value (B018)
+# STOPPER_FIX (ledger B018, minotaur lane): which wand to zap at a monster, from what each possible wand type would do to
+# THAT monster (its resistances, zap.c) and to us if the ray comes back (a Valkyrie has no sleep resistance). mm-g3-jf14
+# s6: deep_poly_escape zapped a wand the engrave test had narrowed to {sleep, death} at a master lich (sleep resistant,
+# undead: death does nothing), the ray bounced and put us to sleep, a plains centaur killed us 6 turns later.
+MR_FIRE, MR_COLD, MR_SLEEP, MR_ELEC = 0x01, 0x02, 0x04, 0x10          # monflag.h mresists
+M2_UNDEAD, M2_DEMON = 0x2, 0x100
+S_VORTEX, S_GOLEM = 22, 55                                           # monsym.h (weirdnonliving)
+_MAGM_NAMES = frozenset(('gray dragon', 'baby gray dragon', 'Angel', 'Aleax', 'Chromatic Dragon', 'Oracle',
+                         'Yeenoghu'))                                # mondata.c resists_magm by kind (not items)
+# what the zap does to a monster that doesn't resist it (1 = the fight is over), and its bounce to us
+_ZAP_GOOD = {'teleportation': 1.0, 'sleep': 1.0, 'death': 1.0, 'polymorph': 0.7, 'cold': 0.35, 'fire': 0.35,
+             'lightning': 0.35, 'slow monster': 0.25, 'striking': 0.2, 'magic missile': 0.15}
+_ZAP_BAD = {'speed monster': 0.6, 'make invisible': 0.4, 'create monster': 0.4}
+_ZAP_SELF = {'death': 1.0, 'sleep': 0.6, 'lightning': 0.2, 'fire': 0.15, 'magic missile': 0.05}   # cold: Valkyrie
+_RESIST_ROLL = ('sleep', 'polymorph', 'slow monster')   # zap.c resist(): rn2(100 + 12 - level) < mr for a wand
+
+
+def _mlet(mon):
+    m = getattr(mon, 'mlet', '')
+    return ord(m) if isinstance(m, str) and len(m) == 1 else m if isinstance(m, int) else -1
+
+
+def zap_effect(mon, name):
+    """Fraction of type `name`'s _ZAP_GOOD effect a zap delivers to monster kind `mon` (permonst; an unknown
+    'I' monster resists nothing we know of)."""
+    res = int(getattr(mon, 'mresists', 0) or 0)
+    f2 = int(getattr(mon, 'mflags2', 0) or 0)
+    mname = getattr(mon, 'mname', '')
+    if name == 'sleep' and res & MR_SLEEP:
+        return 0.0
+    if (name == 'cold' and res & MR_COLD) or (name == 'fire' and res & MR_FIRE) or \
+            (name == 'lightning' and res & MR_ELEC):
+        return 0.0
+    if name == 'death':
+        nonliving = bool(f2 & M2_UNDEAD) or _mlet(mon) in (S_VORTEX, S_GOLEM) or mname == 'manes'
+        if nonliving or f2 & M2_DEMON or mname in _MAGM_NAMES:
+            return 0.0
+    if name in ('striking', 'magic missile') and mname in _MAGM_NAMES:
+        return 0.0
+    if name in _RESIST_ROLL:
+        lvl = max(1, min(50, int(getattr(mon, 'mlevel', 0) or 0)))
+        mr = int(getattr(mon, 'mr', 0) or 0)
+        return max(0.0, 1.0 - mr / float(100 + 12 - lvl))
+    return 1.0
+
+
+def free_run(agent, dy, dx):
+    """Walkable squares from us in direction (dy, dx) before a wall or the map's edge (squares the map doesn't know
+    count as the wall: a dark corridor makes this conservative)."""
+    level = agent.current_level()
+    y, x = int(agent.blstats.y), int(agent.blstats.x)
+    h, w = level.walkable.shape
+    n = 0
+    while n < 20:
+        y, x = y + dy, x + dx
+        if not (0 <= y < h and 0 <= x < w) or not level.walkable[y, x]:
+            break
+        n += 1
+    return n
+
+
+def bounce_back_p(run):
+    """P(a ray zapped along a line with `run` free squares -- the target's included -- comes back onto our square and
+    hits us): zap.c dobuzz range rn1(7,7) = 7..13, -2 per monster hit, a wall reverses a straight ray; out, the
+    target, the bounce, back and the target again cost ~2*run + 6; then zap_hit(u.uac) hits ~75% of the time."""
+    need = 2 * run + 6
+    return max(0.0, min(1.0, (13 - need + 1) / 7.0)) * 0.75
+
+
+def zap_value(agent, item, mon, run):
+    """Expected value of zapping `item` (known or not) at monster kind `mon` along a line with `run` free squares:
+    over the types its appearance may still be (generation weights, power._prob), good - bad - bounce cost."""
+    total = sum(power._prob(o) for o in item.objs)
+    if total <= 0:
+        return 0.0
+    back = bounce_back_p(run)
+    ev = 0.0
+    for o in item.objs:
+        name = getattr(o, 'name', '')
+        p = power._prob(o) / total
+        ev += p * (_ZAP_GOOD.get(name, 0.0) * zap_effect(mon, name) - _ZAP_BAD.get(name, 0.0) -
+                   _ZAP_SELF.get(name, 0.0) * back)
+    return ev
+
+
+def best_zap(agent, mon, dy, dx, unknown=True, exclude=()):
+    """STOPPER_FIX: the wand with the best zap_value at `mon` in direction (dy, dx): (item, why) or (None, None).
+    Unknown wands (unknown=True) only once each (agent._last_resort_zapped), none known empty; value must be > 0."""
+    run = free_run(agent, dy, dx)
+    zapped = agent._last_resort_zapped
+    best = None
+    for it in agent.inventory.items:
+        if not it.is_wand() or power._empty(agent, it) or len(it.glyphs) != 1 or it.glyphs[0] in exclude:
+            continue
+        if not it.is_unambiguous() and (not unknown or it.glyphs[0] in zapped):
+            continue
+        v = zap_value(agent, it, mon, run)
+        if v > 0 and (best is None or v > best[0]):
+            best = (v, it)
+    if best is None:
+        return None, None
+    return best[1], f'zap value {best[0]:.2f} (run {run})'
+
+
 def inline_targets(dive, max_dist=MINO_RANGE):
     """Big Elbereth-ignorers in a straight line 2..max_dist squares away over walkable squares:
     [(dist, direction, target)]."""
@@ -405,6 +560,14 @@ def deep_poly_escape_strategy(dive):
             zapped = agent._last_resort_zapped
             unknown = [i for i in agent.inventory.items if i.is_wand() and not i.is_unambiguous() and
                        i.glyphs[0] not in zapped and not agent.inventory.is_known_empty(i) and i.comment != 'EMPT']
+            if jf_config.STOPPER_FIX and unknown:
+                # B018: the unknown wand whose possible types do the most to THIS monster (its resistances) net of a
+                # bounce onto us; none worth it -> no zap (a {sleep, death} wand at a master lich slept us)
+                _, my, mx, mon, _ = ignorers[0]
+                # int() each comparison first: numpy bools can't be subtracted (TypeError in cand-d, 23/180 games)
+                sy, sx = int(my > bl.y) - int(my < bl.y), int(mx > bl.x) - int(mx < bl.x)
+                best, _why = best_zap(agent, mon, sy, sx, unknown=True)
+                unknown = [best] if best is not None and not best.is_unambiguous() else []
             if not unknown:
                 yield False
                 return

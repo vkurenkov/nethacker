@@ -218,6 +218,8 @@ class Inventory:
                 return False
             assert 'What do you want to wear?' in self.agent.message, self.agent.message
             self.agent.type_text(letter)
+            if jf_config.ROBUST_FIXES and self._wear_refused(item):
+                return False
             assert 'You finish your dressing maneuver.' in self.agent.message or \
                    'You are now wearing ' in self.agent.message or \
                    'Your foot is trapped!' in self.agent.message, self.agent.message
@@ -249,8 +251,37 @@ class Inventory:
                 self.agent.type_text(letter)
             if 'It is cursed.' in self.agent.message or 'They are cursed.' in self.agent.message:
                 return False
+            if jf_config.ROBUST_FIXES and self._wear_refused(item):
+                return False
             assert is_take_off_message(), self.agent.message
 
+        return True
+
+    # ROBUST_FIXES (eL1fe, extended): do_wear.c refusals that take no game time -- canwearobj() for W, select_off()
+    # for T. The welded ones don't mark the weapon cursed (no set_bknown in canwearobj), so hands_welded() never
+    # learns why and wear_best_stuff would retry every step; the trap and Glib ones pass after a while.
+    _WEAR_REFUSED_WELDED = re.compile(r'You cannot do that while holding your |You cannot wear gloves over your |'
+                                      r'You are unable to take off your gloves while wielding |'
+                                      r'You cannot release your \w+ to take off ')
+    _WEAR_REFUSED_BRIEF = re.compile(r'Your foot is trapped!|Your feet are stuck in the |is attached to the buried ball!|'
+                                     r'bear trap prevents you from pulling your |and cannot pull your |'
+                                     r'are too slippery to pull on |are too slippery to take off')
+
+    def _wear_refused(self, item):
+        """A wear/take-off refusal: the item's armor slot waits (agent._wear_blocked_until, read by
+        wear_best_stuff) 1000 turns for a welded weapon, 20 for a trapped foot or slippery fingers."""
+        msg = self.agent.message or ''
+        if self._WEAR_REFUSED_WELDED.search(msg):
+            wait = 1000
+        elif self._WEAR_REFUSED_BRIEF.search(msg):
+            wait = 20
+        else:
+            return False
+        slot = getattr(item.objs[0], 'sub', None)
+        blocked = getattr(self.agent, '_wear_blocked_until', {})
+        blocked[slot] = self.agent.blstats.time + wait
+        self.agent._wear_blocked_until = blocked
+        self.agent.log(f'ROBUST wear/takeoff refused, slot {slot} waits {wait} turns: {msg[:80]!r}')
         return True
 
     def use_container(self, container, items_to_put, items_to_take, items_to_put_counts=None,
@@ -576,7 +607,11 @@ class Inventory:
                                 'You read:' in self.agent.message or \
                                 "You don't see anything in here to pick up." in self.agent.message or \
                                 'You cannot reach the ground.' in self.agent.message or \
-                                "You don't feel anything in here to pick up." in self.agent.message:
+                                "You don't feel anything in here to pick up." in self.agent.message or \
+                                (jf_config.ROBUST_FIXES2 and
+                                 'You are physically incapable of picking anything up.' in self.agent.message):
+                            # (ROBUST_FIXES2: pickup.c notake() -- a polymorph form that cannot pick up, e.g. the
+                            # garter snake of a self-zapped wand of polymorph; the assert below repeated on every look)
                             items = []
                             letters = []
                         elif re.search('You have [a-z ]+ lifting ', self.agent.message) and \
@@ -910,7 +945,7 @@ class Inventory:
         for item in items:
             if not item.is_armor() or not item.is_unambiguous():
                 continue
-            if jf_config.KEEP_MAGIC_BOOTS and power.never_wear(item):
+            if (jf_config.KEEP_MAGIC_BOOTS or jf_config.BOOTS_KEEP) and power.never_wear(item):
                 continue  # kept for the Castle; cursed levitation boots would end the dig-dive
 
             # TODO: consider other always allowed items than dragon hide
@@ -1071,6 +1106,52 @@ class Inventory:
         if not yielded:
             yield False
 
+    # WAND_ENGRAVE_TEXT: the DUST wands that still say nothing once the 'x' is written (engrave.c: opening, locking,
+    # probing, undead turning and nothing have no engrave effect; secret door detection and create monster name
+    # themselves only when zapnodir finds or shows something)
+    _SILENT_ENGRAVE_WANDS = ('opening', 'locking', 'probing', 'undead turning', 'nothing', 'secret door detection',
+                             'create monster')
+
+    def _wand_types_after_text(self, message, item):
+        """WAND_ENGRAVE_TEXT: possible types of a wand that wrote an 'x' onto the dust (the post_engr_text message is
+        in `message`, or no message at all); None if the message says nothing about it (then the old rule)."""
+        types = self._wand_types_from_message(message)
+        if types is not None:
+            return types
+        silent = [p for p in O.possibilities_from_glyph(item.glyphs[0]) if p.name in self._SILENT_ENGRAVE_WANDS]
+        return silent or None
+
+    def _wand_types_from_message(self, message):
+        """The engrave-test message table: the wand types a message names, or None."""
+        wand_regex = '[a-zA-Z ]+'
+        floor_regex = '[a-zA-Z]+'
+        mapping = {
+            f"The engraving on the {floor_regex} vanishes!": ['cancellation', 'teleportation', 'make invisible'],
+            # TODO?: cold,  # (if the existing engraving is a burned one)
+
+            "A few ice cubes drop from the wand.": ['cold'],
+            f"The bugs on the {floor_regex} stop moving": ['death', 'sleep'],
+            f"This {wand_regex} is a wand of digging!": ['digging'],
+            "Gravel flies up from the floor!": ['digging'],
+            f"This {wand_regex} is a wand of fire!": ['fire'],
+            "Lightning arcs from the wand. You are blinded by the flash!": ['lightning'],
+            f"This {wand_regex} is a wand of lightning!": ['lightning'],
+            f"The {floor_regex} is riddled by bullet holes!": ['magic missile'],
+            f'The engraving now reads:': ['polymorph'],
+            f"The bugs on the {floor_regex} slow down!": ['slow monster'],
+            f"The bugs on the {floor_regex} speed up!": ['speed monster'],
+            "The wand unsuccessfully fights your attempt to write!": ['striking'],
+
+            # activated effects:
+            "A lit field surrounds you!": ['light'],
+            "You may wish for an object.": ['wishing'],
+            "You feel self-knowledgeable...": ['enlightenment']  # TODO: parse the effect
+        }
+        for msg, wand_types in mapping.items():
+            if re.search(msg, message):
+                return [O.from_name(w, nh.WAND_CLASS) for w in wand_types]
+        return None
+
     def _determine_possible_wands(self, message, item):
 
         wand_regex = '[a-zA-Z ]+'
@@ -1134,6 +1215,27 @@ class Inventory:
 
         assert 0, message
 
+    def text_engrave_on(self):
+        """WAND_ENGRAVE_TEXT, once the dive has started (coordinator/strong-dive: a text engrave in the grind reshuffled
+        nearly every game from T~700 on and made paired comparisons unpaired; the grind keeps the old empty answer
+        and the dive re-tests those wands once -- Medusa, the mazes and the castle are where the names matter)."""
+        if not jf_config.WAND_ENGRAVE_TEXT:
+            return False
+        try:
+            return bool(self.agent.global_logic.dive.diving)
+        except AttributeError:
+            return False
+
+    def wand_retest_wanted(self, item):
+        """WAND_ENGRAVE_TEXT: a wand whose grind engrave test said only 'glows, then fades' is tested once more with
+        text once the dive has started."""
+        if not item.glyphs or item.is_unambiguous() or not self.text_engrave_on():
+            return False
+        g = item.glyphs[0]
+        im = self.item_manager
+        return g in im._engraved_textless and g not in im._engraved_text and item.comment != 'EMPT' and \
+            not self.is_known_empty(item)
+
     @utils.debug_log('inventory.wand_engrave_identify')
     @Strategy.wrap
     def wand_engrave_identify(self):
@@ -1152,7 +1254,7 @@ class Inventory:
                 continue
             if self.agent.current_level().objects[self.agent.blstats.y, self.agent.blstats.x] not in G.FLOOR:
                 continue
-            if item.glyphs[0] in self.item_manager._already_engraved_glyphs:
+            if item.glyphs[0] in self.item_manager._already_engraved_glyphs and not self.wand_retest_wanted(item):
                 continue
             if len(item.glyphs) > 1:
                 continue
@@ -1185,6 +1287,48 @@ class Inventory:
 
         if not yielded:
             yield False
+
+    @utils.debug_log('inventory.wand_text_retest')
+    @Strategy.wrap
+    def wand_text_retest(self):
+        """WAND_ENGRAVE_TEXT, once the dive has started: at a quiet moment (nothing in view within 6, HP >= 60%, a bare
+        floor square) engrave-test once more, with text, each wand whose grind test said only 'glows, then fades' --
+        cold (the castle's moat), sleep/death, striking, magic missile (the mazes' minotaurs) are then named before
+        Medusa's level. The dive's own exploration rarely runs wand_engrave_identify (it digs)."""
+        if not self.text_engrave_on():
+            yield False
+            return
+        agent = self.agent
+        wands = [i for i in self.items if i.is_wand() and len(i.glyphs) == 1 and self.wand_retest_wanted(i)]
+        if not wands:
+            yield False
+            return
+        bl = agent.blstats
+        prop = agent.character.prop
+        level = agent.current_level()
+        here = (level.key(), int(bl.y), int(bl.x))
+        if prop.blind or prop.confusion or prop.stun or prop.hallu or prop.polymorph or agent.no_free_hand() or \
+                bl.hitpoints < 0.6 * bl.max_hitpoints or getattr(self, '_retest_bad_square', None) == here or \
+                int(agent.last_observation['blstats'][nh.NLE_BL_CONDITION]) & nh.BL_MASK_LEV or \
+                level.objects[bl.y, bl.x] not in G.FLOOR or level.shop_interior[bl.y, bl.x]:
+            yield False
+            return
+        if any(max(abs(m[1] - bl.y), abs(m[2] - bl.x)) <= 6 for m in agent.get_visible_monsters()):
+            yield False
+            return
+        yield True
+        item = wands[0]
+        agent.log(f'ENGRAVE re-test with text (the grind test said nothing): {item.text!r}')
+        with agent.atom_operation():
+            types = self._engrave_single_wand(item)
+        if types is None:
+            self._retest_bad_square = here   # (not a bare square after all: try elsewhere)
+        else:
+            self.item_manager._engraved_text.add(item.glyphs[0])   # (one re-test per wand, whatever it said)
+            self.item_manager._glyph_to_possible_wand_types[item.glyphs[0]] = types
+            self.item_manager._already_engraved_glyphs.add(item.glyphs[0])
+            self.item_manager.possible_objects_from_glyph(item.glyphs[0])
+        self.items.update(force=True)
 
     @utils.debug_log('inventory.use_spare_wishes')
     @Strategy.wrap
@@ -1302,10 +1446,33 @@ class Inventory:
         # try engraving with the wand
         letter = self.agent.inventory.items.get_letter(item)
         possible_wand_types = []
+        wrote = [False]   # WAND_ENGRAVE_TEXT: text went onto the dust (the post-text message is in agent.message)
+        text_path = [False]
+        text_on = self.text_engrave_on()   # (dive only: the grind keeps the old empty answer)
 
         def action_generator():
             assert smsg().startswith('What do you want to write with?'), smsg()
             yield letter
+            if text_on and 'Do you want to add to the current engraving' in smsg():
+                # a DUST wand: write text so that engrave.c prints its post_engr_text (ledger B016). 'n' wipes our
+                # finger's 'x' and the wand writes a fresh 'Elbereth' in the same action (DUST: len/10 = 0 extra
+                # turns), so the test square is left with a working Elbereth (coordinator's suggestion); a wand
+                # already named before the prompt (zapnodir: light, enlightenment, a wish) gets the old empty answer
+                text_path[0] = True
+                yield 'n'
+                for _ in range(4):
+                    # 'You wipe out the message...--More--' / 'You write in the dust with a X wand.--More--' come
+                    # before the text prompt (NLE misc: getlin and xwaitforspace are both set then)
+                    if not self.agent._observation['misc'][2]:
+                        break
+                    yield A.TextCharacters.SPACE
+                if self.agent._observation['misc'][1] and 'What do you want to write in the' in smsg() and \
+                        self._wand_types_from_message(self.agent.message) is None:
+                    wrote[0] = True
+                    for ch in 'Elbereth':
+                        yield ch
+                    yield '\r'
+                return
             if 'Do you want to add to the current engraving' in smsg():
                 self.agent.type_text('y')
                 # assert 'You add to the writing in the dust with' in smsg(), smsg()
@@ -1313,11 +1480,31 @@ class Inventory:
             r = self._determine_possible_wands(smsg(), item)
             if r is not None:
                 possible_wand_types.extend(r)
+                if 'glows, then fades' in self.agent.message and item.glyphs:
+                    # nothing learned (the empty text prompt): WAND_ENGRAVE_TEXT re-tests it once the dive has started
+                    self.item_manager._engraved_textless.add(item.glyphs[0])
             else:
                 # wand exploded
                 skip_engraving[0] = True
 
         self.agent.step(A.Command.ENGRAVE, additional_action_iterator=iter(action_generator()))
+
+        if text_path[0]:
+            if item.glyphs:
+                self.item_manager._engraved_text.add(item.glyphs[0])
+            r = self._wand_types_after_text(msg(), item) if wrote[0] else None
+            if r is None and not wrote[0]:
+                try:
+                    # the old rule: named before the prompt, exploded, worn out, or 'glows, then fades'
+                    r = self._determine_possible_wands(msg(), item)
+                    if r is None:
+                        return None
+                except AssertionError:
+                    r = None
+            if r is None:
+                r = [p for p in O.possibilities_from_glyph(item.glyphs[0]) if p.name not in ['light', 'wishing']]
+            self.agent.log(f'ENGRAVE {item.text!r}: {[o.name for o in r]} (text written: {wrote[0]})')
+            return r
 
         if skip_engraving[0]:
             return None
@@ -1346,6 +1533,10 @@ class Inventory:
                         (getattr(self.items, name) is not None and getattr(self.items, name).status == Item.CURSED):
                     continue
                 additional_cond = True
+                if jf_config.ROBUST_FIXES:
+                    # a refused wear/take-off (see _wear_refused) waits before the slot is tried again
+                    additional_cond = self.agent.blstats.time >= \
+                        getattr(self.agent, '_wear_blocked_until', {}).get(slot, 0)
                 if slot == O.ARM_SHIELD:
                     additional_cond &= self.items.main_hand is None or not self.items.main_hand.objs[0].bi
                 if slot == O.ARM_GLOVES:
@@ -1360,16 +1551,20 @@ class Inventory:
                         yielded = True
                         yield True
                     if (slot == O.ARM_SHIRT or slot == O.ARM_SUIT) and self.items.cloak is not None:
-                        self.takeoff(self.items.cloak)
-                        break
-                    if slot == O.ARM_SHIRT and self.items.suit is not None:
-                        self.takeoff(self.items.suit)
-                        break
-                    if getattr(self.items, name) is not None:
-                        self.takeoff(getattr(self.items, name))
-                        break
-                    assert best_armorset[slot] is not None
-                    self.wear(best_armorset[slot])
+                        done = self.takeoff(self.items.cloak)
+                    elif slot == O.ARM_SHIRT and self.items.suit is not None:
+                        done = self.takeoff(self.items.suit)
+                    elif getattr(self.items, name) is not None:
+                        done = self.takeoff(getattr(self.items, name))
+                    else:
+                        assert best_armorset[slot] is not None
+                        done = self.wear(best_armorset[slot])
+                    if not done and jf_config.ROBUST_FIXES:
+                        # any refusal (the cloak or suit in the way, "Don't even bother.", a cursed item) passes
+                        # no turn: without a wait this slot's step repeats forever in this very loop
+                        blocked = getattr(self.agent, '_wear_blocked_until', {})
+                        blocked[slot] = max(blocked.get(slot, 0), self.agent.blstats.time + 20)
+                        self.agent._wear_blocked_until = blocked
                     break
             else:
                 break
@@ -1460,6 +1655,11 @@ class Inventory:
                     yield True
                 if item.is_chest() and not (item.is_unambiguous() and item.object.name == 'ice box'):
                     fail_msg = self.agent.untrap_container_below_me()
+                    if fail_msg is not None and fail_msg.startswith('BOX_TRAP_SAFE'):
+                        # BOX_TRAP_SAFE: never open it; the square is skipped from now on (as a multi-container
+                        # square: check_containers and go_to_unchecked_containers leave it alone)
+                        self.multi_container_squares.add(self._here())
+                        continue
                     if fail_msg is not None and check_if_triggered_container_trap(fail_msg):
                         raise AgentPanic('triggered trap while looting')
                 self.check_container_content(item)

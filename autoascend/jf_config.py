@@ -145,6 +145,13 @@ LR_WAND_ONCE = True
 # armour, and ItemPriority's unknown-status branch is dead: the parser maps UNKNOWN to UNCURSED); 26 of 90
 # base-* games walked over a pair. Keep them unworn for castle_logic; never wear levitation/fumble boots.
 KEEP_MAGIC_BOOTS = False
+# BOOTS_KEEP (off, kit-builder): KEEP_MAGIC_BOOTS's goal with a lighter touch. KEEP_MAGIC_BOOTS lost 0.02-0.03 twice
+# (unpinned A/Bs, A008/R066): every pair went ahead of the healing potions, the food and the thrown weapons. Here one
+# pair per look that may still be levitation or water walking boots (price groups and knowledge rule the others out),
+# after the food and the thrown weapons; never worn before the castle (castle_cross/castle_logic try them there).
+# Evidence (true names from the seeds' appearance maps, ledger F070): 6 of 75 dev cmp-main games walked over real
+# levitation or water walking boots and carried none to the castle (jf14 s6, jf40 s1/s11/s13, jf42 s0/s10).
+BOOTS_KEEP = False
 # a known wand of wishing keeps rnd(3) - 1 charges after the engrave-test wish (51 of 3158 games got one):
 # zap them (power.wish_text: GDSM, then an amulet of life saving worn at once, then a ring of levitation for
 # the Castle, then speed boots). ON (coordinator, train 2): it fires only in wish games (~1%).
@@ -295,6 +302,12 @@ THREAT_HP_FRAC = 0.75
 THREAT_NO_ELBERETH = True
 THREAT_NE_RADIUS = 3
 THREAT_NE_MIN_DIFFICULTY = 3
+# DIVE_THREAT_GAP (0: off, verified-tier 'never faint' lane): the hunger-threat prayer above also while diving (the Mines
+# pick trip and camps included), from this gap. The dive has no threat rule: Fainting beside a hostile it waits for the
+# plain 1100-turn Fainting gap. s23 on 18 sets (270 games): 198 fainting windows outside the grind killed 30 (15%) --
+# 25% of those that began under 900 turns after the last prayer (an HP prayer reset the clock) -- vs 559 grind windows
+# killing 19 (3.4%) with the threat rule. rnz(350): a major-trouble prayer fails 8.5% at a 800-turn gap, 5.4% at 1000
+DIVE_THREAT_GAP = 800
 # find the kill square of our melee/thrown kills from the attack itself, and of pack kills from the corpse
 # glyph, when the glyph-disappearance test misses it (27% of kills: their corpses were never eaten)
 # ON (train 3.2, grind-food A047/A058/t32): 90 games 0.4025 vs 0.3964; in-lane losses 6 vs 10, failed prayers 3 vs 7 (was: False)
@@ -304,6 +317,11 @@ CORPSE_TRACK = True
 CLAIM_CORPSES = True
 CLAIM_DIST = 3
 CLAIM_MAX_AGE = 15
+# LIZARD_KEEP (off, verified-tier): keep one lizard corpse (10 weight, never rots) as the stoning cure -- not eaten off
+# the floor or from the pack as food; emergency_strategy eats it when Stoned (eat.c: a lizard corpse fixes petrification;
+# a prayer is the only other cure the bot has). s23, 360 pinned games: 4 'petrified by a chickatrice' deaths (Mines and
+# castle), 2 of them in games that had eaten lizard corpses before (jf50 s4, jf54 s1); 57 lizard corpses eaten, 0 kept
+LIZARD_KEEP = True
 # eat poisonous corpses (not only when Weak) at HP >= max(POISON_EATS_MIN_HP, 60%) during the tour
 POISON_EATS = False
 POISON_EATS_MIN_HP = 40
@@ -328,12 +346,36 @@ TOUR_GAPS_BY_XL = []
 LOWHP_EXACT = False
 # hunger-prayer gaps while diving at depth >= DIVE_GAP_MIN_DEPTH (0: WEAK_PRAYER_GAP / FAINT_PRAYER_GAP)
 DIVE_WEAK_PRAYER_GAP = 0
-DIVE_FAINT_PRAYER_GAP = 0
-DIVE_GAP_MIN_DEPTH = 5
+DIVE_FAINT_PRAYER_GAP = 850
+DIVE_GAP_MIN_DEPTH = 3
 # the Weak and Fainting hunger-prayer gap while diving with a digging tool (0: the rules above); see
 # agent._dive_tool_hunger_gap
 # ON (train 3.3, dive-safety A061): first dive hunger cycle prays from gap 850; guard vs base6 +0.011 (flag fired in 4 games, +0.175, none worse); harness 13/14 vs 7/14
 DIVE_TOOL_HUNGER_GAP = 850
+# HUNGER_DEEP (off, strong-dive): the dive at depth >= HUNGER_DEEP_DEPTH (the castle included, not Gehennom) never
+# goes hungry on purpose. cmp-main (99e4eb7, 90 pinned games): 15 games died while fainting, 12 of them in the dive,
+# 6 at the castle (a fainted hero on the moat's edge is a shark's or a xorn's) -- e.g. jf42 s12 carried a tripe
+# ration and an apple to its death: castle.crossing_strategy and fight2 (monsters are always in view there) sit above
+# eat_from_inventory in the preempt chain; jf16 s11 fainted 180 turns at gaps 912-1088 waiting for the 1100 Fainting
+# gap (DIVE_TOOL_HUNGER_GAP covers only the first dive cycle); jf42 s6 dug from Dlvl 7 to 25 while Weak with no
+# food and no safe prayer (an HP prayer had just reset the timeout) and died fainted there. So, deep in the dive:
+#  1. eat carried food as soon as Hungry, above fight2 and the castle crossing, while nothing hostile is adjacent
+#     and we are not levitating (agent.eat_deep);
+#  2. hunger prayers at Weak or Fainting from HUNGER_DEEP_GAP in every cycle (a prayer at 850 fails ~7.5% vs ~3.9%
+#     at 1100 (rnz(350)), a faint beside a deep monster far more often);
+#  (a castle camp that gave the crossing up keeps the long gaps: its score is banked, and every 850 gap fails ~8%)
+HUNGER_DEEP = True
+HUNGER_DEEP_DEPTH = 10
+# ...on the castle level only (the default): on the way down HUNGER_DEEP only shifted meal times by a few turns, which
+# reshuffled every game below Dlvl 10 (cand-c: 10 such games, net -0.79 of pure chaos); at the castle the score is
+# banked and a fainted crosser is lost
+HUNGER_DEEP_CASTLE_ONLY = True
+HUNGER_DEEP_GAP = 850
+# HUNGER_HOLD (with HUNGER_DEEP; off): Weak or Fainting with no food and no prayer due yet -> dig no deeper (hold on an
+# Elbereth) until one is due (dive.try_dig_down). Off: the score is the deepest level, and digging on while fainting
+# banks levels -- jf42 s6 held on Dlvl 19 for ~100 turns and died fainted there (0.365), while the base game dug on
+# fainting and reached its Dlvl-25 castle (0.466).
+HUNGER_HOLD = False
 # without STARVE_CLOCK: a Fainting prayer whatever the gap when the faint-length hunger estimate nears starvation
 # ON (train 3.2, grind-food A047/A058/t32): 90 games 0.4025 vs 0.3964; in-lane losses 6 vs 10, failed prayers 3 vs 7 (was: False)
 STARVE_DEADLINE = True
@@ -382,6 +424,13 @@ TEMP_FORBID = True
 # boxed in by diagonal squeezes while carrying > 600: drop to 550 for a while (a corridor bend held a grind 8000 turns)
 UNSQUEEZE = True
 UNSQUEEZE_TURNS = 30   # boxed in on one square this long first (the dive only)
+# SQUEEZE_KEEP (off, kit-builder): under UNSQUEEZE's 550 cap ItemPriority's order keeps daggers and food ahead of the
+# light kit, and the pile is never picked up again: 6 squeezes in ~630 recent games (5 in Mines corners) dropped 4-26
+# items each -- cmp-main jf41 s13 a wand of cold, a wand of digging and a ring, jf42 s6 a ring of polymorph control and
+# wands of lightning and striking. With the flag the cap keeps wands, rings and amulets (3-20 each) and known potions
+# of levitation/healing and scrolls of teleportation right after the weapon, armour and digging tool
+SQUEEZE_KEEP = True
+SQUEEZE_KEEP_CAP = 590   # hack.c cant_squeeze_thru: > 600 carried; the weight estimate takes the heaviest candidate
 # after 3 failed use_container attempts on a floor container, leave that square's containers alone (a take-out
 # menu that never matched was retried 45,453 times in one game)
 # ON (train 2): the take-out loop (robustness B004) hit jf14 s0 in the train-2 smoke: 11399 panics and 317k steps; with the fix 152 and 36k
@@ -437,17 +486,32 @@ DEMON_VIGIL_TURNS = 400
 # paralysis events in 223 dev games, 35 games died frozen)
 FEYE_FIX = False
 # no Excalibur dips during a water demon's vigil window (the bot went back to the fountain next to the demon)
-DEMON_NO_REDIP = False
+DEMON_NO_REDIP = True
 # the last resort (unknown wands/potions/scrolls) yields to the Elbereth rest while everything close respects
 # Elbereth and we are on one or can engrave (a zap erased it, a bounced ray / potion of sickness killed at 2-3 HP)
 LR_ELBERETH = False
 # the Elbereth rest never hides from a lone monster one blow kills (difficulty <= 2, not fast), at any HP
 REST_FIGHT_WEAK = False
-# never kill a gas spore whose blast reaches any @ (or anything in Minetown); its melee is filtered out of fight2
-SPORE_SAFE = False
+# never kill a gas spore whose blast reaches any @, a shop's squares (its shopkeeper may be out of view) or anything in
+# Minetown; its melee is filtered out of fight2 (throws already skip it). Explosion damage from our kill is our
+# attack on every peaceful in the 3x3 (explode.c): 3 of the 4 murders in 16 recent runs came from it (cmp-main
+# jf40 s12: two watchmen in Minetown, Luck -4, prayers held, died fainting 0.075; cmp-main jf41 s5 and base10arm
+# jf16 s11: shopkeeper Wonotobo). Only in the gc-h4 bundle so far (rejected as a whole, R032).
+SPORE_SAFE = True
 # a floating eye is hit blindfolded (blindfold/towel on, F-attack, off again), else by a throw, else as before
 # ON (train 3.4, grind-combat A063): blindfold/towel on before meleeing a floating eye (jf16 s12 replay: no freeze, no rock-mole death)
 FEYE_BLIND = True
+# FEYE_TELE: once telepathic ('You feel a strange mental acuity.'), fight2 no longer melees a floating eye it can see
+# (the FEYE_FIX filter: only blindfolded -- FEYE_BLIND with a towel/blindfold carried -- or as the stall breaker's safe
+# last resort). An eye's corpse always gives telepathy (eat.c: level 2 > rn2(1)), which is the one thing an eye kill
+# is worth; after that each swing is a 2-in-3 freeze of d(lvl+1,70) turns whenever the eye survives the blow
+# (uhitm.c passive). cmp-main (99e4eb7, 90 pinned games): 320 melee eye kills, 80 freezes in 20 games, 48 of them
+# after telepathy; all 7 freeze deaths in cmp-main + cmp-s22 (jf40 s4/s14, jf42 s8, jf41 s11) came after
+# telepathy (a jackal pack, a rock mole, a hill orc ate the frozen XL6-7 grinder).
+FEYE_TELE = True
+# ...boxed in by an eye (no step to take): Elbereth to make it flee; still boxed after this many turns: hit it anyway
+# (at full HP, fed, alone; see agent.fight2)
+FEYE_TELE_BOXED = 150
 # a missile/wand/ray hit breaks the Elbereth holds (rest, faint guard/shelter, demon vigil) and fight2's
 # wait-on-Elbereth for RANGED_BREAK_TURNS turns: fight2 then closes in on a weak shooter or leaves its line
 # ON (train 3.4, A063): a hold breaks when shot/zapped from range; guard vs base7 45 amd64 0.446 vs 0.415, grind deaths 5 -> 1
@@ -499,6 +563,12 @@ LEVELPORT_DEEP = True
 # lp-e2e: TC ring + a cursed scroll read on Dlvl 12 -> the Valley (Dlvl 26). Harness wr-unknown/wr2-unknown (XL 6 on Dlvl 3
 # with an unidentified wand of wishing): 12/12 into Gehennom, 10/12 to Dlvl 44-51. ON: it only acts with a wand of wishing.
 WISH_TELEPORT_ROUTE = True
+# WISH_CHARGING_FIRST (castle-front lane, research F076): a wand of wishing's first wish is '2 blessed scrolls of
+# charging'; the route's wishes then zap the wand down to (x:0), and one scroll is read on it before any wrest.
+# mkobj.c: spe = rnd(3), recharged = 0; read.c recharge(): lim 3 for wishing, a blessed charge sets spe to 3 when
+# spe < 3, and a second recharge explodes it. So c + 2 wishes instead of c: a 1-charge wand (1 in 3) got only the
+# teleport-control ring before (tele_route.py).
+WISH_CHARGING_FIRST = True
 
 # Never dig or zap digging down on a staircase (rescue agent, 78a30e1; ported by hand for train 2): the square
 # under '@' is unknown on arrival, so _diggable_spot took the arrival '<' for floor, and a wand of digging
@@ -512,6 +582,12 @@ WAND_STAIRS_FIX = True
 # shopkeeper and his wand of striking killed the XL-8 dive; and the dive fetches no dwarf's pile in a shop.
 # ON (train 3.1): no shop pickups with uncontrolled teleportitis, no pile fetch in a shop (jf14 s10: teleported out unpaid, killed by the shopkeeper)
 SHOP_GUARD = True
+# SHOP_SIGN_FIX: a locked door with any engraving in front of it that isn't one of our Elbereths is a closed shop
+# (shknam.c stock_room engraves "Closed for inventory" in dust outside every locked shop door; nothing else is
+# engraved at doors). The fuzzy 'closedforinventory' match missed a worn sign: cmp-main jf41 s3 read
+# '?c?c  ??r ir?? ?', kicked the door open ("How dare you break my door?") and the shopkeeper killed the XL-7
+# grinder (0.051). 6 broken shop doors in ~6000 games of all runs.
+SHOP_SIGN_FIX = True
 
 # --- valley-run (the Valley of the Dead with real castle-arrival kits: XL 7-10, 55-114 HP, AC -8..+10) ---
 # VALLEY_SPRINT (off, REJECTED -- no signal): the Valley walk never stops to fight what it can outrun
@@ -551,6 +627,53 @@ LANDING_GUARD = False
 # id-t5-on) -- the turn-30000 DRIVER hang is a harness-only artifact (#polyself before the first attribute parse).
 VALLEY_XORN = True
 
+# --- valley-walk (valley_walk.py; off): the Valley on foot for a castle-crossing kit ---
+# VALLEY_WALK (off, testing): one strategy owns every Valley move (above fight2, valley_sneak, the Valley retreat/fort
+# and gehennom_escape/scare): the '>' when reachable (down at once), a door's dig square (clear the neighbours, dig),
+# else one step along the cheapest way (unseen graveyard squares, sleepers, awake monsters and the squares next to
+# awake monsters cost extra); fight only what blocks that step, a monster faster than us next to us (bats) or anything
+# when boxed in. A monster that moves can't melee in the same action (monmove.c dochug), so walking away from the
+# slow undead takes few blows. valley-real base: 0/61 exits, median life 59 turns (F052).
+VALLEY_WALK = False
+VALLEY_WALK_GRAVE_COST = 4      # extra step cost of a graveyard square not yet seen empty (a sleeper to cut through)
+VALLEY_WALK_SLEEPER_COST = 6    # ...of a square with a sleeper seen on it
+VALLEY_WALK_ADJ_COST = 2        # ...of a square next to an awake hostile (x3 for a dangerous one)
+VALLEY_WALK_RETREAT_BELOW = 0.4  # hurt with an awake hostile next to us and the '<' close: climb to heal
+VALLEY_WALK_RETREAT_REACH = 20
+# VALLEY_WALK_HOLD: on landing stand on the '<' first (1-13 steps from every landing square) and fight the landing
+# crowd with the climb at hand (bats and mummies never follow up, monst.c M2_STALK); walk once no hostile has been in
+# view for HOLD_QUIET turns at HOLD_LEAVE HP, or after HOLD_MAX turns
+VALLEY_WALK_HOLD = False
+VALLEY_WALK_HOLD_QUIET = 10
+VALLEY_WALK_HOLD_LEAVE = 0.7
+VALLEY_WALK_HOLD_MAX = 150
+VALLEY_WALK_CLIMB_BELOW = 0.5
+# invisible (no hero glyph on our square): don't stop to fight the bats -- close monsters move at random and swing at
+# guessed squares (monmove.c m_move / set_apparxy); keep walking
+VALLEY_WALK_INVIS_WALK = True
+# VALLEY_LOTTERY (off, testing): in the Valley without teleport control, a level teleport is a free roll --
+# teleport.c random_teleport_level() from depth V: 1 in 5 nothing, else uniform over 1..V-1 and V+1..V+3, so
+# P(deeper) = 0.8 * 3 / (V + 2) (~8%) per read, and a trip up costs nothing the score has banked (an XL-8 kit's walk
+# out is ~0/61). A scroll of teleportation level-teleports when read cursed or confused (read.c; noteleport doesn't
+# stop level_tele). So: read known cursed teleport scrolls; with known ones, get confused (a known potion of
+# confusion/booze, a cursed confuse monster stack, or a known scroll of magic mapping -- on the nommap Valley it
+# confuses for rnd(30) turns) and read them; read the unknown scrolls (unconfused: a confused genocide kills us) to
+# find the teleport stack (identified by 'A mysterious force prevents you from teleporting!'), magic mapping ('Your
+# mind is filled with crazy lines!') and the cursed teleports among them; VALLEY_LOTTERY_QUAFF: with known teleport
+# scrolls and no confusion source, quaff unknown potions (confusion/booze ~8% each). At a quiet moment (no awake
+# hostile next to us) or below VALLEY_LOTTERY_DESPERATE HP. Real kits: 28 of 46 dev castle kits carry teleport scrolls.
+VALLEY_LOTTERY = True
+VALLEY_LOTTERY_MAX_READS = 30
+VALLEY_LOTTERY_QUAFF = True
+VALLEY_LOTTERY_MAX_QUAFFS = 20
+VALLEY_LOTTERY_DESPERATE = 1.0   # read/quaff even with an awake hostile next to us below this HP fraction (1.0: always)
+# confused, read the unknown scrolls too (a teleport one is a ticket; a confused genocide kills us, ~3.5% a scroll)
+VALLEY_LOTTERY_CONFUSED_UNKNOWN = True
+VALLEY_LOTTERY_MAX_XL = 11      # stronger characters keep their walk (a roll goes up 3 times in 4)
+# quaff the unknown potions for confusion before reading the unknown scrolls (then every unknown teleport scroll read
+# confused is a ticket instead of being identified and spent)
+VALLEY_LOTTERY_CONFUSE_FIRST = False
+
 # --- castle-first-pass (castle_cross.py): get off the castle's west landing onto the moat before the landing kills us ---
 # CFP_RUSH: on the castle's west side a LASTING lift (known lev ring/boots, then unknown rings, then unknown magic
 # boots) goes on at once, above fight2/elbereth_rest/the scare hold, and a floating hero digs straight from the maze
@@ -588,6 +711,86 @@ CFP_PRUSH = False
 # blocks it and comes off first): monmove.c set_apparxy makes a monster that can't see us guess our square each time we
 # move (ours 1 time in 3, else a random accessible neighbour), so sharks, eels and minotaurs land ~40-55% of their melee
 CFP_INVIS = False
+# CFP_DUEL (with CFP_RUSH): on the dug launch square with a LASTING lift (known levitation ring/boots, water walking
+# boots), the sea monsters are fought from land before we float out: the sharks (awake, speed 12, 5d6, starting at
+# (5,0)/(5,16) in the west channels) track us and wait hidden at the water square nearest us, so every launch met the
+# channel's shark and then bled under its bites over the 9 water squares (NW channel: 14 shark deaths of 40 failed
+# crossings, ledger F065). From land a shark bites alone (no xorn reaches the launch square: court xorns can't cross the
+# moat), we step back off the water's reach to rest below half HP, and we go only at 90% HP after 5 quiet turns.
+CFP_DUEL = False
+# CFP_EEL: the east eels at the back door. On foot and held by a sea monster (castle_logic's crossing), write Elbereth
+# instead of hitting the holder (a scared holder lets go: monflee -> release_hero; its next touch would drown us);
+# in front of the locked door (57,08) fight a sea monster in view next to us before the next kick (kicks wake them and
+# wipe Elbereth). A potion's lift must be waited out before the kick, so potion kits kick every time: castle-c2 seed 3
+# drowned at the door the turn it crashed open (the eel at (57,07) wrapped it; the bot hit back twice).
+# ON (castle-only): harness eel drownings 6 -> 2 over 56 paired games, door test 21/28 vs 20/28; identical on the 61
+# real castle kits (castle-real-all: never fired), crash-clean (ledger R097/R099).
+CFP_EEL = True
+
+# --- lift-ready: the kit's lifts known before the castle and used at once ---
+# WAND_ENGRAVE_TEXT (ledger B016): the wand engrave test writes an 'x' at the text prompt instead of leaving it empty.
+# engrave.c keeps the message of striking / slow monster / speed monster / magic missile / sleep+death / cold in
+# post_engr_text and prints it only after the text is written; an empty prompt says '<wand> glows, then fades.' and
+# nothing else. 90 s23 games ran 130 engrave tests and never once named one of those wands (0 'ice cubes', 0 'bugs',
+# 0 'riddled', 0 'unsuccessfully fights'): the real castle-29 kit amd cfpe-s0 carried its wand of cold to the castle
+# untested-looking and gave up there at once. Only a DUST wand reaches the 'add to the current engraving' prompt, so a
+# burning/engraving wand (fire, lightning: the flash would blind us; digging) keeps the old empty answer -- they name
+# themselves before the prompt anyway. The test answers 'n' and writes 'Elbereth' (wipes our finger's 'x', leaves a
+# working Elbereth). DIVE ONLY (strong-dive's cand-b: a text engrave in the grind reshuffled nearly every game from
+# T~700 and made the paired comparisons unpaired): the grind keeps the empty answer (byte-identical), and once diving
+# inventory.wand_text_retest tests each wand the grind left unnamed once more, at a quiet moment.
+WAND_ENGRAVE_TEXT = True
+# LIFT_PLUNGE (castle_cross.plunge_strategy): on a castle trap door (40..55,08), not levitating, press '>' (do.c dodown:
+# a seen trap door plunges us, flyers included; only levitation, being held or a huge form refuse). amd cfpf-s4 (real
+# castle-29 game): an earth-elemental form 'don't fit through' at (40,08), the form died there and the dwarf stood on
+# the trap door with 45 HP until the xorns killed it. A huge form zaps the wand of polymorph again or waits it out.
+LIFT_PLUNGE = True
+# LIFT_POLY_PICKY (castle_power.unusable_form / _repoly_step): on the castle's west side a polymorph form that 'crosses
+# water' but can't make the crossing zaps the wand of polymorph again: an eyeless form (blind for its whole life --
+# global_logic waited it out: amd cfph-s6's black light stood 43 turns, harness lift-fly1 s0 300 turns), a sessile one
+# (brown mold, mmove 0: amd cfpf-s1), or one that can't apply the pick through the maze walls ('You can't hold it
+# strongly enough.': amd cfpf-s4's energy vortex spent 740 turns in the west maze). 48% of the 278 polyok forms fly,
+# swim, breathe water or walk walls (monst.c), and a form's death only returns us to our own form.
+LIFT_POLY_PICKY = False
+# LIFT_COLD (castle_cross.cold_strategy): the short cold route. castle_logic's starts at the courtyard corner and goes
+# all the way round (28 moat squares; a ray freezes 2-4, a wand has 4-8 charges less the engrave test: harness cold1
+# 0/36, real cfpi-s1 stranded at (3,0)). Instead: dig to (-1,0)/(-1,16) beside the end of moat row 0/16, freeze it
+# eastward from the ice front (9 squares to the dry strip), walk the strip, freeze (54..62,row) (9 squares) and dig east
+# into the east maze, which joins the east courtyard: 18 squares, ~6 rays. An object on a moat square (the corpse of an
+# eel our ray killed) counts as ice.
+LIFT_COLD = False
+# LIFT_POTION_HP (castle_logic.plan_step): below this fraction of max HP, rest on the test square's Elbereth before
+# quaffing the next potion that may be levitation (0 = off): a levitation potion floats us straight into the west
+# channel (shark, eels, the tower wall's xorns). cmp-main jf40-s5 quaffed its potion of levitation at 29/71 HP and died
+# two squares in.
+LIFT_POTION_HP = 0
+# LIFT_DOOR_RAYS: a known wand of fire / lightning / cold opens the castle's locked back door too (zap.c zap_over_floor:
+# the door burns / splinters / shatters and the ray stops there), from afar (CFP_ZAP) or in front of it -- no landing to
+# kick, no wait for a potion's levitation to end. cmp-main jf41-s9 waited at the door with a wand of lightning (0:6)
+# until a minotaur came.
+LIFT_DOOR_RAYS = True
+# LIFT_KNOWN_RUSH (castle_cross.known_rush_strategy): a KNOWN lasting lift (ring of levitation, levitation boots known
+# not cursed, water walking boots, an amulet of magical breathing) goes on the moment we land where castle arrivals land
+# (Dungeons, depth >= 25, below a known Medusa, bot x <= 9), before the recognition dig (+3..+7 turns and a pit);
+# levitation confirms the castle by its first door sound (within 3 turns in 101/101 castle arrivals, CFP_SENSE), and
+# comes off again after 4 silent turns. Then CFP_RUSH floats us to the moat. cmp-main jf16-s0 floated only at +11 on
+# its third ring and died at +15.
+LIFT_KNOWN_RUSH = True
+# LIFT_EARLY_RINGS (with LIFT_KNOWN_RUSH): with no known lasting lift, the kit's unknown rings that may be levitation
+# (up to 3) are tried at the castle-likely landing before the recognition dig -- CFP_RUSH tries them right after it
+# anyway; one that floats us is listened on like a known one
+LIFT_EARLY_RINGS = False
+# LIFT_NEAR_WATER (castle_cross._near_launch): a floating hero's way onto the moat by the estimated turns -- the fixed
+# launch squares (-1,2)/(-1,14), the moat column straight east when level with it, or (level with the courtyard, rows
+# 6-10) straight east into the courtyard and round its corner -- instead of always the fixed launch square
+# (cmp-main jf42-s2 dug 4 squares south with five fights, 43 turns, one step from the courtyard's join)
+LIFT_NEAR_WATER = False
+# WORN_KEEP (item.can_be_dropped_from_inventory, ledger B019): a worn ring, amulet or blindfold is never in a drop list.
+# arrange_items tried to drop the worn ring of teleport control (TC_WEAR put it on) with 'D': 'You cannot drop something
+# you are wearing.' passes no game time, so its loop spun ~700 steps per game turn (turn-inactivity panics) -- 850
+# castle turns in 20 wall minutes (strong-dive's sd-id-C public-s7~1); any worn accessory the item split doesn't want
+# (TC_WEAR, CFP's kept rings, SPARE_WISHES' amulet) can start it
+WORN_KEEP = True
 
 # --- power-route (power_route.py): teleport control + a level-teleport trigger from what the dive carries ---
 # TC_ROUTE (off): learn which ring gives teleport control from the game's prompts ('Where do you want to be
@@ -623,6 +826,15 @@ TC_DIVE_ID = True
 # drop carried rings/potions/scrolls/amulets of unknown BUC on a known altar of the current level (the grind's Dlvl 1-3
 # hold ~90% of the kit's scrolls and potions: 25 of 90 base10 games stood on an altar there); the bot picks them up again
 TC_ALTAR = True
+# ALTAR_PICKUP (off, kit-builder; ledger B017): TC_ALTAR's drop runs in the dive, which has no pickup step (gather_items is
+# the tour's), so the bot walked away from the pile: 24 of 75 dev cmp-main games and 18 of 86 castle-29 games left their
+# unknown potions/rings/scrolls/amulets on an altar (426 dropped, 76 ever picked up; true identities from the seeds'
+# appearance maps: 6 potions of levitation, a ring of levitation, 8 healing potions, 4 known teleport scrolls on the dev
+# sets; jf14 s2's Dlvl-26 kit kept 2 scrolls and no potion or ring). With the flag: the dropped items are picked up again
+# in the same step, a pickup cut short is retried from the altar while we stay on its level, and scrolls that may be
+# scare monster stay out of the drop (pickup.c: a scare monster scroll picked up once turns to dust the next time)
+ALTAR_PICKUP = True
+ALTAR_PICKUP_TURNS = 300
 # try on (and take off) unknown rings whose BUC is known not cursed, at a quiet moment of the dive: a levitation ring
 # names itself ('You start to float in the air!') -- a certain lift for the castle and Medusa's islands
 TC_RING_TEST = True
@@ -643,11 +855,143 @@ POLY_XORN = True
 STAIR_BOULDER_FIX = True
 STAIR_BOULDER_WAIT = 300
 
+# MINO_GUARD (minotaur lane, mino_guard.py; off): a minotaur in view (the filler mazes between Medusa and the castle,
+# the castle's west maze) -- a known way out first: a wand of digging down, the up stairs (no M2_STALK: it never
+# follows), teleportation/polymorph/sleep zapped at it, a wand or scroll of teleportation on ourselves, a scroll of
+# genocide ('minotaur'), a scroll of scare monster dropped under us; then death / sleep-or-death next to us, cold,
+# unknown wands at it, unknown scrolls where teleports work; the emergency prayer still first at low HP; and no rest
+# on a level where one was seen. cmp-main: minotaurs killed 23 of 90 games; 3 of the 7 dev-set maze deaths carried a
+# known item that ends the fight in one action (jf14 s0 genocide, jf16 s10 teleport scrolls, jf41 s13 teleport wand).
+MINO_GUARD = True
+# STOPPER_FIX (ledger B018, minotaur lane; off): castle_power's deep escape picks the unknown wand to zap at an
+# Elbereth-ignorer by what its possible types would do to THAT monster (resistances: sleep, cold/fire/shock, death vs
+# undead/demons/nonliving; the MR roll for sleep/polymorph/slow) net of the chance a ray bounces back onto us; no wand
+# worth it -> no zap. mm-g3-jf14 s6: a {sleep, death} wand zapped at a master lich bounced and slept us (then killed).
+STOPPER_FIX = True
+
 # SOKOBAN_TRIP (off, power-route): when the grind would hand over to the dive, run the tour's Sokoban milestones first
 # (dive_logic._sokoban_trip): 4 random rings + 4 random wands + the prize (bag of holding / amulet of reflection) --
 # the ingredients the castle and teleport-control routes lack (TC ring in 4 of 61 real castle kits)
 SOKOBAN_TRIP = False
 SOKOBAN_TRIP_TURNS = 8000
+
+# ROBUST_FIXES (off, verified-tier lane; ported from eL1fe's dag engine): four loops/asserts that freeze deep games.
+#  - item_manager.parse_name: objnam.c xname shows dragon scales as 'set of <color> dragon scales' (plural 'sets of
+#    ...'); the parser knew only '<color> dragon scales' and asserted on every look at them. Dragons die from Dlvl ~20
+#    on, so it hits exactly the deep games: 12 dev games in PANIC loops at Dlvl 19-29 (c8-pub g2 3034 panics on Dlvl
+#    19, s7d-pub g10 1351 on Dlvl 28, shop-jf26 g14 612 on the Dlvl-29 castle level).
+#  - exploration_logic.check_altar: LOOK shows no altar where the map remembered one (misread glyph, stale map):
+#    forget it instead of asserting (the strategy retried it every step).
+#  - inventory.wear/takeoff: canwearobj/select_off refuse without a turn -- a welded two-hander ('You cannot do that
+#    while holding your weapon.' for suits/shirts, 'You cannot wear gloves over your weapon.'; neither marks the
+#    weapon cursed, so hands_welded() never learns it), a foot in a bear trap / stuck in the floor, slippery fingers.
+#    The refusal asserted (or passed for success: 'Your foot is trapped!') and wear_best_stuff retried it forever
+#    (the 'turn inactivity' guard then passes one turn per 200 steps). The refused slot now waits (1000 turns
+#    welded, 20 otherwise).
+#  - explore1's door kicking: a shopkeeper in view means a closed shop's door; a digger that fell into a closed
+#    shop sees the shopkeeper before level.shop knows the room (no entry greeting), and kicking its door open from
+#    inside is fatal.
+ROBUST_FIXES = True
+# BOX_TRAP_SAFE (off, gen-audit): a trap found on a box/chest ('You find a trap on the large box!  Disarm it?') is
+# left alone -- answer n and never #loot that square (lock.c: opening a trapped box sets the trap off too). trap.c
+# untrap: a disarm fails when rnd(75 + depth/2) > Dex + XL, ~75% for an XL-5 Valkyrie, and chest_trap's gas cloud is
+# poisoned(..., 15): 1 in 15 instant death. Fresh-set cmp-main (s23): 6 of 90 games found a box trap, 5 set it off
+# on the disarm; jf45 s8 died at T6166 on Dlvl 3 ('A cloud of noxious gas billows from the large box.', 53/53 HP).
+BOX_TRAP_SAFE = True
+
+# WARM_JIT (off, verified-tier lane): compile utils.bfs (the one lazily compiled numba kernel) while the sandbox starts the
+# bot instead of inside a game action. The arena times each act() with the evaluator's own action timeout (the hub
+# verifier picks its own; a timeout scores the episode 0), but bot startup gets max(30 s, timeout) (arena/sandbox.py).
+# Cold, the first bfs() is the slowest action of every game: 2.3 s on an idle machine, the per-game max action time of
+# the 180 cmp-main0 games is median 4.4 s, 45% > 5 s, max 11.0 s (15 games in parallel). Game-identical (bfs is pure).
+WARM_JIT = True
+
+# opp-items lane (opp_items.py; all off): three small levers from items the dive already meets (ledger F080).
+# GENOCIDE_POLICY: every genocide prompt gets an answer by what we know of the scroll (read.c do_genocide: a cursed
+# scroll gives the same species prompt but sends in 4-6 of the named monster). Class prompt (only a blessed scroll
+# asks it) -> 'H'; species prompt: a minotaur within 5 -> 'minotaur'; BUC known not cursed (the display, or the same
+# stack's first read said 'Wiped out') -> 'minotaur', then raven/xorn/giant eel/shark; BUC unknown -> 'giant eel'
+# (real: the castle moat's and Medusa's eels; reversed: stranded eels flee and waste away, mon.c minliquid), 'newt'
+# with water within 3 squares or a proven-cursed stack, 'minotaur' on the castle (banked) or for a lone scroll at
+# castle depth. Before, agent.update ESCaped it (jf14 s0 wasted one of two genocide scrolls on Dlvl 2; a cursed one
+# then sends in 4-6 random monsters). A known genocide scroll proven not cursed is read at once (the levels below
+# don't exist yet: fill_empty_maze makes no genocided minotaurs). Harness (A083): 2 unknown uncursed -> 'Wiped out all
+# giant eels' then 'all minotaurs' 9/9; cursed -> 'Sent in some giant eels' 9/9, no deaths from them.
+GENOCIDE_POLICY = True
+# HORN_SCARE (needs MINO_GUARD): a tooled horn or any drum makes every minotaur in range flee (music.c
+# awaken_monsters: MR 0 never resists, monflee with no timer) -- mino_guard blows it at first sight, before any wand
+# or scroll, then digs while it flees (a cornered one next to us: step out of its reach; blown again when it comes
+# back or hits us); an unknown horn (tooled 5/11, frost 2/11, fire 2/11, plenty 2/11) is a gamble after the known
+# stoppers, its ray (if any) aimed at the minotaur or down the longest free line; an expensive camera in line within
+# 2 squares blinds it and makes it flee 3 times in 4 (uhitm.c flash_hits_mon; weaker: a blind monster walks at
+# random). Also answers the 'Improvise?' prompt the castle's horn test never answered (cmp-main0-jf44 s0: 'n' went
+# to the tune prompt, 'Never mind'). Harness (A084, minotaur next to the medusa+1 landing, 14 maze + 6 castle
+# landings): escaped down horn 0 -> 14/20, drum 1 -> 13/20, camera 0 -> 6/20. Real (cand-f cfg, jf43-48): fired in 4
+# of 90 games, jf43 s7 0.445 -> 0.466 (a drum at a Dlvl-24 maze minotaur, dug on to the castle), the rest equal.
+HORN_SCARE = True
+# HORN_KEEP (off): once diving, keep one horn / drum / camera in the pack (ItemPriority). Instruments are rarely shed (3
+# drop messages in 180 cmp-main games) and a keep reorders a shed: on90a jf47 s0 (Mines, diving) kept one of two
+# horns, dropped a second looking glass instead, and the whole game reshuffled (0.602 -> 0.117, chaos not cause).
+HORN_KEEP = False
+HORN_REFRESH = 15          # turns a flee (or a blow in range) holds before the horn is blown again, unless it attacks
+# TENGU_EAT (parked, R159: EV <= 0): in the dive, hit a HOSTILE tengu next to us (HP >= 60%, nothing else close) and
+# eat a fresh tengu corpse within 6 steps when not Satiated: eat.c cpostfx picks one of poison res / teleportitis /
+# teleport control, then givit(): TC 6/12 -> 1/6 per corpse (a corpse 1 kill in 2, corpse_chance). Peaceful tengu
+# (lawful: ~85% of them for our lawful Valkyrie, makemon.c peace_minded) are left alone: a peaceful kill is Luck -1
+# half the time. Hostile mid-dive tengu meet ~1.6% of games; the fight costs 10-25 HP at the dive's start.
+TENGU_EAT = False
+TENGU_CORPSE_AGE = 25      # a tengu corpse older than this is left (CORPSE_MAX_AGE is 30)
+
+# ROBUST_FIXES2 (off, robustness-audit lane): stalls found by a census of the botlogs of 5456 unique dev games
+# (1047 of them since s23; $SCR/robust). Each piece acts only where the old code asserted or spun without a turn.
+#  - dive_logic.go_to_mines: the Mines branch sits on another level; follow_level_path_strategy walked the whole
+#    stair path in one go and asserted when the first staircase was cut off (a trap door dropped us into an unexplored
+#    corner of a known level, a boulder or a peaceful on the stairs). The assert repeated every few steps: 9 of 217
+#    recent seeds, 20-1950 panics, up to 10k turns (s23 cmp-main-jf45 s2: 1950 panics and ~1000 turns on Dlvl 4,
+#    26k steps; jf40 s1 1315 panics on Dlvl 2). Now one staircase at a time via _take_stairs (it waits out
+#    peacefuls, breaks boulders), exploring for a way when cut off, as fetch_digging_tool and tool_quest already do.
+#  - agent.move: 'You are carrying too much to get through.' (hack.c test_move: a diagonal squeeze with more than
+#    600 weight) passes no turn. The BFS squeezes by our own weight estimate, which misses unknown weights, so the
+#    same diagonal step was planned again (s23 cmp-main-jf46 s10: 1986 refusals, 1902 panics, 250 turns on Dlvl 3).
+#    The refusal now turns squeezing off until our estimate drops below what it was or SQUEEZE_REFUSED_TURNS pass
+#    (short: when the squeeze is the only way on, the bot retries it once per window instead of ~8 times a turn);
+#    'Your body is too large to fit through.' (a big polymorph form) likewise, for SQUEEZE_REFUSED_TURNS. And
+#    _take_stairs' last step from a neighbour onto the stairs skips a refused squeeze (gen-audit ga-e1-jf46 s3: 9374
+#    refusals, 238k steps on Mines 1 until the camp gave that '>' up).
+#  - inventory.get_items_below_me: 'You are physically incapable of picking anything up.' (pickup.c: notake(), e.g.
+#    a garter snake form from a zapped wand of polymorph) asserted on every look (cand-f jf43 s11: 329 panics over
+#    535 turns on the Dlvl-28 castle level); now the pile is treated as not listable, like the other refusals.
+#  - item_manager.parse_name: 'heavy iron ball' / 'iron chain' (BALL_CLASS / CHAIN_CLASS, no appearance) matched no
+#    object and the category check asserted on every look at a punishment ball (lift runs: 618 panics over 630 turns
+#    on Dlvl 4, 383 on the Dlvl-29 castle level) -- READ_TEST reads unknown scrolls, so punishment gets likelier.
+#  - exploration_logic.open_neighbor_doors: a locked door next to us with the legs too wounded to kick
+#    (agent._no_kick_until) was chosen again and again -- 'This door is locked.' passes no turn -- until the legs
+#    healed (rf2-jf47 s9: 52 turn-inactivity asserts in 50 turns on Dlvl 13; 5 older seeds, ~25 each). Kicking-only
+#    doors now wait for the legs.
+#  - SESSILE_MEMORY (dive): the '#terrain' view (check_terrain) shows no monsters, so the memory now skips it; before,
+#    a remembered mold next to us looked 'seen empty' at every terrain check and was dropped until the next look.
+#  - agent.main watchdog (general): the 'turn inactivity' guard fired WATCHDOG_STREAK times within WATCHDOG_WINDOW
+#    turns -> the forced turn becomes a counted search of WATCHDOG_WAIT turns (NetHack stops it when a monster comes),
+#    and so does every further assert while they keep coming (loop mode):
+#    a spinning strategy then costs ~10 steps per game turn instead of 200-700 (B019's castle drop loop: 502,857
+#    steps, 837 s wall for 1000 turns in cand-d/e jf40 s0 -- 1M steps truncate a game). Games without such a streak
+#    are unchanged.
+ROBUST_FIXES2 = True
+SQUEEZE_REFUSED_TURNS = 100
+WATCHDOG_STREAK = 5
+WATCHDOG_WINDOW = 30
+WATCHDOG_WAIT = 20
+
+# GRIND_SESSILE (off, robustness-audit lane; ledger B020): a mold/jelly/floating eye/gas spore we bump into ('Monster on
+# a next tile') is remembered in the grind too (SESSILE_MEMORY runs only while diving), and the grind forgets it once
+# seen empty from next to it (not in the '#terrain' view, which shows no monsters). Out of sight such a square shows
+# the item under the monster, so the grind's paths went back to it: cmp-main-jf43 s10 alternated two F on Dlvl 1 for
+# 14.5k turns (2444 panics, 138 faints, 0.037 -> 0.466 with the flag). Every 'Monster on a next tile' blocker in 7 debug
+# replays of cand-f loop games was such a monster (green/red/yellow mold, acid blob, floating eye, gas spore).
+# NOT a rare fix: grinds bump into molds often, so it reshuffles ~40% of games: 120 pinned games (cand-f + it and
+# ROBUST_FIXES2 vs cand-f, jf40/42-48) 50 diverged at its first firing, mean -0.006 there; pooled -0.002 (t -0.09);
+# early deaths 39 vs 39, D>=25 62 vs 63.
+GRIND_SESSILE = False
 
 _raw = os.environ.get('JF_CFG')
 if _raw:

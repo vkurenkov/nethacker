@@ -76,6 +76,8 @@ class RouteState:
         self.gamble_log = None        # last castle-gamble state logged
         self.altar_tried = {}         # level key -> signature of the items last BUC-tested on its altar
         self.altar_turn = -10 ** 9
+        self.altar_pending = None     # ALTAR_PICKUP: (level key, altar pos, dropped glyphs, drop turn) not yet picked up
+        self.altar_pickup_tries = 0
         self.puton_block_until = -1   # no ring put-ons until this turn (a welded weapon keeps the hand busy)
         self.cooldown_until = -1      # the strategy stays out until this turn (actions that pass no game time)
         self.idle_actions = 0         # consecutive actions of ours that passed no game time
@@ -390,6 +392,9 @@ def _read(agent, item, why):
                       key=(agent.blstats.dungeon_number, agent.blstats.level_number, agent.blstats.depth))
     st.read_glyphs[_glyph(item)] = agent.blstats.time
     _log(agent, f'reading {item.text!r} ({letter}): {why}')
+    # GENOCIDE_POLICY: the genocide prompt's answer (agent.update) depends on which scroll this is
+    from . import opp_items
+    opp_items.note_read(agent, item, why)
     menu_pages = {}
 
     def gen():
@@ -534,6 +539,8 @@ def _altar_items(agent):
             continue
         if it.category == nh.SCROLL_CLASS and jf_config.SCARE_KEEP:
             continue   # SCARE_KEEP never drops a possible scare monster scroll (and never picks one up again)
+        if it.category == nh.SCROLL_CLASS and jf_config.ALTAR_PICKUP and SCARE_SCROLL in it.objs:
+            continue   # picked up again it would turn to dust (pickup.c: spe set by our first pickup)
         if it.can_be_dropped_from_inventory():
             out.append(it)
     return out
@@ -588,8 +595,59 @@ def _altar_step(agent, pos):
     st.altar_tried[agent.current_level().key()] = frozenset((_glyph(i), i.count) for i in items)
     st.altar_turn = bl.time
     _log(agent, f'BUC test on the altar: {[i.text for i in items]}')
+    if jf_config.ALTAR_PICKUP:
+        # set before the drop: a drop cut short by a panic still leaves the pickup to do
+        st.altar_pending = (agent.current_level().key(), tuple(int(v) for v in pos),
+                            frozenset(_glyph(i) for i in items), bl.time)
+        st.altar_pickup_tries = 0
     agent.inventory.drop(items)
     _log(agent, f'altar: {(agent.message or "")[:240]!r}')
+    if jf_config.ALTAR_PICKUP:
+        _altar_pickup(agent)
+
+
+def _altar_pickup_ready(agent):
+    """ALTAR_PICKUP: a BUC-test pile still lies on this level's altar (the drop's pickup was cut short): go back and
+    pick it up. Forgotten when we leave the level or after ALTAR_PICKUP_TURNS; waits while a hostile is adjacent (the
+    fight comes first) or while the glyphs can't be trusted (hallucination, blindness)."""
+    st = state(agent)
+    if not jf_config.ALTAR_PICKUP or st.altar_pending is None:
+        return False
+    key, pos, _glyphs, t0 = st.altar_pending
+    bl = agent.blstats
+    if agent.current_level().key() != key or bl.time - t0 > jf_config.ALTAR_PICKUP_TURNS:
+        _log(agent, f'altar pickup given up ({"left the level" if agent.current_level().key() != key else "too late"})'
+                    f' after {bl.time - t0} turns')
+        st.altar_pending = None
+        return False
+    prop = agent.character.prop
+    if prop.hallu or prop.blind or prop.stun or prop.polymorph or _hostiles_within(agent, 1):
+        return False
+    return (bl.y, bl.x) == pos or agent.bfs()[pos] != -1
+
+
+def _altar_pickup(agent):
+    """Pick up what the BUC test dropped (matched by glyph: the BUC words are new, the looks are not)."""
+    st = state(agent)
+    if st.altar_pending is None:
+        return
+    key, pos, glyphs, t0 = st.altar_pending
+    bl = agent.blstats
+    if (bl.y, bl.x) != pos:
+        _log(agent, f'back to the altar at {pos} for the BUC-tested items')
+        agent.go_to(*pos)
+        return
+    inv = agent.inventory
+    st.altar_pickup_tries += 1
+    below = inv.get_items_below_me()
+    mine = [it for it in below if _glyph(it) in glyphs]
+    if mine:
+        inv.pickup(mine)
+    left = [it for it in inv.items_below_me if _glyph(it) in glyphs]
+    _log(agent, f'altar pickup: took {len(mine) - len(left)} of {len(mine)} stacks back'
+                f'{"" if not left else f"; left {[it.text for it in left]}"}')
+    if not left or st.altar_pickup_tries >= 3:   # too heavy / refused: don't spin on the altar
+        st.altar_pending = None
 
 
 def _ring_test_ready(agent):
@@ -970,7 +1028,8 @@ def _ready(agent):
     if agent.blstats.time < state(agent).cooldown_until:
         return False
     try:
-        return bool(_jump_ready(agent) or _dip_ready(agent) or _wear_tc_ready(agent) or _gamble_ready(agent) or
+        return bool(_altar_pickup_ready(agent) or
+                    _jump_ready(agent) or _dip_ready(agent) or _wear_tc_ready(agent) or _gamble_ready(agent) or
                     _altar_ready(agent) or _dive_id_ready(agent) or _ring_test_ready(agent))
     except Exception as e:   # a readiness check must never break the preempt loop
         agent.log(f'PROUTE check failed: {e!r}')
@@ -979,6 +1038,10 @@ def _ready(agent):
 
 def _one_step(agent):
     """The first thing to do, in priority order; True if we acted."""
+    if _altar_pickup_ready(agent):
+        # first: the pile may hold the trigger itself (a teleport scroll the test just showed cursed)
+        _altar_pickup(agent)
+        return True
     if _jump_step(agent):
         return True
     dip = _dip_ready(agent)

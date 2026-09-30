@@ -11,10 +11,24 @@ from typing import Any
 
 import nle.nethack as nh
 from autoascend import agent as autoascend_agent
-from autoascend import jf_log
+from autoascend import jf_config, jf_log
 
 _ACTIONS = tuple(nh.ACTIONS)
 _ACTION_TO_INDEX = {int(action): index for index, action in enumerate(_ACTIONS)}
+
+
+def _warm_jit() -> None:
+    """WARM_JIT: compile utils.bfs now (bot startup: the sandbox allows max(30 s, action timeout)) rather than in the
+    game's first BFS action. One call covers every call site: numba coerces python/numpy ints and bools to this one
+    (int64, int64, bool[:, :], bool[:, :], bool) specialization."""
+    try:
+        import numpy as np
+        from autoascend import utils
+        walkable = np.zeros((21, 79), dtype=bool)
+        walkable[10, 10:13] = True
+        utils.bfs(np.int64(10), np.int64(10), walkable=walkable, walkable_diagonally=walkable, can_squeeze=False)
+    except Exception:
+        pass
 
 
 class AgentHang(autoascend_agent.AgentPanic):
@@ -119,6 +133,8 @@ class AutoAscendDriver:
     RESTART_TIMEOUT = 20.0
 
     def __init__(self, action_timeout: float = 100.0, hang_timeout: float = 20.0) -> None:
+        if jf_config.WARM_JIT:
+            _warm_jit()
         self._action_timeout = action_timeout
         self._hang_timeout = hang_timeout
         self._warm = False  # set once any agent in this process produced an action

@@ -288,6 +288,19 @@ class Character:
         # intrinsics from corpses (eat.c cpostfx), attrcurse takes them away: read by jf_config.SHOP_GUARD
         self.teleportitis = False
         self.teleport_control = False
+        # intrinsic telepathy from a floating eye corpse (eat.c cpostfx), lost to sit.c attrcurse: read by
+        # jf_config.FEYE_TELE (an extrinsic source -- helm of telepathy, amulet of ESP -- prints nothing and is not seen)
+        self.telepathic = False
+
+    def _track_telepathy(self, msg):
+        # eat.c cpostfx TELEPAT: 'You feel a strange mental acuity.' ('in touch with the cosmos.' hallucinating);
+        # sit.c attrcurse takes it away with 'Your senses fail!'
+        if 'You feel a strange mental acuity' in msg or 'You feel in touch with the cosmos' in msg:
+            if not self.telepathic:
+                self.agent.log('INTRINSIC telepathy')
+            self.telepathic = True
+        if 'Your senses fail' in msg:
+            self.telepathic = False
 
     def _track_teleport(self, msg):
         # eat.c cpostfx: 'You feel very jumpy.' (hallucinating: 'diffuse.') gives teleportitis, 'You feel in control
@@ -312,6 +325,7 @@ class Character:
             if 'You feel purified.' in self.agent.message:
                 self.is_lycanthrope = False
             self._track_teleport(self.agent.message)
+            self._track_telepathy(self.agent.message)
             return
         # every message since the last update: infections and changes happen inside atomic operations
         # (fights, searches), and the old check of the last message alone missed some of them
@@ -322,6 +336,7 @@ class Character:
         self._history_seen = len(history)
         msg = ' '.join(history[start:] + [self.agent.message])
         self._track_teleport(msg)
+        self._track_telepathy(msg)
         # infected while fainted or asleep the message is 'You dream that you feel feverish.' (75 of 591
         # infections in the dev runs): the old exact match never saw it, so no cure prayer came and the
         # bot went on eating jackal corpses (jf25 s10: 'You cannibal!', Luck -2..-5, next prayer failed)
@@ -384,7 +399,10 @@ class Character:
         cap = min(1000, (self.agent.blstats.strength_percentage + self.agent.blstats.constitution) * 25 + 50)
         # UNSQUEEZE: boxed in by diagonal squeezes (hack.c cant_squeeze_thru: > 600 carried), keep under 600
         if self.agent.blstats.time < getattr(self.agent, '_squeeze_cap_until', -1):
-            cap = min(cap, 550)
+            from . import jf_config
+            # SQUEEZE_KEEP: Item.unit_weight takes the heaviest candidate object, so the estimate never undershoots
+            # hack.c's 600; 550 left ~10 for the wands once the weapon, armour and tool were in (cmp-main jf41 s13)
+            cap = min(cap, jf_config.SQUEEZE_KEEP_CAP if jf_config.SQUEEZE_KEEP else 550)
         return cap
 
     def parse(self):

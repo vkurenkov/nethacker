@@ -276,6 +276,20 @@ class ExplorationLogic:
             yield True
             with self.agent.atom_operation():
                 self.agent.step(A.Command.LOOK)
+                if jf_config.ROBUST_FIXES:
+                    # eL1fe: the remembered altar is not here (misread glyph or stale map) -- forget it instead of
+                    # asserting on every visit (and don't index an empty popup)
+                    text = self.agent.message or (self.agent.popup[0] if self.agent.popup else '')
+                    r = re.search(r'There is an altar to [a-zA-Z- ]+ \(([a-z]+)\) here.', text)
+                    if r is None:
+                        self.agent.log(f'ROBUST no altar at {pos}: {text[:80]!r}')
+                        del level.altars[pos]
+                        # agent.update re-registers every remembered altar glyph (our own square keeps its old
+                        # glyph under the '@'): without this the walk back and LOOK would repeat forever
+                        if not hasattr(level, 'not_altars'):
+                            level.not_altars = set()
+                        level.not_altars.add((int(pos[0]), int(pos[1])))
+                        return
                 r = re.search(r'There is an altar to [a-zA-Z- ]+ \(([a-z]+)\) here.', self.agent.message or self.agent.popup[0])
                 assert r is not None, (self.agent.message, self.agent.popup)
                 alignment = r.groups()[0]
@@ -320,14 +334,30 @@ class ExplorationLogic:
             # kicking down the locked door and provoking a lethal shopkeeper.
             engraving = ''.join(c for c in self.agent.inventory.engraving_below_me.lower() if c.isalpha())
             closed_shop = difflib.SequenceMatcher(None, engraving, 'closedforinventory').ratio() >= 0.55
+            raw = (self.agent.inventory.engraving_below_me or '').strip()
+            if jf_config.SHOP_SIGN_FIX and engraving and not closed_shop and len(raw) >= 15 and \
+                    difflib.SequenceMatcher(None, engraving, 'elbereth').ratio() < 0.6:
+                # the sign wears off (walked on, random wipes): jf41 s3 read '?c?c  ??r ir?? ?  ?' (ratio 0.35),
+                # kicked the locked door open ('How dare you break my door?') and the shopkeeper killed it. Wiping
+                # keeps an engraving's length (engrave.c wipeout_text turns letters into '?'/' ', only leading
+                # blanks go), so a worn "Closed for inventory" still reads 15-20 characters, while the other
+                # engravings mklev puts outside a (niche) door are shorter: "ad aerarium" (a vault teleporter) and
+                # "Vlad was here" (a trap door) -- cand-b jf40 s6/s9 left 'd aerar um' doors unkicked otherwise
+                closed_shop = True
             # from inside a shop the door is the shopkeeper's (a digger fell into a closed shop and kicked
             # its locked door: the shopkeeper killed it)
             level = self.agent.current_level()
             y0, x0 = self.agent.blstats.y, self.agent.blstats.x
             closed_shop = closed_shop or level.shop[y0, x0] or level.shop_interior[y0, x0]
+            if jf_config.ROBUST_FIXES and not closed_shop and utils.isin(self.agent.glyphs, G.SHOPKEEPER).any():
+                # eL1fe: a hero that fell (dug) into a closed shop sees only the shopkeeper -- no entry greeting, so
+                # level.shop doesn't know the room yet -- and breaking its door from inside is just as fatal
+                closed_shop = True
             for py, px in self.agent.neighbors(self.agent.blstats.y, self.agent.blstats.x, diagonal=False):
                 if (self.agent.current_level().door_open_count[py, px] < door_open_count or
-                        (kick_doors and not closed_shop)) and \
+                        (kick_doors and not closed_shop and
+                         # ROBUST_FIXES2: a kick-only door waits while the legs are too wounded to kick
+                         (not jf_config.ROBUST_FIXES2 or self.agent.blstats.time >= self.agent._no_kick_until))) and \
                         self.agent.glyphs[py, px] in G.DOOR_CLOSED:
                     if not yielded:
                         yielded = True

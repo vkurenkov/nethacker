@@ -37,6 +37,13 @@ def _spore_blast_hits_people(agent, y, x):
     y0, x0 = agent.blstats.y, agent.blstats.x
     gl = agent.global_logic
     minetown = gl.minetown_level is not None and agent.current_level().key() == gl.minetown_level
+    # a shop's squares (agent.py marks the shopkeeper's room dilated by one: its walls and door): the shopkeeper
+    # stands just inside the door and is out of view from most angles. Killing a spore in or at a shop door angered
+    # him in 2 of the 4 murders of 16 recent runs (cmp-main jf41 s5 threw daggers at a spore in the doorway while
+    # Wonotobo, one square inside, was out of sight; base10arm jf16 s11 meleed one inside the shop)
+    level = agent.current_level()
+    if level.shop[max(y - 1, 0):y + 2, max(x - 1, 0):x + 2].any():
+        return True
     for yy in range(max(y - 1, 0), min(y + 2, agent.glyphs.shape[0])):
         for xx in range(max(x - 1, 0), min(x + 2, agent.glyphs.shape[1])):
             if (yy, xx) in ((y, x), (y0, x0)):
@@ -252,6 +259,14 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
     for item in agent.inventory.items:
         targeted_monsters = set()
         if not item.is_offensive_usable_wand() or agent.inventory.is_known_empty(item):
+            continue
+        # dive_logic.COLD_RESERVE: a known wand of cold is kept for Medusa's moat (MEDUSA_FREEZE) and the castle's
+        dive = getattr(getattr(agent, 'global_logic', None), 'dive', None)
+        if dive is not None and dive.cold_reserved(item):
+            continue
+        # MINO_GUARD (mino_guard.MinoGuard.reserved): a known wand of death is kept for a minotaur
+        guard = getattr(dive, 'mino_guard', None) if dive is not None else None
+        if guard is not None and guard.reserved(item):
             continue
         priority = 0
         # print('--------------', dy, dx)

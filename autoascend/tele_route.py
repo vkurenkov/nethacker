@@ -14,6 +14,10 @@ charge (zap.c zappable(): 1 chance in 121 per zap at 0 charges; the wand then tu
 base3-jf14 s14 and s8, base4arm/base5arm-jf16 s5 found a wand of wishing on Dlvl 1-3 (2-4 wishes, spent on gray
 dragon scale mail and life saving) and died at Dlvl 25-28.
 
+WISH_CHARGING_FIRST: the first wish from the wand is '2 blessed scrolls of charging'. The route's wishes zap the wand
+down to (x:0) (the first 'Nothing happens' tells an unknown count), then one scroll is read on it: read.c recharge()
+gives a never-recharged wand of wishing 3 charges (blessed; a second recharge explodes it), i.e. c + 2 wishes in all.
+
   route_wish(agent)                  the next wish the route still needs, or None
   note_wished(agent, text, letter)   remember where the wished (cursed) scrolls went
   teleport_route_strategy(agent)     put the ring on, wrest the wand, read the scrolls
@@ -34,6 +38,9 @@ WISH_WAND = O.from_name('wishing', nh.WAND_CLASS)
 WISH_TC_RING = 'blessed ring of teleport control'
 # readobjnam: a count of 2 is granted when 2 < rnd(6) (4 times in 6), else 1; 3 would be granted only half the time
 WISH_TELE_SCROLLS = '2 cursed scrolls of teleportation'
+# WISH_CHARGING_FIRST: one scroll recharges the wand; the second is a spare (a lost one, the castle's own wand)
+CHARGING_SCROLL = O.from_name('charging', nh.SCROLL_CLASS)
+WISH_CHARGING = '2 blessed scrolls of charging'
 MAX_WREST_ZAPS = 500       # P(no wrest in 500 zaps) = (120/121)^500 ~ 1.6%
 
 DUNGEONS_OF_DOOM, GEHENNOM = 0, 1
@@ -65,6 +72,45 @@ def tele_scrolls(agent):
     return None
 
 
+def charging_scroll(agent):
+    """WISH_CHARGING_FIRST: the stack the charging wish went to (blessed unless Luck < 0; bknown is unset)."""
+    letter = getattr(agent, '_charging_letter', None)
+    if letter is None:
+        return None
+    for it in _items(agent):
+        if agent.inventory.items.get_letter(it) == letter and it.category == nh.SCROLL_CLASS:
+            return it
+    return None
+
+
+def _recharged(agent, wand):
+    """The wand was recharged: by us, or its known count says so ('(1:3)'). A second recharge explodes it."""
+    if getattr(agent, '_wish_recharged', False):
+        return True
+    m = re.search(r'\((\d+):-?\d+\)', wand.text or '') if wand is not None else None
+    return m is not None and int(m.group(1)) > 0
+
+
+def _known_empty(agent, wand):
+    """A zap said 'Nothing happens' (agent.zap: inventory.empty_wands), or the known count is 0."""
+    return agent.inventory.is_known_empty(wand) or bool(re.search(r'\(\d+:0\)', wand.text or ''))
+
+
+def _charging_wanted(agent):
+    """WISH_CHARGING_FIRST: the next wand wish is the charging scrolls (asked once; a wish for them that failed --
+    Luck, a full pack -- leaves the old route)."""
+    if not jf_config.WISH_CHARGING_FIRST or getattr(agent, '_charging_asked', False) or \
+            charging_scroll(agent) is not None or not _wand_source(agent):
+        return False
+    return not _recharged(agent, wishing_wand(agent))
+
+
+def note_asked(agent, text):
+    """The wish prompt was answered with `text` (power.note_wish)."""
+    if text == WISH_CHARGING:
+        agent._charging_asked = True
+
+
 def _wand_source(agent):
     """The wish comes from a wand of wishing (an engrave-test or a zap just now, or one we know): >= 2 wishes. A
     throne, fountain or lamp gives one, and a ring of teleport control alone scores nothing."""
@@ -86,6 +132,8 @@ def _tc_known(agent):
 def route_wish(agent):
     if not jf_config.WISH_TELEPORT_ROUTE or getattr(agent, '_tele_route_done', False):
         return None
+    if _charging_wanted(agent):
+        return WISH_CHARGING
     if not _tc_known(agent):
         # the ring is worth a wish when more wishes follow (a wand: the scrolls come next) -- and with TC_ROUTE even
         # a single one (fountain demon, throne, lamp): 9 of 12 revealed castle kits carry teleport scrolls, 1 in 8
@@ -102,6 +150,28 @@ def note_wished(agent, text, letter):
     if text == WISH_TELE_SCROLLS:
         agent._tele_letter = letter
         agent.log(f'TELEPORT route: cursed scrolls of teleportation at {letter!r}')
+    elif text == WISH_CHARGING:
+        agent._charging_letter = letter
+        agent.log(f'TELEPORT route: blessed scrolls of charging at {letter!r}')
+
+
+def _read_charging(agent, wand, scroll):
+    """Read the charging scroll on the wand ('This is a charging scroll.' -> 'What do you want to charge?')."""
+    sl = agent.inventory.items.get_letter(scroll)
+    wl = agent.inventory.items.get_letter(wand)
+    agent.log(f'TELEPORT route: reading {scroll.text!r} ({sl}) on {wand.text!r} ({wl})')
+    agent._wish_recharged = True     # whatever happens: a second recharge would explode the wand
+    with agent.atom_operation():
+        agent.step(A.Command.READ)
+        agent.type_text(sl)
+        if 'What do you want to charge?' in agent.single_message:
+            agent.type_text(wl)
+        if 'What do you want to charge?' in agent.single_message:
+            agent.step(A.Command.ESC)
+    agent.log(f'TELEPORT route: charging -> {agent.message[:160]!r}')
+    agent.inventory.empty_wands.discard(wand.text)
+    agent._tele_zaps = 0
+    agent.inventory.items.update(force=True)
 
 
 def teleport_route_strategy(agent):
@@ -144,6 +214,16 @@ def teleport_route_strategy(agent):
 
         # 2) the wishes the route still needs: zap the wand, wresting its last charge when it is empty
         need = route_wish(agent)
+        # WISH_CHARGING_FIRST: at (x:0), before any wrest (a wrest turns the wand to dust), read a charging scroll
+        charging = charging_scroll(agent) if jf_config.WISH_CHARGING_FIRST else None
+        if charging is not None and need is not None and wand is not None and not near and \
+                _known_empty(agent, wand) and not _recharged(agent, wand):
+            prop = agent.character.prop
+            if not (prop.stun or prop.confusion or prop.blind or prop.hallu):
+                # (confused, the scroll charges our energy instead)
+                yield True
+                _read_charging(agent, wand, charging)
+                return
         if need is not None and wand is not None and not near:
             zaps = getattr(agent, '_tele_zaps', 0)
             if zaps < MAX_WREST_ZAPS:

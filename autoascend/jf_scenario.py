@@ -72,6 +72,10 @@ def apply(agent):
             agent._note_poly_control()
         if STATE.get('medusa_level'):
             dive.medusa_level = tuple(STATE['medusa_level'])
+        if STATE.get('castle_known'):
+            # a setup that polymorphs us on the castle into a form that can't dig (lift-ready's flyer tests): the
+            # castle is recognised by a dig that form can't make -- castle_logic.note_level marks it instead
+            dive._scenario_castle = True
         agent.log(f'SCENARIO start: {STATE} -> diving={dive.diving} mines_done={dive.mines_done} '
                   f'milestone={gl.milestone.name}')
     except Exception as e:   # a typo in a dev scenario must not kill the agent thread

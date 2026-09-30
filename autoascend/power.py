@@ -58,7 +58,8 @@ WISH_SPEED = 'blessed greased +2 speed boots'
 # wishes whose object has a random appearance (gray dragon scale mail is known on sight)
 WISH_OBJECTS = {WISH_LEV_RING: LEV_RING, WISH_LS: LS_AMULET, WISH_SPEED: SPEED_BOOTS}
 # WISH_TELEPORT_ROUTE (tele_route.py): a ring of teleport control and cursed scrolls of teleportation
-WISH_OBJECTS.update({tele_route.WISH_TC_RING: tele_route.TC_RING, tele_route.WISH_TELE_SCROLLS: tele_route.TELE_SCROLL})
+WISH_OBJECTS.update({tele_route.WISH_TC_RING: tele_route.TC_RING, tele_route.WISH_TELE_SCROLLS: tele_route.TELE_SCROLL,
+                     tele_route.WISH_CHARGING: tele_route.CHARGING_SCROLL})
 
 
 def _prob(obj):
@@ -252,6 +253,7 @@ _WISH_GOT = re.compile(r'(?:^|\s)([a-zA-Z]) - ((?:an?|\d+) [^.]+?)\.(?=\s|$)')
 
 def note_wish(agent, text):
     """WISH_LEARN: the wish prompt was answered with `text` (agent.update); learn_wished names the result."""
+    tele_route.note_asked(agent, text)
     if jf_config.WISH_LEARN:
         agent._wish_pending = (WISH_OBJECTS.get(text), text, agent.step_count)
 
