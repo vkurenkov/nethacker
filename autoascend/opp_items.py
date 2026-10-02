@@ -52,6 +52,7 @@ import nle.nethack as nh
 
 from . import jf_config, utils
 from . import objects as O
+from .exceptions import AgentChangeStrategy
 from .glyph import MON, SS, Hunger
 
 from .strategy import Strategy
@@ -68,6 +69,16 @@ BUGLE = O.from_name('bugle')
 # BUGLE_SCARE: the mercenaries a bugle wakes and turns hostile (music.c awaken_soldiers: is_mercenary)
 _MERCENARIES = frozenset(('soldier', 'sergeant', 'lieutenant', 'captain', 'watchman', 'watch captain'))
 HORNS = frozenset((TOOLED_HORN, FROST_HORN, FIRE_HORN, HORN_OF_PLENTY))
+# INSTRUMENT_KEEP / PASSTUNE_CRUSHER (castle-redteam): the instruments that play the castle drawbridge's passtune --
+# music.c do_play_instrument asks 'Improvise?' of everything but the drums (a horn of plenty is no instrument)
+TONAL = frozenset(O.from_name(n) for n in ('tooled horn', 'frost horn', 'fire horn', 'wooden flute', 'magic flute',
+                                             'wooden harp', 'magic harp', 'bugle'))
+
+
+def is_tonal(item):
+    """A tool that may play the passtune: one of its possible types is tonal (an unknown 'horn' may still be a horn
+    of plenty; castle_crusher learns that from a play)."""
+    return item.category == nh.TOOL_CLASS and bool(item.objs) and bool(set(item.objs) & TONAL)
 DRUMS = frozenset((LEATHER_DRUM, EARTHQUAKE_DRUM))
 
 G_GENO = 0x0020
@@ -524,8 +535,18 @@ def play(agent, item, ray_dir):
                 continue
             return
 
-    with agent.atom_operation():
-        agent.step(A.Command.APPLY, gen())
+    try:
+        with agent.atom_operation():
+            agent.step(A.Command.APPLY, gen())
+    except AgentChangeStrategy:
+        # F362: raised by the preempt checks at the end of the block, i.e. the apply is done: its record is not skipped
+        if jf_config.PREEMPT_SAFE:
+            _note_play(agent, st, item, letter, ray_dir, seen)
+        raise
+    return _note_play(agent, st, item, letter, ray_dir, seen)
+
+
+def _note_play(agent, st, item, letter, ray_dir, seen):
     msg = agent.message or ''
     g = item.glyphs[0] if item.glyphs else None
     if not set(item.objs) <= DRUMS and not item.is_unambiguous():
@@ -562,8 +583,14 @@ def use_camera(agent, item, direction):
                 continue
             return
 
-    with agent.atom_operation():
-        agent.step(A.Command.APPLY, gen())
+    try:
+        with agent.atom_operation():
+            agent.step(A.Command.APPLY, gen())
+    except AgentChangeStrategy:
+        # F362 (see play): an empty camera flashed again costs a turn next to the minotaur
+        if jf_config.PREEMPT_SAFE and 'Nothing happens' in (agent.message or ''):
+            state(agent).empty.add(item.text)
+        raise
     msg = agent.message or ''
     if 'Nothing happens' in msg:
         state(agent).empty.add(item.text)

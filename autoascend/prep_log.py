@@ -275,6 +275,17 @@ class _Book:
         self.errors = 0
 
 
+def force(agent, tag):
+    """Log a PREP state now with the checkpoint `tag` (armour lane: 'MS' when a mattock digger's shield goes back on, so the
+    readiness reader can take the AC after it). Logging only: never steps, never draws a random number, never raises."""
+    if not jf_config.PREP_LOG or not jf_log.enabled():
+        return
+    try:
+        agent.log('PREP ' + json.dumps(_state(agent, [tag]), separators=(',', ':'), sort_keys=True, default=_plain))
+    except Exception:
+        pass
+
+
 def note(agent):
     """Agent.update calls this on every observation when jf_config.PREP_LOG is on. Cheap unless a
     checkpoint is due; never raises."""

@@ -499,7 +499,9 @@ class Character:
         return next(iter(self.upgradable_skills.keys()))
 
     def _parse_enhance_view(self):
-        if self.agent.popup[0] not in ('Current skills:', 'Pick a skill to advance:'):
+        # an empty popup (seen once: a garbled zap-direction prompt in a dying game, cand-l2 gate jf916 s6) raised
+        # IndexError here; treat it like any other unexpected view
+        if not self.agent.popup or self.agent.popup[0] not in ('Current skills:', 'Pick a skill to advance:'):
             raise ValueError('Invalid ehance popup text format.' + str(self.agent.popup))
         self.upgradable_skills = dict()
         for line in self.agent.popup[1:]:

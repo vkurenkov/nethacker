@@ -22,6 +22,7 @@ from nle.nethack import actions as A
 
 from . import jf_config, power
 from . import objects as O
+from .exceptions import AgentChangeStrategy
 
 M1_FLY, M1_SWIM, M1_AMPHIBIOUS = 0x1, 0x2, 0x200
 M1_NOHANDS, M1_NOLIMBS, M1_SLITHY = 0x2000, 0x6000, 0x80000
@@ -103,9 +104,20 @@ def _engrave_test(passage, item):
     im = inv.item_manager
     old = getattr(agent, 'wish_purpose', None)
     agent.wish_purpose = 'passage'
+    types = None
     try:
         with agent.atom_operation():
             types = inv._engrave_single_wand(item)
+    except AgentChangeStrategy:
+        # F362: raised by the preempt checks at the END of the block, i.e. the test is done (35 of the 112 real castle kits of
+        # the PREEMPT_TRACE census were cut here, rush_strategy mostly; 1 completed): its result is booked before the strategy
+        # that took over runs, else the wand is untested again and the castle plan never learns what it can do
+        if jf_config.PREEMPT_SAFE and types is not None:
+            im._glyph_to_possible_wand_types[item.glyphs[0]] = types
+            im._already_engraved_glyphs.add(item.glyphs[0])
+            im.possible_objects_from_glyph(item.glyphs[0])
+            passage._log(f'power: engrave-tested {item.text!r}: {[o.name for o in types]} (booked after a preemption)')
+        raise
     finally:
         agent.wish_purpose = old
     if types is None:
@@ -181,6 +193,13 @@ def arrival_step(passage):
         return False
     if poly and jf_config.LIFT_POLY_PICKY and _repoly_step(passage):
         return True
+    if poly and jf_config.CP_POLY:
+        # castle-poly (castle_poly.py, ledger F094): in our own form, the wand of polymorph is zapped on the courtyard's
+        # test square, not where we land (a handless form can't dig out of the west maze); forms are castle_poly's
+        # form_strategy's (walk to the courtyard, re-roll the ones that can't cross)
+        from . import castle_cross, castle_poly
+        if castle_poly.arrival_step(passage, jf_config.CFP_RUSH and castle_cross.pending(passage)):
+            return True
     if passage._floating():
         return False   # castle_logic takes a floating hero to the corner (CASTLE_WEST_DIG digs through the maze)
     t = passage._tries
@@ -199,6 +218,10 @@ def arrival_step(passage):
                     return True
         # (scrolls that may be scare monster are dropped only when an Elbereth-ignorer closes in: CASTLE_SCARE,
         # dive_logic.gehennom_scare -- dropped here at the landing they stayed behind when we moved on)
+    if jf_config.LANDING_CRUSH_FIRST:
+        from . import castle_cross
+        if castle_cross.crusher_first(passage.dive):
+            return False   # LANDING_CRUSH_FIRST: no lift tests before the crusher (the wand engrave tests above stay)
     cfp_wait = False
     if jf_config.CFP_RUSH:
         # castle-first-pass: the kit's own lasting lifts and the magical-breathing water test go first; a big form
@@ -209,7 +232,7 @@ def arrival_step(passage):
     if jf_config.CFP_XORN:
         from . import castle_cross
         xorn = castle_cross.wallwalker(agent)
-    if poly and not cfp_wait and not xorn:
+    if poly and not cfp_wait and not xorn and not jf_config.CP_POLY:
         # 3. a known wand of polymorph: zap ourselves until a form that crosses water comes up
         form = current_form(agent)
         if jf_config.CFP_MB:
@@ -251,6 +274,10 @@ def arrival_step(passage):
         # 4. the lasting lifts of the passage plan right here instead of after the walk through the maze (a
         # potion's 10-149 turns of levitation are kept for the moat: castle_logic quaffs them by the corner)
         plan = passage._plan()
+        if plan and not passage._resting and jf_config.LANDING_QUIET_TESTS:
+            from . import castle_cross
+            if castle_cross._land_hostiles_within(passage, 2):
+                plan = None   # LANDING_QUIET_TESTS: no lift test with a monster within 2 squares
         if plan and not passage._resting:
             kind, item = plan[0]
             # known lifts are castle_logic's (it rests first); the drill tests unknown ones where we land (a known
@@ -272,9 +299,20 @@ def door_step(passage, pos):
         return False
     agent = passage.agent
     p = current_form(agent)
+    if jf_config.CP_POLY and p is None:
+        # castle-poly: the form from the messages too (an invisible hero's square shows no monster glyph)
+        from . import castle_cross
+        p = castle_cross.form_permonst(agent)
     if p is None:
         return False
     from .castle_logic import DOOR, TRAPDOOR, SAFE_EAST, OUTSIDE, _bfs
+    if jf_config.CP_POLY:
+        # castle-poly (castle_poly.door_step): a flyer in the doorway goes on to the trap door (LIFT_PLUNGE's '>'); a form
+        # that can't open the door re-rolls with the wand from SAFE_EAST (CP_DOOR_REZAP) instead of waiting it out
+        from . import castle_poly
+        r = castle_poly.door_step(passage, pos, p)
+        if r is not None:
+            return r
     if jf_config.BREACH_PLUNGE and pos == TRAPDOOR and flies(p) and not passage.levitating():
         # do.c dodown: on a trap door we have seen (flying over it: 'A trap door opens up under you! You don't fall
         # in.' -- trap.c feeltrap) '>' plunges through it even while flying (dotrap TOOKPLUNGE); only levitation

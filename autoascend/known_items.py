@@ -37,18 +37,22 @@ and no safe emergency prayer due (that goes first: mino_guard.MinoGuard._prayer_
 No zap in Minetown or with a peaceful (a watchman, a shopkeeper) on the line (fight_heur.missiles_risk_the_watch), no
 teleport with unpaid shop goods in the pack (theft). No danger while an intact Elbereth under us holds everything next
 to us and nothing has hurt us through it, and never a zap at a monster that Elbereth scares from it (mon.c setmangry:
-'You feel like a hypocrite', -5 alignment, the engraving deleted -- da-all2 jf54 s2 did that to a mumak). Every action is logged 'KNOWN_ITEMS ...'. A minotaur in view is
-mino_guard's (above us in global_strategy).
+'You feel like a hypocrite', -5 alignment, the engraving deleted -- da-all2 jf54 s2 did that to a mumak). Every
+action is logged 'KNOWN_ITEMS ...'. A minotaur in view is mino_guard's (above us in global_strategy).
 Targeted pinned replays (19b5f85, KNOWN_ITEMS on vs cand-g): jf45 s14 0.117 -> 0.647 (the blessed scroll at 15/79 HP
 next to the mumak, then the castle), jf52 s9 0.075 -> 0.466 (read blind at 27/75 under the soldier ant), jf48 s8
 0.126 -> 0.393, jf49 s7 0.379 -> 0.466; jf54 s1 unchanged (5 striking zaps killed the sergeant and a soldier, then the
 wand was empty); jf50 s14 unchanged (its wand of fire was known empty).
+Population (da-all3: 270 fresh pinned games, the dive-audit flags and WELD_PRAY on vs cand-g): +0.0127 mean progress
+(paired t 2.12); the 45 games whose first divergence was a KNOWN_ITEMS action gained +0.52 in all. ON since cand-i
+(s25).
 """
 import nle.nethack as nh
 
 from . import castle_power, jf_config, utils
 from . import objects as O
 from .combat.monster_utils import WEAK_MONSTERS
+from .exceptions import AgentChangeStrategy
 from .glyph import G, MON
 from .item import Item
 from .level import Level
@@ -312,12 +316,24 @@ class KnownItemsGuard:
             agent.move('<')
             return
         if kind == 'read':
-            self.mino._read(arg, f'KNOWN_ITEMS: {why}')
+            try:
+                self.mino._read(arg, f'KNOWN_ITEMS: {why}')
+            except AgentChangeStrategy:
+                # F362: the read is done (the preempt checks run at the end of its block): a level that does not let us
+                # teleport is noted whatever strategy takes over, else the next emergency reads the next scroll there too
+                if jf_config.PREEMPT_SAFE and _NOTELEPORT in (agent.message or ''):
+                    self.mino._noteleport.add(key)
+                raise
             if _NOTELEPORT in (agent.message or ''):
                 self.mino._noteleport.add(key)
             return
         if kind == 'zapself':
-            agent.zap(arg, '.')
+            try:
+                agent.zap(arg, '.')
+            except AgentChangeStrategy:
+                if jf_config.PREEMPT_SAFE and _NOTELEPORT in (agent.message or ''):
+                    self.mino._noteleport.add(key)
+                raise
             agent.log(f'KNOWN_ITEMS zap -> {(agent.message or "")[:160]!r}')
             if _NOTELEPORT in (agent.message or ''):
                 self.mino._noteleport.add(key)

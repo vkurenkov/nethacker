@@ -1,5 +1,6 @@
 """minotaur lane (jf_config.MINO_GUARD): keep minotaurs from ending the dive -- in the filler mazes between Medusa and
-the castle (mkmaze.c fill_empty_maze: rn2(3) minotaurs per level) and in the castle's west maze.
+the castle (mkmaze.c makemaz: rn2(3) minotaurs per level) and in the castle's west maze (sp_lev.c fill_empty_maze:
+rn2(2) per MAZEWALK, placed anywhere in the maze).
 
 Evidence (cmp-main = 99e4eb7, 90 pinned games): minotaurs killed 23 of 90 games. Of the 17 on dev sets, 7 died on a
 maze level 0-9 turns after the landing (jf14 s0/s9, jf16 s10, jf41 s0/s13, jf42 s5/s7) and 10 on the castle. A
@@ -43,7 +44,7 @@ from nle.nethack import actions as A
 
 from . import castle_power, jf_config, opp_items, power, utils
 from . import objects as O
-from .glyph import G
+from .glyph import G, SS
 from .item import Item
 from .level import Level
 from .strategy import Strategy
@@ -54,6 +55,10 @@ MINO_CONSUME_RANGE = 5    # ...scrolls and self-teleports only this close: at fi
 MINO_STAIRS_STEPS = 2     # walk to an up staircase this many steps away
 MINO_STAIRS_AVOID = 1000  # turns the '>' we climbed onto is avoided (dig down elsewhere instead)
 MINO_ALERT_TURNS = 300    # after a minotaur sighting on a level, no rest there this long
+GAMBLE_OVER_DAMAGE = 0.05  # LANDING_MINO_CASTLE: what a known damage ray is worth among the castle gambles: 6d6 a hit
+                           # (~2 with the bounce) vs a 15HD minotaur's ~68 HP, and it takes ~40 of ours a turn -- the
+                           # fight is over before a third zap (smoke ld-smk2 cm-jf41-s9~3 zapped lightning at 25/69
+                           # HP with a scroll kept back for a read)
 SLEEP_WINDOW = 150        # our sleep ray froze it for d(6,25) turns (zap.c sleep_monst): frozen until it acts or
                           # moves (_note), at most this long
 
@@ -73,6 +78,15 @@ _PM_MINOTAUR = next(i for i in range(nh.NUMMONS) if nh.permonst(i).mname == 'min
 _MINO_GLYPHS = [off + _PM_MINOTAUR for off in (nh.GLYPH_MON_OFF, nh.GLYPH_PET_OFF, nh.GLYPH_DETECT_OFF,
                                                nh.GLYPH_RIDDEN_OFF)]
 _MINO_PERMONST = nh.permonst(_PM_MINOTAUR)
+_MINO_PET = nh.GLYPH_PET_OFF + _PM_MINOTAUR
+_WET = frozenset({SS.S_pool, SS.S_water, SS.S_lava})   # (dive_logic.WET: that module imports this one's users)
+_ZAP_VALUE = re.compile(r'zap value (-?[0-9.]+)')
+
+
+def _zap_value_of(why):
+    """castle_power.best_zap's 'zap value 0.14 (run 2)' -> 0.14 (0.0 if absent)."""
+    m = _ZAP_VALUE.search(why or '')
+    return float(m.group(1)) if m else 0.0
 
 
 class MinoGuard:
@@ -92,6 +106,7 @@ class MinoGuard:
         self._blows = {}           # HORN_SCARE: level key -> turns we blew a scare instrument there
         self._near_prev = {}       # HORN_SCARE: level key -> (step, nearest awake minotaur now, at the step before)
         self._hp_prev = None       # HORN_SCARE: (step, our HP now, at the step before)
+        self._pile_proven = None   # LANDING_MINO_CASTLE: (level key, (y, x)) of a pile a minotaur fled from
 
     # ------------------------------------------------------------------ state
 
@@ -114,8 +129,87 @@ class MinoGuard:
         if utils.any_in(agent.glyphs, G.SWALLOW):
             return False
         if self.dive.levitating() or self.dive.castle._floating():
-            return False   # over the moat: the crossing's business (a minotaur can't enter water)
+            # LANDING_MINO_FLOAT: floating over LAND (the castle's west maze on the way to the moat) we are in its
+            # reach as much as on foot; only over water is it the crossing's business
+            if not jf_config.LANDING_MINO_FLOAT or self._over_water():
+                return False   # over the moat: the crossing's business (a minotaur can't enter water)
         return True
+
+    def _over_water(self):
+        """LANDING_MINO_FLOAT: our square is water -- the castle's moat by its map (not frozen), elsewhere the terrain
+        remembered under us."""
+        from . import castle_logic
+        agent = self.agent
+        bl = agent.blstats
+        y, x = int(bl.y), int(bl.x)
+        dive = self.dive
+        if dive.castle.castle_key == agent.current_level().key() or self._maybe_castle():
+            mx, my = castle_logic.to_map(y, x)
+            if castle_logic.map_char(mx, my) == '}':
+                return not dive.castle._dry(mx, my)
+        return int(agent.current_level().objects[y, x]) in _WET
+
+    def _castle_now(self):
+        """LANDING_MINO_CASTLE: this level is the castle -- recognised, or a castle-likely landing (_maybe_castle)
+        where a door sound was heard or the first WAND_CASTLE_WAIT turns are not over (castle arrivals hear the
+        soldiers' doors within 3 turns, 101/101; a filler maze has no doors: silence after that = a filler)."""
+        if not jf_config.LANDING_MINO_CASTLE:
+            return False
+        dive = self.dive
+        agent = self.agent
+        key = agent.current_level().key()
+        if dive.castle.castle_key == key:
+            return True
+        if not self._maybe_castle():
+            return False
+        if key in getattr(dive, '_door_heard', {}):
+            return True
+        vkey, t0 = getattr(dive, '_visit_start', (None, 0))
+        from . import dive_logic
+        return vkey == key and agent.blstats.time - t0 < dive_logic.WAND_CASTLE_WAIT
+
+    def _here(self):
+        agent = self.agent
+        return agent.current_level().key(), (int(agent.blstats.y), int(agent.blstats.x))
+
+    def _pile_fake(self, msg):
+        """LANDING_MINO_CASTLE: a minotaur attacked us while we stand on our dropped scroll pile: none of it is scare
+        monster (a scared monster never melees: monmove.c dochug !scared). Stop counting it as one at once -- the old
+        check needed the blow in the message at the moment on_scare_scroll() ran, and the guard dug on under the
+        blows (cm-jf41-s9~3)."""
+        dive = self.dive
+        agent = self.agent
+        spot = getattr(dive, '_scare_spot', None)
+        if spot is None:
+            return
+        pos = (int(agent.blstats.y), int(agent.blstats.x))
+        if spot[0] != agent.current_level().key() or (int(spot[1][0]), int(spot[1][1])) != pos:
+            return
+        agent.log(f'SCARE no scare monster in the pile at {spot[1]}: the minotaur attacks us on it ({msg[:80]!r})')
+        dive._scare_spot = None
+        dive._not_scare_keys |= getattr(dive, '_scare_dropped_keys', set())
+
+    def _gamble_p(self, near):
+        """LANDING_MINO_CASTLE: CASTLE_SCARE's drop gamble (dive.gehennom_scare, below us in the preempt chain) is
+        due now -- the nearest minotaur within castle_landing.scare_radius(), no pile under us, not on stairs, scrolls
+        to drop -- with P(the pile scares it) = the sum of P(scare monster) over the scrolls it would drop. 0 if not
+        due."""
+        dive = self.dive
+        agent = self.agent
+        if not jf_config.CASTLE_SCARE or not dive._castle_scare():
+            return 0.0
+        from .castle_landing import scare_radius
+        if near > scare_radius():
+            return 0.0
+        spot = getattr(dive, '_scare_spot', None)
+        pos = (int(agent.blstats.y), int(agent.blstats.x))
+        if spot is not None and spot[0] == agent.current_level().key() and \
+                (int(spot[1][0]), int(spot[1][1])) == pos:
+            return 0.0   # on a pile already
+        obj = agent.current_level().objects[pos]
+        if obj in G.STAIR_UP or obj in G.STAIR_DOWN:
+            return 0.0
+        return sum(p for _, p in dive.scare_gamble_list())
 
     def _note(self):
         """Idempotent message parsing (runs on every check): our sleep ray froze a minotaur; a refused teleport."""
@@ -136,6 +230,12 @@ class MinoGuard:
             ray = msg.rfind('The sleep ray hits')
             if ray < last:
                 self._asleep = {k: v for k, v in self._asleep.items() if k[0] != key}
+            if jf_config.LANDING_MINO_CASTLE and last > msg.rfind('You drop'):
+                self._pile_fake(msg)
+        if jf_config.LANDING_MINO_CASTLE and 'The minotaur turns to flee' in msg:
+            spot = getattr(self.dive, '_scare_spot', None)
+            if spot is not None and (spot[0], (int(spot[1][0]), int(spot[1][1]))) == self._here():
+                self._pile_proven = self._here()   # it fled from our pile: a real scroll of scare monster
         if _SLEEP_HIT.search(msg):
             for m in self._minos():
                 self._asleep[(key, (m[1], m[2]))] = agent.blstats.time
@@ -155,6 +255,8 @@ class MinoGuard:
             y, x = int(y), int(x)
             if (y, x) == (int(bl.y), int(bl.x)):
                 continue
+            if jf_config.LANDING_MINO_CASTLE and int(agent.glyphs[y, x]) == _MINO_PET:
+                continue   # one our scroll of taming tamed (smoke ld-smk3 cm-jf41-s9~3 read on at its pet)
             out.append((max(abs(y - int(bl.y)), abs(x - int(bl.x))), y, x, _MINO_PERMONST))
         out.sort(key=lambda m: m[0])
         return out
@@ -171,6 +273,10 @@ class MinoGuard:
         if key in dive.undiggable or key == dive.castle.castle_key or dive.in_valley() or \
                 level.dungeon_number not in (Level.DUNGEONS_OF_DOOM, GEHENNOM):
             return False
+        if self._castle_now():
+            return False   # LANDING_MINO_CASTLE: a castle-likely landing -- a dig or a zap down only makes a pit
+        if jf_config.LANDING_MINO_FLOAT and dive.levitating():
+            return False   # (dig.c: 'You can't reach the floor.')
         return True
 
     def _teleport_ok(self):
@@ -273,9 +379,9 @@ class MinoGuard:
             return None, None
         return best, why
 
-    def _unknown_scroll(self):
+    def _unknown_scroll(self, cursed_ok=True):
         """The unknown scroll most likely to end the fight: P(teleportation) (where teleports work) + P(scare monster)
-        + P(taming) + P(genocide); (item, p) or (None, 0)."""
+        + P(taming) + P(genocide); (item, p) or (None, 0). cursed_ok=False skips scrolls known to be cursed."""
         agent = self.agent
         good = {_SCR['scare monster'], _SCR['taming'], _SCR['genocide']}
         if self._teleport_ok():
@@ -283,6 +389,8 @@ class MinoGuard:
         best, bp = None, 0.0
         for it in agent.inventory.items:
             if it.category != nh.SCROLL_CLASS or it.is_unambiguous() or it.glyphs[0] in self._read_glyphs:
+                continue
+            if not cursed_ok and it.status == Item.CURSED:
                 continue
             p = power.p_of(it, good)
             if p > bp:
@@ -391,6 +499,14 @@ class MinoGuard:
         if dive.on_scare_scroll():
             if diggable and self._dig_action() is not None:
                 yield ('dig', None, 'on a scroll of scare monster')
+            if near <= 1 and self._castle_now() and self._pile_proven != self._here() and \
+                    not agent.character.prop.blind and not agent.character.prop.confusion:
+                # LANDING_MINO_CASTLE: a fresh pile it hasn't fled from yet, with it next to us: read the scroll kept
+                # back now -- a real pile loses nothing by it, a fake one shows only by its blows (smoke ld-smk2
+                # cm-jf41-s9~3: the hold wielded and struck on the fake pile, 69 -> 25 HP before the guard could act)
+                scroll, p = self._unknown_scroll(cursed_ok=False)
+                if scroll is not None and p > 0:
+                    yield ('read', scroll, f'castle: unknown scroll on a fresh pile P(scare/taming/genocide)={p:.2f}')
             return   # (the castle's scare hold: gehennom_scare)
         adjacent = near <= 1
         consume = near <= MINO_CONSUME_RANGE or adjacent
@@ -499,6 +615,10 @@ class MinoGuard:
         # 4/11 (a 6d6 ray: at it when in line, else down the longest free line), plenty 2/11 (nothing)
         if kit.get('horn') and consume and self._dist2(awake[0]) < 10 * int(bl.experience_level):
             yield ('horn', (kit['horn'][0], self._ray_dir(awake)), f'unknown horn, minotaur at {near}')
+        # LANDING_MINO_CASTLE: on the castle with it next to us, the gambles left go best chance first (_castle_adjacent)
+        if adjacent and self._castle_now():
+            yield from self._castle_adjacent(near, lines)
+            return
         # 9. damage rays: cold (a Valkyrie resists its bounce), fire and lightning next to us
         if lines:
             (direction, dist, (sy, sx)), m = lines[0]
@@ -521,6 +641,46 @@ class MinoGuard:
             if scroll is not None and p > 0:
                 yield ('read', scroll, f'unknown scroll P(save)={p:.2f}')
         return
+
+    def _castle_adjacent(self, near, lines):
+        """LANDING_MINO_CASTLE, the minotaur next to us on the castle (no teleport, no hole): what is left, best chance
+        of ending the fight first --
+          * CASTLE_SCARE's drop gamble (dive.gehennom_scare, below us in the preempt chain; we return without a plan
+            and it drops): P = the sum of P(scare monster) over the scrolls it drops -- k labels, k chances in one turn;
+          * an unknown scroll read: P(scare monster + taming + genocide) (read.c: scare -- every monster on a seen
+            square flees, untimed, in the dark maze the adjacent one; taming -- the 8 neighbours, MR 0 never resists;
+            genocide -- GENOCIDE_POLICY answers 'minotaur'); never a known-cursed one (a cursed scare scroll wakes
+            them, a cursed taming angers them, a cursed genocide sends in more);
+          * a known damage ray (cold, or fire/lightning next to us): GAMBLE_OVER_DAMAGE (6d6 a hit, ~2 hits with the
+            bounce, vs ~68 HP);
+          * an unknown wand: castle_power's zap value.
+        With 3+ maybe-scare scrolls the drop comes first (LANDING_SCARE_KEEP1 keeps one back), the last one or two are
+        read; a pile that doesn't scare it is known at its first blow (_pile_fake)."""
+        agent = self.agent
+        opts = []
+        gamble = self._gamble_p(near)
+        if gamble > 0:
+            opts.append((gamble, None))
+        prop = agent.character.prop
+        if not prop.blind and not prop.confusion:
+            scroll, p = self._unknown_scroll(cursed_ok=False)
+            if scroll is not None and p > 0:
+                opts.append((p, ('read', scroll, f'castle: unknown scroll P(scare/taming/genocide)={p:.2f}')))
+        if lines:
+            (direction, dist, (sy, sx)), m = lines[0]
+            wand, name = self._wand(('cold',))
+            if wand is None and dist <= 1:
+                wand, name = self._wand(('fire', 'lightning'))
+            if wand is not None:
+                opts.append((GAMBLE_OVER_DAMAGE, ('zap', (wand, direction, m), f'known {name} at {dist}')))
+            wand, why = self._unknown_wand(sy, sx)
+            if wand is not None:
+                opts.append((_zap_value_of(why), ('zap', (wand, direction, m), f'unknown wand ({why}) at {dist}')))
+        opts.sort(key=lambda o: -o[0])
+        for _, plan in opts:
+            if plan is None:
+                return   # the drop gamble first
+            yield plan
 
     def _instruments(self):
         """HORN_SCARE: {'scare': [(item, scare radius^2)], 'horn': [unknown horns], 'camera': [cameras]}."""
@@ -688,7 +848,7 @@ class MinoGuard:
             pos = (bl.y, bl.x)
             dive._scare_spot = (key, pos)
             dive._scare_drop_turn = bl.time
-            agent.inventory.drop(arg, 1)
+            agent.inventory.drop(arg, 1, note_scare=True)
             agent.inventory._note_dropped([arg], [1], force=True)
             return
         raise ValueError(kind)
@@ -740,7 +900,7 @@ class MinoGuard:
                     for k in text + '\r':
                         yield k
                     continue
-                if 'What would you like to identify' in head:
+                if power_route.in_identify_menu(agent, head, menu_pages):
                     keys = power_route._identify_step(agent, menu_pages)
                     if keys is None:
                         yield A.Command.ESC
@@ -774,7 +934,11 @@ class MinoGuard:
                 return
             yield True
             self._act(plan)
-            if not (jf_config.HORN_SCARE and self._instruments()):
+            # LANDING_MINO_CASTLE / LANDING_MINO_FLOAT keep acting too: after a one-action return the lower chain ran
+            # one step before the guard looked again -- smoke ld-smk1 cm-jf41-s9~3: the guard zapped, then
+            # gehennom_scare dropped the scroll kept back for the guard's read
+            if not ((jf_config.HORN_SCARE and self._instruments()) or self._castle_now() or
+                    (jf_config.LANDING_MINO_FLOAT and (self.dive.levitating() or self.dive.castle._floating()))):
                 return
             # HORN_SCARE with an instrument in the pack: keep acting while the guard has a plan (as HOLD_LOOP). After a
             # one-action return agent.preempt runs one step of the lower chain before this condition is checked

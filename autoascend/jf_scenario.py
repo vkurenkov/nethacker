@@ -18,6 +18,18 @@ Keys:
   identity          {"role": "VALKYRIE", "race": "DWARF", "gender": "FEMALE", "alignment": "LAWFUL"} when the
                     attribute parse can't read them (a polymorphed start)
   medusa_level      [dnum, dlvl] of Medusa's level
+  price_known       {"<appearance as displayed>": base price} -- shop price groups learned before (price_id.py)
+  crusher_state     {"tune": "EGDDB", "locked_out": true} -- castle-inner replays (dev/replay.py): the game was fed by
+                    recorded actions up to the Crusher's lock-out (hero on map (07,08), bridge up behind her), so the
+                    fresh Crusher is told what the recording bot knew: the tune, and that crush/lock-out are done
+  cfg               {"NAME": value, ...} jf_config switches set for this game only (one run, arms with different switches)
+  court_heard       the setup knew the start level has a court (wish_source.scenario_hint: as if its sound had been heard)
+  court_entered     ... and that the hero stands in it ('You enter an opulent throne room!')
+  tc_intrinsic      the hero has teleport control as an intrinsic AND knows it (a tengu corpse eaten before the bot
+                    started: 'You feel in control of yourself.'); spec "intrinsics": ["teleport_control"] gives the
+                    property itself (t-route harness kits)
+  idle_turns        the dive plan does nothing for this many turns (fight2, Elbereth rests and the guards still act): how
+                    much of a landing's death is the plan's own doing (dev measurement only)
 """
 import json
 import os
@@ -35,6 +47,12 @@ def apply(agent):
     if STATE is None:
         return
     try:
+        if STATE.get('cfg'):
+            # per-game switch overrides (dev only: the arena never sets JF_SCENARIO), so one queued harness run can hold arms
+            # with different switches (the code reads jf_config.NAME at call time)
+            from . import jf_config
+            for name, value in STATE['cfg'].items():
+                setattr(jf_config, name, value)
         from .global_logic import Milestone
         gl = agent.global_logic
         dive = gl.dive
@@ -76,6 +94,30 @@ def apply(agent):
             # a setup that polymorphs us on the castle into a form that can't dig (lift-ready's flyer tests): the
             # castle is recognised by a dig that form can't make -- castle_logic.note_level marks it instead
             dive._scenario_castle = True
+        if STATE.get('tc_intrinsic'):
+            # note_message learns it from the eating message, which a harness setup never shows the bot
+            from . import power_route
+            power_route.state(agent).tc_intrinsic = True
+        if STATE.get('idle_turns'):
+            # dev only (dive_logic.plan_step): the dive plan idles this many turns, the safety layers still act
+            dive._scenario_idle = int(STATE['idle_turns'])
+        if STATE.get('price_known'):
+            # price-id: the price groups a real game would have learned in shops before the castle
+            # ({"cyan potion": 200, ...}; price_id.scenario_apply)
+            from . import price_id
+            price_id.scenario_apply(agent, STATE['price_known'])
+        if STATE.get('crusher_state'):
+            cs = STATE['crusher_state']
+            crusher = getattr(dive, 'crusher', None)
+            if crusher is not None:
+                crusher.tune = cs.get('tune') or 'AAAAA'
+                crusher.bridge_open = bool(cs.get('bridge_open', False))
+                crusher.toggles = max(1, crusher.toggles)
+                crusher.crush_over = bool(cs.get('crush_over', True))
+                crusher.hold_over = True
+                crusher.locked_out = bool(cs.get('locked_out', True))
+                crusher.tries['lockout'] = 1 if crusher.locked_out else 0
+                crusher.garrison_known_dead = bool(cs.get('crush_over', True) or crusher.locked_out)
         agent.log(f'SCENARIO start: {STATE} -> diving={dive.diving} mines_done={dive.mines_done} '
                   f'milestone={gl.milestone.name}')
     except Exception as e:   # a typo in a dev scenario must not kill the agent thread

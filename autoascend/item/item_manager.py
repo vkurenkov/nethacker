@@ -489,7 +489,10 @@ class ItemManager:
         if glyph is not None:
             assert glyph in ret_glyphs
             pos = O.possibilities_from_glyph(glyph)
-            if objs[0].name not in ['elven broadsword', 'runed broadsword']:
+            # TOOL_GLYPH_ID: the glyph names one tool of the several that read alike ('lamp' -> magic lamp), so the text's
+            # candidates are a superset of the glyph's
+            if objs[0].name not in ['elven broadsword', 'runed broadsword'] and \
+                    not (jf_config.TOOL_GLYPH_ID and O.get_category(objs[0]) == nh.TOOL_CLASS):
                 assert all(map(lambda o: o in pos, objs)), (objs, pos)
             ret_glyphs = [glyph]
             objs = sorted(set(objs).intersection(O.possibilities_from_glyph(glyph)))
@@ -656,6 +659,7 @@ class ItemManager:
             glyph = obj_id + nh.GLYPH_OBJ_OFF
             objs = sorted(set.union(*[set(O.possibilities_from_glyph(i)) for i in glyphs]))
             assert name == 'runed broadsword' or \
+                   (jf_config.TOOL_GLYPH_ID and O.get_category(objs[0]) == nh.TOOL_CLASS) or \
                    all(map(lambda i: sorted(O.possibilities_from_glyph(i + nh.GLYPH_OBJ_OFF)) == objs, appearance_ids)), \
                 name
 

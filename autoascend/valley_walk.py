@@ -616,7 +616,7 @@ class ValleyWalker:
                     for k in 'H\r':
                         yield k
                     continue
-                if 'What would you like to identify' in head:
+                if power_route.in_identify_menu(agent, head, menu_pages):
                     keys = power_route._identify_step(agent, menu_pages)
                     if keys is None:
                         yield A.Command.ESC

@@ -4,7 +4,7 @@ power-route's teleport-control gamble) get to act.
 
 Harness baseline (castle-real-all, 61 real kits x 4 level-generation salts = 244 games, 3a5b3ef + castle-first-pass):
 alive 100 turns after the landing 46%; of the 131 deaths inside those 100 turns 59 were minotaurs -- they share the
-west maze in ~42% of castles (mkmaze.c fill_empty_maze: rn2(3) per maze half), arrive a median 6-7 turns after the
+west maze in ~42% of castles (sp_lev.c fill_empty_maze: rn2(2) per MAZEWALK), arrive a median 6-7 turns after the
 fall (infravisible, speed 15) and take 30-50 HP a turn (3d10/3d10/2d8 at to-hit 25+), and Elbereth doesn't stop them
 (monmove.c onscary: PM_MINOTAUR). The castle is only recognised after a pit and a second dig (median 6 turns).
 

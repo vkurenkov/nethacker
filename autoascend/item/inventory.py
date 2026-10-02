@@ -8,9 +8,9 @@ import numpy as np
 from nle.nethack import actions as A
 
 from autoascend import objects as O, utils
-from autoascend import power
+from autoascend import armor_value, power
 from autoascend.character import Character
-from autoascend.exceptions import AgentPanic
+from autoascend.exceptions import AgentPanic, AgentChangeStrategy
 from autoascend.glyph import G, MON, Hunger
 from autoascend import jf_config
 from autoascend.item import ItemManager, Item, ContainerContent, check_if_triggered_container_trap, \
@@ -58,6 +58,8 @@ class Inventory:
         self._container_failures = {}         # (dungeon, level, y, x) -> failed use_container attempts
         self.unreachable_items_until = {}     # (dungeon, level, y, x) -> turn: items at a pit bottom out of reach
         self._buy_food_blocked = {}           # (dungeon, level, y, x) -> (failed walks, skip until turn): BUY_FOOD_GIVEUP
+        self._box_force_tries = {}            # (dungeon, level, y, x) -> #force commands spent there (BOX_FORCE)
+        self._box_force_skip = set()          # (dungeon, level, y, x): boxes BOX_FORCE leaves alone (trap, give-up)
 
     def is_known_empty(self, item):
         return item.text in self.empty_wands
@@ -99,6 +101,8 @@ class Inventory:
         for item, count in zip(items, counts):
             if count and power.is_scare_candidate(item):
                 self.dropped_scrolls.add(here + (self._scroll_key(item),))
+                if jf_config.PREEMPT_TRACE:
+                    self.agent.log(f'PTRACE noted dropped {item.text!r} at {here[1]} (never picked up again there)')
 
     def set_unknown_below_me(self):
         """Stand-in when the square can't be parsed: pretend nothing useful is here."""
@@ -431,6 +435,11 @@ class Inventory:
 
             if check_if_triggered_container_trap(self.agent.single_message):
                 self.agent.stats_logger.log_event('triggered_undetected_trap')
+                if jf_config.BOX_FORCE:
+                    # a box whose trap went off is never pried open again (and the outcome is counted)
+                    self._box_force_skip.add(self._here())
+                    self.agent.log(f'BOX_FORCE trap went off at {tuple(int(v) for v in self._here())}: '
+                                   f'{self.agent.single_message[:160]!r}')
                 raise AgentPanic('triggered trap while looting')
 
             if 'You have no hands!' in self.agent.single_message or \
@@ -728,7 +737,7 @@ class Inventory:
 
         return True
 
-    def drop(self, items, counts=None, smart=True):
+    def drop(self, items, counts=None, smart=True, note_scare=False):
         if smart:
             items = self.move_to_inventory(items)
 
@@ -772,9 +781,19 @@ class Inventory:
                 assert i < 100, ('infinite loop', texts_to_type, self.agent.message)
             yield A.MiscAction.MORE
 
-        with self.agent.atom_operation():
-            self.agent.step(A.Command.DROPTYPE, key_gen())
-        self._note_dropped(items, counts)
+        if jf_config.PREEMPT_SAFE:
+            # the end-of-block preempt checks may raise before the next line (F362): a scroll that may be scare monster must be
+            # noted as dropped whatever happens (note_scare: the caller drops it to stand on it; SCARE_KEEP notes every drop),
+            # else the pickup logic takes it up again on this square and it turns to dust
+            try:
+                with self.agent.atom_operation():
+                    self.agent.step(A.Command.DROPTYPE, key_gen())
+            finally:
+                self._note_dropped(items, counts, force=note_scare)
+        else:
+            with self.agent.atom_operation():
+                self.agent.step(A.Command.DROPTYPE, key_gen())
+            self._note_dropped(items, counts)
         self.get_items_below_me()
 
         return True
@@ -965,6 +984,49 @@ class Inventory:
             return best_launcher, best_ammo, best_dps
         return best_launcher, best_ammo
 
+    def _supply_armor_ok(self, item):
+        """SUPPLY_ARMOR: a piece supply.Supply.buy paid for is worn although its beatitude is unknown (about one shelf piece in eight
+        is cursed; a worn cursed piece costs its negative enchantment, the AC lane's ruling)."""
+        return bool(jf_config.SUPPLY_ARMOR and item.status == Item.UNKNOWN and
+                    self.agent.global_logic.supply.is_bought_armor(item))
+
+    @staticmethod
+    def _rank(item):
+        """The ranking value get_best_armorset gives a piece (lower wins): its AC, less armor_value's bonus under ARMOR_VALUE."""
+        return item.get_ac() - (armor_value.bonus(item) if jf_config.ARMOR_VALUE else 0)
+
+    def cursed_block_gain(self):
+        """Armour lane: the AC points that lifting the curses on what we WEAR would buy -- for every slot whose worn piece is
+        known cursed (it cannot come off) the gain of the best piece for that slot in the pack (unambiguous, not known cursed,
+        not worn); a suit is held by a cursed cloak as well as by a cursed suit. A remove curse / holy water / enchant-armor
+        read policy can rank itself by it. Returns (points, [(slot name, worn text, better text)])."""
+        names = {O.ARM_SHIELD: 'shield', O.ARM_HELM: 'helm', O.ARM_GLOVES: 'gloves', O.ARM_BOOTS: 'boots', O.ARM_SHIRT: 'shirt',
+                 O.ARM_SUIT: 'suit', O.ARM_CLOAK: 'cloak'}
+        worn = {O.ARM_SHIELD: self.items.off_hand, O.ARM_HELM: self.items.helm, O.ARM_GLOVES: self.items.gloves,
+                O.ARM_BOOTS: self.items.boots, O.ARM_SHIRT: self.items.shirt, O.ARM_SUIT: self.items.suit,
+                O.ARM_CLOAK: self.items.cloak}
+        best = {}
+        for item in flatten_items(self.items):
+            if not item.is_armor() or item.equipped or not item.is_unambiguous() or item.status == Item.CURSED:
+                continue
+            slot = item.object.sub
+            if slot not in best or item.get_ac() < best[slot].get_ac():
+                best[slot] = item
+        total, why = 0, []
+        for slot, piece in worn.items():
+            cursed_here = piece is not None and piece.status == Item.CURSED
+            if slot in (O.ARM_SUIT, O.ARM_SHIRT):
+                cloak = worn[O.ARM_CLOAK]
+                cursed_here = cursed_here or (cloak is not None and cloak.status == Item.CURSED)
+            if not cursed_here or slot not in best:
+                continue
+            have = piece.get_ac() if piece is not None else 10
+            gain = have - best[slot].get_ac()
+            if gain > 0:
+                total += gain
+                why.append((names[slot], piece.text if piece is not None else None, best[slot].text))
+        return total, why
+
     def get_best_armorset(self, items=None, *, return_ac=False, allow_unknown_status=False, armor_up=False):
         if items is None:
             items = self.items
@@ -982,11 +1044,17 @@ class Inventory:
             is_dragonscale_armor = item.object.metal == O.DRAGON_HIDE
 
             allowed_statuses = [Item.UNCURSED, Item.BLESSED] + ([Item.UNKNOWN] if allow_unknown_status else [])
-            if item.status not in allowed_statuses and not is_dragonscale_armor:
+            if item.status not in allowed_statuses and not is_dragonscale_armor and not self._supply_armor_ok(item):
                 continue
 
             slot = item.object.sub
             ac = item.get_ac()
+            if jf_config.ARMOR_VALUE:
+                # (armour lane) speed boots, power gauntlets, reflection, magic resistance rank above their AC; known
+                # levitation / fumbling / opposite-alignment pieces are never worn (armor_value.py)
+                if armor_value.never(item):
+                    continue
+                ac -= armor_value.bonus(item)
 
             if self.agent.character.role == Character.MONK and slot == O.ARM_SUIT:
                 continue
@@ -1006,11 +1074,13 @@ class Inventory:
         return (
             self.pickup_and_drop_items()
                 .before(self.check_containers())
+                .before(self.force_locked_containers())
                 .before(self.wear_best_stuff())
                 .before(self.wand_engrave_identify())
                 .before(self.use_spare_wishes())
                 .before(self.wear_life_saving())
                 .before(self.go_to_unchecked_containers())
+                .before(self.go_to_locked_containers())
                 .before(self.check_items()
                         .before(self.go_to_item_to_pickup()).repeat().every(5)
                         .preempt(self.agent, [
@@ -1252,6 +1322,8 @@ class Inventory:
         and the dive re-tests those wands once -- Medusa, the mazes and the castle are where the names matter)."""
         if not jf_config.WAND_ENGRAVE_TEXT:
             return False
+        if jf_config.ID_WAND_TEXT_GRIND:
+            return True   # id-engine: the grind's first test names striking/sleep/cold/magic missile... at once
         try:
             return bool(self.agent.global_logic.dive.diving)
         except AttributeError:
@@ -1289,6 +1361,8 @@ class Inventory:
                 continue
             if item.is_unambiguous():
                 continue
+            if jf_config.SHOP_WISH and item.shop_status == Item.UNPAID:
+                continue    # SHOP_WISH: an unpaid wand is shop_wish.py's (its test books the usage fee and keeps the record)
             if self.agent.current_level().objects[self.agent.blstats.y, self.agent.blstats.x] not in G.FLOOR:
                 continue
             if item.glyphs[0] in self.item_manager._already_engraved_glyphs and not self.wand_retest_wanted(item):
@@ -1356,8 +1430,23 @@ class Inventory:
         yield True
         item = wands[0]
         agent.log(f'ENGRAVE re-test with text (the grind test said nothing): {item.text!r}')
-        with agent.atom_operation():
-            types = self._engrave_single_wand(item)
+        if jf_config.PREEMPT_SAFE:
+            # F362: the record is written even when the end-of-block preempt checks raise (the charge is spent either way; a
+            # missing record re-tests the wand, one more charge)
+            types = False
+            try:
+                with agent.atom_operation():
+                    types = self._engrave_single_wand(item)
+            finally:
+                if types is not False:
+                    self._record_retest(item, types, here)
+        else:
+            with agent.atom_operation():
+                types = self._engrave_single_wand(item)
+            self._record_retest(item, types, here)
+        self.items.update(force=True)
+
+    def _record_retest(self, item, types, here):
         if types is None:
             self._retest_bad_square = here   # (not a bare square after all: try elsewhere)
         else:
@@ -1365,7 +1454,6 @@ class Inventory:
             self.item_manager._glyph_to_possible_wand_types[item.glyphs[0]] = types
             self.item_manager._already_engraved_glyphs.add(item.glyphs[0])
             self.item_manager.possible_objects_from_glyph(item.glyphs[0])
-        self.items.update(force=True)
 
     @utils.debug_log('inventory.use_spare_wishes')
     @Strategy.wrap
@@ -1490,6 +1578,14 @@ class Inventory:
         def action_generator():
             assert smsg().startswith('What do you want to write with?'), smsg()
             yield letter
+            if jf_config.SHOP_WISH:
+                # engrave.c check_unpaid: an unpaid wand's usage fee is a screen of its own ('"Usage fee, 166 zorkmids."
+                # --More--') before the engraving prompt, or in front of the wish prompt of a wand of wishing
+                for _ in range(4):
+                    if 'Usage fee' in smsg() and 'You may wish' not in smsg() and self.agent._observation['misc'][2]:
+                        yield A.TextCharacters.SPACE
+                    else:
+                        break
             if text_on and 'Do you want to add to the current engraving' in smsg():
                 # a DUST wand: write text so that engrave.c prints its post_engr_text (ledger B016). 'n' wipes our
                 # finger's 'x' and the wand writes a fresh 'Elbereth' in the same action (DUST: len/10 = 0 extra
@@ -1550,6 +1646,9 @@ class Inventory:
             self.agent.type_text('q')
             assert smsg().strip() == 'Never mind.', smsg()
 
+        # (logging only, same format as the text path: the vanish / glows-then-fades tests were never logged, which made
+        # tested wands look untested in the coverage counts of dev/readiness-style scripts)
+        self.agent.log(f'ENGRAVE {item.text!r}: {[o.name for o in possible_wand_types]} (text written: False)')
         return possible_wand_types
 
     @utils.debug_log('inventory.read_enchant_armor')
@@ -1598,6 +1697,10 @@ class Inventory:
                 if best_armorset[slot] == getattr(self.items, name) or \
                         (getattr(self.items, name) is not None and getattr(self.items, name).status == Item.CURSED):
                     continue
+                if jf_config.ARMOR_UP and slot == O.ARM_SUIT and self.items.suit is not None and \
+                        best_armorset[slot] is not None and \
+                        self._rank(self.items.suit) - self._rank(best_armorset[slot]) < 2:
+                    continue   # a suit swap takes ~12 turns at a worse AC (cloak off, suit off, suit on, cloak on): only for 2+ points
                 additional_cond = True
                 if jf_config.ROBUST_FIXES:
                     # a refused wear/take-off (see _wear_refused) waits before the slot is tried again
@@ -1605,6 +1708,11 @@ class Inventory:
                         getattr(self.agent, '_wear_blocked_until', {}).get(slot, 0)
                 if slot == O.ARM_SHIELD:
                     additional_cond &= self.items.main_hand is None or not self.items.main_hand.objs[0].bi
+                    if jf_config.MATTOCK_SHIELD:
+                        # a mattock digger's shield is the business of dive_logic.shield_up / shield_off (known
+                        # beatitude only; a cursed one would strand the mattock)
+                        dive_ = getattr(self.agent.global_logic, 'dive', None)
+                        additional_cond &= dive_ is None or not dive_.mattock_digger()
                 if slot == O.ARM_GLOVES:
                     additional_cond &= self.items.main_hand is None or self.items.main_hand.status != Item.CURSED
                 if slot == O.ARM_SHIRT or slot == O.ARM_SUIT:
@@ -1616,6 +1724,10 @@ class Inventory:
                     if not yielded:
                         yielded = True
                         yield True
+                    if jf_config.ARMOR_UP:
+                        # (log only) one line per action: the armour lane reads 'AC after the first wear pass' from them
+                        self.agent.log(f'ARMOR_UP slot {name}: best {best_armorset[slot].text if best_armorset[slot] else None!r}, '
+                                       f'AC now {self.agent.blstats.armor_class}')
                     if (slot == O.ARM_SHIRT or slot == O.ARM_SUIT) and self.items.cloak is not None:
                         done = self.takeoff(self.items.cloak)
                     elif slot == O.ARM_SHIRT and self.items.suit is not None:
@@ -1637,6 +1749,14 @@ class Inventory:
 
         if not yielded:
             yield False
+        elif jf_config.ARMOR_UP:
+            self.agent.log(f'ARMOR_UP wear pass done: AC {self.agent.blstats.armor_class}')
+            try:
+                gain, why = self.cursed_block_gain()
+                if gain > 0:
+                    self.agent.log(f'ARMOR_UP held by a curse: +{gain} AC if lifted {why}')
+            except Exception as e:   # diagnostics only
+                self.agent.log(f'ARMOR_UP cursed_block_gain failed: {e!r}')
 
     @utils.debug_log('inventory.check_items')
     @Strategy.wrap
@@ -1732,6 +1852,167 @@ class Inventory:
         if not yielded:
             yield False
 
+    # ---- BOX_FORCE (jf_config, item-yield lane): pry open the locked boxes the tour found, then loot them
+
+    def _box_force_blade(self):
+        """(item, chance %) of the spare blade to #force a lock with, or None: a weapon of dagger..saber skill
+        (lock.c is_blade; not a pick) whose BUC is known uncursed or blessed, not the one in hand, not a long sword and
+        not an artifact. The best success chance (2x its large-monster damage die) first."""
+        main = self.items.main_hand
+        best = None
+        for item in self.items.all_items:
+            if item is main or item.category != nh.WEAPON_CLASS or not item.is_unambiguous():
+                continue
+            if item.status not in (Item.UNCURSED, Item.BLESSED):
+                continue
+            obj = item.objs[0]
+            if not isinstance(obj, O.Weapon) or not (O.P_DAGGER <= obj.sub <= O.P_SABER) or \
+                    obj.sub in (O.P_PICK_AXE, O.P_LONG_SWORD):
+                continue
+            if any(c.isupper() for c in re.split(r' (?:named|called) ', item.text or '')[0]):
+                continue   # an artifact's name is capitalised
+            try:
+                chance = 2 * int(obj.ldam)
+            except (TypeError, ValueError):
+                continue
+            if best is None or chance > best[1]:
+                best = (item, chance)
+        return best
+
+    def _box_force_ready(self):
+        """Safe to spend up to 50 turns prying a lock here and now (see jf_config.BOX_FORCE)."""
+        agent = self.agent
+        bl = agent.blstats
+        dive = getattr(agent.global_logic, 'dive', None)
+        if dive is not None and dive.diving:
+            return False
+        if bl.hitpoints < max(12, jf_config.BOX_FORCE_MIN_HP * bl.max_hitpoints) or bl.hunger_state >= Hunger.WEAK:
+            return False
+        prop = agent.character.prop
+        if prop.blind or prop.confusion or prop.stun or prop.hallu or prop.polymorph:
+            return False
+        if agent.last_observation['blstats'][nh.NLE_BL_CONDITION] & nh.BL_MASK_LEV:
+            return False
+        main = self.items.main_hand
+        if main is not None and main.status == Item.CURSED:
+            return False   # a welded weapon can't be put away for the dagger
+        for _, my, mx, _, _ in agent.get_visible_monsters():
+            if max(abs(my - bl.y), abs(mx - bl.x)) <= jf_config.BOX_FORCE_CLEAR:
+                return False
+        return self._box_force_blade() is not None
+
+    def _box_force_box(self, items, key, y, x):
+        """The one locked box at (y, x) worth prying, or None (several containers, a shop, skipped squares)."""
+        here = (*key, y, x)
+        if here in self.multi_container_squares or here in self._box_force_skip:
+            return None
+        if self.agent.current_level().shop_interior[y, x]:
+            return None
+        boxes = [i for i in items if i.is_container() or i.is_possible_container()]
+        if len(boxes) != 1:
+            return None
+        box = boxes[0]
+        if not box.is_container() or not box.content.locked or box.shop_status != Item.NOT_SHOP:
+            return None
+        return box
+
+    @utils.debug_log('inventory.force_locked_containers')
+    @Strategy.wrap
+    def force_locked_containers(self):
+        if not jf_config.BOX_FORCE:
+            yield False
+        bl = self.agent.blstats
+        box = self._box_force_box(self.items_below_me or [], self.agent.current_level().key(), bl.y, bl.x)
+        if box is None or not self._box_force_ready():
+            yield False
+        yield True
+
+        agent = self.agent
+        here = self._here()
+        where = tuple(int(v) for v in here)   # (for the log)
+        tries = self._box_force_tries.get(here, 0)
+        if tries >= jf_config.BOX_FORCE_MAX_TRIES:
+            self._box_force_skip.add(here)
+            agent.log(f'BOX_FORCE give up at {where} after {tries} tries')
+            return
+        # more trap checks first: #untrap finds a box trap only 10/(31 - XL) of the time (trap.c untrap)
+        if jf_config.BOX_TRAP_SAFE and tries == 0:
+            for _ in range(jf_config.BOX_FORCE_TRAP_CHECKS):
+                fail_msg = agent.untrap_container_below_me()
+                if fail_msg is not None:
+                    self._box_force_skip.add(here)
+                    agent.log(f'BOX_FORCE trap check at {where}: {fail_msg[:120]!r} -- left alone')
+                    return
+        blade, chance = self._box_force_blade()
+        self._box_force_tries[here] = tries + 1
+        agent.log(f'BOX_FORCE try {tries + 1} at {where} on {box.text!r} with {blade.text!r} ({chance}%/turn), '
+                  f'T{bl.time} HP {bl.hitpoints}/{bl.max_hitpoints}')
+        if not self.wield(blade):
+            self._box_force_skip.add(here)
+            agent.log(f'BOX_FORCE could not wield {blade.text!r}: {(agent.message or "")[-120:]!r}')
+            agent.wield_best_melee_weapon()
+            return
+        turn0 = agent.blstats.time
+        with agent.atom_operation():
+            agent.step(A.Command.FORCE)
+            for _ in range(3):
+                msg = agent.single_message or ''
+                if 'force its lock?' in msg:
+                    agent.type_text('y')
+                    break
+                if '--More--' in msg:
+                    agent.step(A.TextCharacters.SPACE)
+                    continue
+                break
+            msg = agent.message or ''
+        took = agent.blstats.time - turn0
+        if 'You succeed in forcing the lock' in msg:
+            outcome = 'opened'
+        elif ' broke!' in msg:
+            outcome = 'blade broke'
+        elif 'You give up your attempt' in msg:
+            outcome = 'gave up'
+        elif 'You stop forcing' in msg:
+            outcome = 'interrupted'
+        else:
+            outcome = 'no force'
+            self._box_force_skip.add(here)
+        agent.log(f'BOX_FORCE {outcome} at {where} after {took} turns: {msg[-160:]!r}')
+        agent.wield_best_melee_weapon()
+        if outcome != 'opened':
+            return
+        self._box_force_skip.add(here)   # one box per square: once open it is an ordinary container
+        self.get_items_below_me()
+        opened = [i for i in self.items_below_me if i.is_container() or i.is_possible_container()]
+        if len(opened) != 1:
+            agent.log(f'BOX_FORCE opened box not found below: {[i.text for i in self.items_below_me]}')
+            return
+        self.check_container_content(opened[0])
+        content = opened[0].content
+        agent.log(f'BOX_FORCE contents at {where}: '
+                  f'{[i.text for i in content.items] if content is not None else None}')
+
+    @utils.debug_log('inventory.go_to_locked_containers')
+    @Strategy.wrap
+    def go_to_locked_containers(self):
+        if not jf_config.BOX_FORCE:
+            yield False
+        level = self.agent.current_level()
+        key = level.key()
+        targets = []
+        for y, x in zip(*(level.item_count != 0).nonzero()):
+            if self._box_force_box(level.items[y, x], key, int(y), int(x)) is not None:
+                targets.append((int(y), int(x)))
+        if not targets or not self._box_force_ready():
+            yield False
+        dis = self.agent.bfs()
+        cand = [(int(dis[y, x]), y, x) for y, x in targets if 0 < dis[y, x] <= jf_config.BOX_FORCE_MAX_DIST]
+        if not cand:
+            yield False
+        yield True
+        _, y, x = min(cand)
+        self.agent.go_to(y, x)
+
     # jf: buying food. AutoAscend never shopped, but a hunger prayer costs the prayer an HP emergency needs
     # (33 of 37 tour deaths came under 1000 turns after the last prayer; 14 of them fainting) and fails
     # 1.5-2.6% of the time. The tour reaches Minetown with ~240 gold (median): 3-4 food rations.
@@ -1748,6 +2029,8 @@ class Inventory:
     def _food_for_sale(self, dis):
         level = self.agent.current_level()
         gold = self.agent.blstats.gold
+        if jf_config.SUPPLY_FOOD_RESERVE:
+            gold -= self.agent.global_logic.supply.food_reserve()    # a wanted lamp/instrument we can pay for is not spent on food
         best = None
         for y, x in zip(*(level.shop_interior & (level.item_count > 0)).nonzero()):
             if dis[y, x] == -1:
@@ -1763,13 +2046,22 @@ class Inventory:
                     best = (score, int(y), int(x), item.object.name, item.price)
         return best
 
+    def _unpaid_unprotected(self):
+        """Unpaid items in the pack other than SHOP_WISH's session wand (shop_wish.protected)."""
+        unpaid = [i for i in flatten_items(self.items) if i.shop_status == Item.UNPAID]
+        if unpaid and jf_config.SHOP_WISH:
+            from .. import shop_wish
+            keep = shop_wish.protected(self.agent)
+            unpaid = [i for i in unpaid if not any(i is k for k in keep)]
+        return unpaid
+
     def pay_or_drop_unpaid(self):
         """Never walk off with unpaid goods: pay (one item on the bill: '... for N zorkmids.  Pay? [yn]',
         answered 'y'), and drop whatever is still unpaid (not enough gold)."""
-        if not any(i.shop_status == Item.UNPAID for i in flatten_items(self.items)):
-            return
+        if not self._unpaid_unprotected():
+            return      # (SHOP_WISH: the wand of a session -- a base-500 quote taken to be engrave-tested -- is not ours to pay or drop)
         self.agent.step(A.Command.PAY)
-        unpaid = [i for i in flatten_items(self.items) if i.shop_status == Item.UNPAID]
+        unpaid = self._unpaid_unprotected()
         if unpaid:
             self.agent.log(f'SHOP could not pay for {[i.text for i in unpaid]}: dropping')
             self.drop(unpaid)
@@ -1908,10 +2200,17 @@ class Inventory:
         bl = agent.blstats
         if not jf_config.BUY_FOOD or bl.gold < 20 or bl.hunger_state >= Hunger.FAINTING:
             yield False
+        if jf_config.SHOP_WISH:
+            from .. import shop_wish
+            if shop_wish.owes(agent):
+                yield False     # a usage fee is on the shopkeeper's debit: dopay would settle that, not the shelf item
         level = agent.current_level()
         if not level.shop_interior.any():
             yield False
-        if any(i.shop_status == Item.UNPAID for i in flatten_items(self.items)):
+        if jf_config.SUPPLY_BUY and agent.global_logic.supply.hold_food():
+            # SUPPLY_BUY: look at every shelf first, a lamp or an instrument needs the gold more than food does
+            yield False
+        if self._unpaid_unprotected():
             yield True
             self.pay_or_drop_unpaid()
             return
@@ -1933,15 +2232,21 @@ class Inventory:
         yield True
         if (bl.y, bl.x) != (y, x):
             # walk there and buy in one go (between every(3) turns check_items walked us off the square again)
-            try:
-                agent.go_to(y, x)
-            finally:
-                # BUY_FOOD_GIVEUP: a shopkeeper standing in the path panicked every go_to ('Monster on a next
-                # tile'), and the tour walked back between two tries: base4-jf14 s6 went N/S ~660 times per
-                # 500 turns for 1500 turns on its Dlvl-2 grind. After 3 failed walks, leave that item alone.
-                if jf_config.BUY_FOOD_GIVEUP and (agent.blstats.y, agent.blstats.x) != (y, x):
-                    fails = self._buy_food_blocked.get(key, (0, -1))[0] + 1
-                    self._buy_food_blocked[key] = (fails, agent.blstats.time + 2000 if fails >= 3 else -1)
+            if jf_config.BUY_WALK_FIX:
+                self._walk_to_shelf(key, y, x, jf_config.BUY_FOOD_GIVEUP)
+            else:
+                try:
+                    agent.go_to(y, x)
+                finally:
+                    # BUY_FOOD_GIVEUP: a shopkeeper standing in the path panicked every go_to ('Monster on a next
+                    # tile'), and the tour walked back between two tries: base4-jf14 s6 went N/S ~660 times per
+                    # 500 turns for 1500 turns on its Dlvl-2 grind. After 3 failed walks, leave that item alone.
+                    if jf_config.BUY_FOOD_GIVEUP and (agent.blstats.y, agent.blstats.x) != (y, x):
+                        fails = self._buy_food_blocked.get(key, (0, -1))[0] + 1
+                        self._buy_food_blocked[key] = (fails, agent.blstats.time + 2000 if fails >= 3 else -1)
+                        if jf_config.PREEMPT_TRACE:
+                            agent.log(f'BUYWALK food shelf {key[2:]}: failed walk #{fails}' +
+                                      (' -> blocked for 2000 turns' if fails >= 3 else ''))
             if (agent.blstats.y, agent.blstats.x) != (y, x):
                 return
         items = [i for i in self.items_below_me
@@ -1949,6 +2254,108 @@ class Inventory:
         if not items:
             return
         agent.log(f'SHOP buying {name} for {price} (gold {bl.gold})')
+        self.pickup(items[0], 1)
+        self.pay_or_drop_unpaid()
+
+    def _walk_to_shelf(self, key, y, x, giveup):
+        """BUY_WALK_FIX: agent.go_to(y, x) for buy_food / buy_instrument. A walk that PANICKED or ended short counts as a failed
+        walk (3 in a row leave the item alone for 2000 turns, `giveup`); one cut by a preempting strategy (AgentChangeStrategy: the
+        altar test, a meal, a fight) does not -- the old try/finally counted it too, and in a town where peacefuls cross the path
+        three cuts blocked a 15 zm horn for 2000 turns (ledger B309 in supply.py)."""
+        agent = self.agent
+        try:
+            agent.go_to(y, x)
+        except AgentChangeStrategy:
+            raise
+        except BaseException:
+            self._count_shelf_walk(key, y, x, giveup)
+            raise
+        self._count_shelf_walk(key, y, x, giveup)
+
+    def _count_shelf_walk(self, key, y, x, giveup):
+        agent = self.agent
+        if giveup and (agent.blstats.y, agent.blstats.x) != (y, x):
+            fails = self._buy_food_blocked.get(key, (0, -1))[0] + 1
+            self._buy_food_blocked[key] = (fails, agent.blstats.time + 2000 if fails >= 3 else -1)
+            if jf_config.PREEMPT_TRACE:
+                agent.log(f'BUYWALK shelf {key[2:]}: failed walk #{fails}' + (' -> blocked for 2000 turns' if fails >= 3 else ''))
+
+    def _instrument_for_sale(self, dis):
+        """The cheapest reachable tonal instrument for sale that we can pay for (INSTRUMENT_BUY_MAX at most)."""
+        from autoascend import opp_items
+        level = self.agent.current_level()
+        gold = self.agent.blstats.gold
+        best = None
+        for y, x in zip(*(level.shop_interior & (level.item_count > 0)).nonzero()):
+            if dis[y, x] == -1:
+                continue
+            for item in level.items[y, x]:
+                if item.shop_status != Item.FOR_SALE or not opp_items.is_tonal(item) or not item.price or \
+                        item.price > min(gold, jf_config.INSTRUMENT_BUY_MAX):
+                    continue
+                score = -item.price - dis[y, x] / 100
+                if best is None or score > best[0]:
+                    best = (score, int(y), int(x), item.text, item.price, item.glyphs[0] if item.glyphs else None)
+        return best
+
+    @utils.debug_log('inventory.buy_instrument')
+    @Strategy.wrap
+    def buy_instrument(self):
+        """INSTRUMENT_KEEP (castle-redteam): a tonal instrument for sale, when we carry none -- 9 of the 11 cand-g games
+        that saw one and never picked it up saw it in a shop (bugle 20 zm, flute 16-48, horn 20-67, harp 67), 4 of
+        them reached the castle. As buy_food: no pick-axe (the shopkeeper keeps it out anyway), nothing in view, no
+        uncontrolled teleportitis (SHOP_GUARD)."""
+        from autoascend import opp_items
+        agent = self.agent
+        bl = agent.blstats
+        if not jf_config.INSTRUMENT_KEEP or bl.gold < 5 or bl.hunger_state >= Hunger.WEAK:
+            yield False
+        if jf_config.SHOP_WISH:
+            from .. import shop_wish
+            if shop_wish.owes(agent):
+                yield False
+        level = agent.current_level()
+        if not level.shop_interior.any():
+            yield False
+        if any(opp_items.is_tonal(i) for i in flatten_items(self.items) if i.shop_status != Item.UNPAID):
+            yield False
+        if self._unpaid_unprotected():
+            yield True
+            self.pay_or_drop_unpaid()
+            return
+        if agent._carries_digging_tool() or agent.get_visible_monsters():
+            yield False
+        if jf_config.SHOP_GUARD and agent.character.teleportitis and not agent.character.teleport_control:
+            yield False
+        dis = agent.bfs()
+        target = self._instrument_for_sale(dis)
+        if target is None:
+            yield False
+        _, y, x, text, price, glyph = target
+        key = (level.dungeon_number, level.level_number, y, x)
+        if self._buy_food_blocked.get(key, (0, -1))[1] > bl.time:
+            yield False
+        yield True
+        if (bl.y, bl.x) != (y, x):
+            if jf_config.BUY_WALK_FIX:
+                self._walk_to_shelf(key, y, x, True)
+            else:
+                try:
+                    agent.go_to(y, x)
+                finally:
+                    if (agent.blstats.y, agent.blstats.x) != (y, x):
+                        fails = self._buy_food_blocked.get(key, (0, -1))[0] + 1
+                        self._buy_food_blocked[key] = (fails, agent.blstats.time + 2000 if fails >= 3 else -1)
+                        if jf_config.PREEMPT_TRACE:
+                            agent.log(f'BUYWALK instrument shelf {key[2:]}: failed walk #{fails}' +
+                                      (' -> blocked for 2000 turns' if fails >= 3 else ''))
+            if (agent.blstats.y, agent.blstats.x) != (y, x):
+                return
+        items = [i for i in self.items_below_me
+                 if i.shop_status == Item.FOR_SALE and opp_items.is_tonal(i) and (glyph is None or glyph in i.glyphs)]
+        if not items:
+            return
+        agent.log(f'SHOP buying {text!r} for {price} (gold {bl.gold}) -- INSTRUMENT_KEEP')
         self.pickup(items[0], 1)
         self.pay_or_drop_unpaid()
 

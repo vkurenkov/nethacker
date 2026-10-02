@@ -11,13 +11,20 @@ from . import jf_config
 from . import power
 from . import castle_power
 from . import castle_cross
+from . import castle_poly
 from . import castle_front
+from . import castle_crusher
+from . import castle_inner
 from . import castle_landing
 from . import mino_guard
 from . import known_items
 from . import opp_items
+from . import supply
 from . import tele_route
+from . import id_engine
+from . import shop_wish
 from . import power_route
+from . import wish_source
 from .character import Character
 from .dive_logic import DiveLogic
 from .exceptions import AgentPanic
@@ -104,7 +111,8 @@ class ItemPriority(ItemPriorityBase):
                 if tool is not None:
                     add_item(tool)
 
-            no_shield = dive_ is not None and dive_.mattock_digger()
+            # (MATTOCK_SHIELD: the shield stays in the pack, worn again where the mattock is idle)
+            no_shield = dive_ is not None and not jf_config.MATTOCK_SHIELD and dive_.mattock_digger()
             for item in self.agent.inventory.get_best_armorset(items=forced_items + items,
                                                                allow_unknown_status=allow_unknown_status):
                 if item is not None and not (no_shield and getattr(item.objs[0], 'sub', None) == O.ARM_SHIELD):
@@ -126,6 +134,18 @@ class ItemPriority(ItemPriorityBase):
                 if item.category in (nh.WAND_CLASS, nh.RING_CLASS, nh.AMULET_CLASS) or \
                         (item.is_unambiguous() and item.object in _SQUEEZE_KEEP_KNOWN):
                     add_item(item)
+
+        # SQUEEZE_OUT (arrivals-2): a stuck camp's drop keeps its food rations and a unicorn horn ahead of the rest
+        # (guard a2-g2 jf46 s3 left 2 food rations behind, a2-g3 jf48 s5 a unicorn horn)
+        if jf_config.SQUEEZE_OUT and self.agent.blstats.time < getattr(self.agent, '_squeeze_out_until', -1):
+            for item in sorted(filter(lambda i: i.is_food() and not i.is_corpse(), items),
+                               key=lambda x: -x.nutrition_per_weight()):
+                add_item(item)
+            for item in items:
+                if item.is_unambiguous() and item.object == O.from_name('unicorn horn') and \
+                        item.status != Item.CURSED:
+                    add_item(item, count=1)
+                    break
 
         # power: boots that may be levitation or water walking boots, for the Castle's moat (never worn before)
         if jf_config.KEEP_MAGIC_BOOTS:
@@ -177,6 +197,47 @@ class ItemPriority(ItemPriorityBase):
         for item in sorted(filter(lambda i: i.is_food() and not i.is_corpse(), items),
                            key=lambda x: -x.nutrition_per_weight() - 1000 * (x.objs[0].name == 'sprig of wolfsbane')):
             add_item(item)
+
+        # SUPPLY_KEEP (supply lane, off): the possible magic lamps (up to SUPPLY_LAMP_N): each is a 31% wish for the wishes
+        # lane, 20 wt; kept right after the food, ahead of the instrument and the unknown potions/scrolls/wands
+        if jf_config.SUPPLY_KEEP:
+            kept = 0
+            for item in sorted(items, key=lambda i: (i not in forced_items and not self._carried(i),
+                                                     i.unit_weight(with_content=False))):
+                if kept >= jf_config.SUPPLY_LAMP_N:
+                    break
+                if supply.may_be_magic_lamp(item):
+                    add_item(item, count=min(item.count, jf_config.SUPPLY_LAMP_N - kept))
+                    kept += min(item.count, jf_config.SUPPLY_LAMP_N - kept)
+            # ...and the scrolls the game names scare monster (bought by SUPPLY_SCARE_BUY or found)
+            for item in items:
+                if item.category == nh.SCROLL_CLASS and item.is_unambiguous() and \
+                        item.object.name == 'scare monster':
+                    add_item(item, count=jf_config.SUPPLY_SCARE_N)
+            # ...and a second instrument when the first is no certain horn (castle-gate R344: horn kits meet the castle's
+            # minotaurs with HORN_SCARE and die half as often; a base-50 'horn' may be a horn of plenty): the second must be
+            # a horn that may scare, or the first must be doubtful. Horns first, then the carried, then the lightest
+            sup = self.agent.global_logic.supply   # ItemPriority has no .supply (cand-l2 smoke: AttributeError loop)
+            tonal = sorted((i for i in items if supply.is_tonal_candidate(i)),
+                           key=lambda i: (not sup.is_sure_horn(i),
+                                          not any(o.name in supply.HORN_NAMES for o in i.objs),
+                                          i not in forced_items and not self._carried(i),
+                                          i.unit_weight(with_content=False)))
+            if len(tonal) >= 2 and not sup.is_sure_horn(tonal[0]) and \
+                    (any(o.name in supply.HORN_NAMES for o in tonal[1].objs) or not sup.is_sure_tonal(tonal[0])):
+                for item in tonal[:2]:
+                    add_item(item, count=1)
+
+        # INSTRUMENT_KEEP (castle-redteam, off): one tonal instrument (bugle, horn, flute, harp) is the castle's
+        # PASSTUNE_CRUSHER ticket at any castle depth; kept after the food, ahead of the unknown potions/scrolls/wands of
+        # the weight-sorted pass below (the one already carried first, then the lightest: flute 5, bugle 10, horn 18,
+        # harp 30). cand-g fresh: 29/270 games picked one up, 9 of them reached the castle and 7 still had it
+        if jf_config.INSTRUMENT_KEEP:
+            for item in sorted(items, key=lambda i: (i not in forced_items and not self._carried(i),
+                                                     i.unit_weight(with_content=False))):
+                if opp_items.is_tonal(item):
+                    add_item(item, count=1)
+                    break
 
         # HORN_KEEP (opp-items, separate from HORN_SCARE): one horn (tooled, unknown, or a known frost horn: a cold
         # source), one drum, one camera -- mino_guard's scare instruments, kept ahead of the unknown potions/scrolls/
@@ -288,6 +349,7 @@ class GlobalLogic:
         self.landing = castle_landing.LandingGuard(self.dive)   # jf_config.LANDING_GUARD (valley-exit)
         self.mino = mino_guard.MinoGuard(self.dive)   # jf_config.MINO_GUARD (minotaur lane)
         self.known = known_items.KnownItemsGuard(self.dive, self.mino)   # jf_config.KNOWN_ITEMS (dive-audit)
+        self.supply = supply.Supply(agent)   # jf_config.SUPPLY_* (supply lane: shop purchases)
 
     def update(self):
         self.dive.update()
@@ -984,6 +1046,18 @@ class GlobalLogic:
                                                    max_age=jf_config.CLAIM_MAX_AGE)
                 .condition(lambda: jf_config.CLAIM_CORPSES and not self.dive.diving and
                            self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
+                # EAT_SWEEP (arrivals lane): once the fight is over, any recorded fresh corpse of ours within
+                # EAT_SWEEP_DIST steps that will still be fresh on arrival (see Agent.sweep_ok / sweep_square_ok)
+                self.agent.eat_corpses_from_ground(only_below_me=False, max_dist=jf_config.EAT_SWEEP_DIST,
+                                                   max_age=jf_config.EAT_SWEEP_AGE,
+                                                   square_ok=self.agent.sweep_square_ok, log_tag='EAT_SWEEP')
+                .every(2).condition(lambda: jf_config.EAT_SWEEP and self.agent.sweep_ok()),
+                # CAMP_EAT (camp-food): the Mines dive claims its fresh kills too -- the tool-less trip left ~half of
+                # its food burn on the floor as the corpses of its own kills (see jf_config)
+                self.agent.eat_corpses_from_ground(only_below_me=False, max_dist=jf_config.CAMP_EAT_DIST,
+                                                   max_age=jf_config.CAMP_EAT_MAX_AGE,
+                                                   square_ok=self.dive.camp_eat_square_ok, log_tag='CAMP_EAT')
+                .condition(lambda: jf_config.CAMP_EAT and self.dive.camp_eat_ok()),
                 self.agent.eat_corpses_from_ground(only_below_me=not jf_config.EAT_NEARBY_CORPSES).every(5)
                 .condition(lambda: self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
                 # after a failed prayer corpses are the only food left: walk to the ones nearby
@@ -996,7 +1070,18 @@ class GlobalLogic:
                            self.agent.blstats.hunger_state >= Hunger.HUNGRY and
                            self.dive.edible_corpse_within(jf_config.DIVE_EAT_RADIUS)),
                 self.agent.eat_from_inventory().every(5),
+                # SHOP_WISH (shop_wish.py): a base-500 wand on a shelf is taken unpaid and engrave-tested -- before buy_food,
+                # whose pay_or_drop_unpaid would drop it
+                shop_wish.strategy(self.agent).condition(lambda: jf_config.SHOP_WISH),
+                # SUPPLY_BUY (supply lane): a tonal instrument / magic lamp off a shelf comes before food
+                self.supply.buy().every(3).condition(lambda: jf_config.SUPPLY_BUY),
+                # SUPPLY_SELL: the gold for it, from the pack items worth least to us
+                self.supply.sell().every(3).condition(lambda: jf_config.SUPPLY_SELL),
+                # SUPPLY_BUY: stand on every shelf square of the shop we are in, so the prices are known
+                self.supply.scan().condition(lambda: jf_config.SUPPLY_BUY),
                 self.agent.inventory.buy_food().every(3),
+                # INSTRUMENT_KEEP (castle-redteam): a cheap tonal instrument for sale when we carry none
+                self.agent.inventory.buy_instrument().every(3).condition(lambda: jf_config.INSTRUMENT_KEEP),
                 # power (SELL_PRICE_ID): offer unknown potions/rings/boots to a shopkeeper for their price group
                 self.agent.inventory.sell_price_identify().every(3),
                 # lift-ready (WAND_ENGRAVE_TEXT): once diving, re-test with text the wands the grind's test left unnamed
@@ -1010,10 +1095,18 @@ class GlobalLogic:
                 .condition(lambda: jf_config.ARMOR_UP and not self.dive._near_hostiles(radius=6)),
                 # opp-items (GENOCIDE_POLICY): a known scroll of genocide proven not cursed is read at once
                 opp_items.read_strategy(self.agent),
+                # SUPPLY_TOWN: last of the layer (it runs for hundreds of turns): walk into every Minetown shop
+                self.supply.town_sweep().condition(lambda: jf_config.SUPPLY_TOWN and jf_config.SUPPLY_BUY),
+            ])
+            # id-engine (READ_TEST, id_engine.py): unknown scrolls are read at quiet moments until identify is known
+            .preempt(self.agent, [
+                id_engine.strategy(self.agent),
             ])
             .preempt(self.agent, [
                 # boxed in by diagonal squeezes while carrying > 600 (jf_config.UNSQUEEZE)
                 self.agent.unsqueeze(),
+                # boxed in by boulders, e.g. after reading a scroll of earth (jf_config.EARTH_BOX)
+                self.agent.unbox_boulders(),
             ])
             .preempt(self.agent, [
                 self.follow_guard(),
@@ -1058,6 +1151,9 @@ class GlobalLogic:
                 self.dive.elbereth_rest().condition(lambda: self.dive.diving or jf_config.SURVIVAL_IN_TOUR),
             ])
             .preempt(self.agent, [
+                # medusa lane (MEDUSA_REENTRY, medusa_reentry.py): a wet Medusa island -> up the '<', rest, and back in through
+                # the hole we dug above (one entry in four skips her level); the level above the wet island
+                self.dive.reentry_strategy().condition(lambda: jf_config.MEDUSA_REENTRY or jf_config.MEDUSA_STANDOFF),
                 # Medusa-3 only (RAVEN_CYCLE): off the raven island to heal, back for a fresh dig
                 self.dive.raven_cycle(),
                 self.dive.retreat_upstairs().condition(lambda: self.dive.diving or jf_config.SURVIVAL_IN_TOUR),
@@ -1114,6 +1210,28 @@ class GlobalLogic:
             .preempt(self.agent, [
                 self.dive.castle.crossing_strategy(),
             ])
+            # castle-poly (CP_POLY, castle_poly.py): our polymorph form on the castle's west side, on land -- a form that
+            # crosses water walks (never digs: no hands) out of the maze to the courtyard and takes a given-up passage
+            # back; one that can't make the crossing is re-rolled with the wand of polymorph -- above the crossing
+            # (which would float an eyeless or sessile form into the moat), below CFP_XORN
+            .preempt(self.agent, [
+                castle_poly.form_strategy(self.dive),
+                # castle-poly (CP_WATER): a hurt form over the moat onto land / a fresh form; our own form on the strip
+                # re-rolls there
+                castle_poly.water_strategy(self.dive),
+            ])
+            # castle-redteam (PASSTUNE_CRUSHER, castle_crusher.py): a tonal instrument in the pack on the castle -> the
+            # passtune by Mastermind at the drawbridge, then the bridge toggled on whatever comes over it -- above the
+            # crossing (at a castle on 25-28 a lift gives one level, the tower wand a pass), below the known-lift rushes
+            .preempt(self.agent, [
+                castle_crusher.strategy(self.dive),
+            ])
+            # castle-inner (CASTLE_INNER, castle_inner.py): anywhere inside the castle shell -- the lock-out square after
+            # the crusher, the portcullis after a no-tune entry, the east hall -- the walk to the wand of wishing: the
+            # throne room, its locked door, a hallway, a tower, the chest. Yields while the Crusher is still crushing
+            .preempt(self.agent, [
+                castle_inner.strategy(self.dive),
+            ])
             # HUNGER_DEEP: deep in the dive eat what we carry when Hungry -- above fight2 and the castle crossing,
             # which kept a castle arrival from its tripe ration until it fainted on the moat's edge (agent.eat_deep)
             .preempt(self.agent, [
@@ -1135,6 +1253,15 @@ class GlobalLogic:
             ])
             .preempt(self.agent, [
                 self.agent.engulfed_fight(),
+            ])
+            # wishes lane (THRONE_SIT, LAMP_RUB; wish_source.py): a known throne square -> walk to it, clear the sleepers in the
+            # way and #sit until it vanishes; a carried magic-lamp candidate -> rub it. Above dig_first, the Elbereth rest,
+            # the retreat and fight2 (a court full of sleepers in view would make them dig away); below the wish routes,
+            # the emergency layer, the known items, the minotaur guard and the castle plunge
+            .preempt(self.agent, [
+                wish_source.throne_strategy(self.dive),
+                wish_source.lamp_strategy(self.agent),
+                wish_source.horn_strategy(self.dive),
             ])
             # WISH_TELEPORT_ROUTE (tele_route.py): a wand of wishing's ring of teleport control and cursed scrolls of
             # teleportation take us to the Valley and on to Gehennom's bottom-1 -- above the fight and the dive
@@ -1168,6 +1295,18 @@ class GlobalLogic:
             # above the emergency, which it lets pray first when a safe prayer is due (low HP)
             .preempt(self.agent, [
                 self.mino.strategy(),
+            ])
+            # t-route (T_ROUTE_TOP): the wish route above the minotaur guard, KNOWN_ITEMS and the emergency layer (a safe
+            # prayer due still goes first): a pass beats a won fight, and the route needs 6-9 uninterrupted turns
+            .preempt(self.agent, [
+                tele_route.teleport_route_strategy(self.agent, top=True),
+            ])
+            # armour lane (MATTOCK_SHIELD, dive_logic.shield_off / shield_up): a mattock digger's kept shield goes back on in the
+            # castle courtyard and the Valley, and comes off the moment a dig is refused for it -- above the castle routes
+            # that apply the tool, below the plunge
+            .preempt(self.agent, [
+                self.dive.shield_off(),
+                self.dive.shield_up(),
             ])
             # lift-ready (LIFT_PLUNGE, castle_cross.py): on a castle trap door, not levitating -> '>' into the Valley,
             # above everything (the Valley is banked progress whatever our HP)

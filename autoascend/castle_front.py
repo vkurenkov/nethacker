@@ -86,6 +86,9 @@ TOWER_ORDER = ('NW', 'NE', 'SE', 'SW')
 
 
 class FrontDoor:
+    # PASSTUNE_CRUSHER (castle_crusher.Crusher) reuses the FRONT_V3 walk-in and wand leg without FRONT_V3 on
+    ALWAYS_V3 = False
+
     def __init__(self, dive):
         self.dive = dive
         self.agent = dive.agent
@@ -109,6 +112,9 @@ class FrontDoor:
         self.chest_fail = 0
 
     # ------------------------------------------------------------------ helpers
+
+    def _v3(self):
+        return jf_config.FRONT_V3 or self.ALWAYS_V3
 
     def _log(self, msg):
         self.agent.log(f'FRONT {msg}')
@@ -154,7 +160,7 @@ class FrontDoor:
         return self.agent.glyphs[y, x] in G.BOULDER or level.objects[y, x] in G.BOULDER
 
     def _walkable(self, p):
-        if jf_config.FRONT_V3 and p in (SPAN, PORTCULLIS) and self._open() and self._span_dry():
+        if self._v3() and p in (SPAN, PORTCULLIS) and self._open() and self._span_dry():
             return True   # the bot's map may still hold the moat/wall there (fs3c-k3 s0: '(6, 8) unreachable')
         y, x = to_bot(*p)
         level = self.agent.current_level()
@@ -189,7 +195,7 @@ class FrontDoor:
         return self._sym(PORTCULLIS) == SS.S_ndoor or self._sym(SPAN) in (SS.S_vodbridge, SS.S_hodbridge)
 
     def _span_dry(self):
-        if jf_config.FRONT_V3 and getattr(self, 'span_filled', False):
+        if self._v3() and getattr(self, 'span_filled', False):
             return True   # 'Now you can cross it!' from a push onto the span (a monster standing on it hides the floor)
         return self._sym(SPAN) in DRY_SYMS or self._glyph(SPAN) in DRY_SYMS
 
@@ -197,7 +203,7 @@ class FrontDoor:
         bl = self.agent.blstats
         return [m for m in self.agent.get_visible_monsters()
                 if max(abs(m[1] - bl.y), abs(m[2] - bl.x)) == 1 and
-                not (jf_config.FRONT_V3 and nh.glyph_is_pet(int(m[4])))]
+                not (self._v3() and nh.glyph_is_pet(int(m[4])))]
         # (FRONT_V3: a monster our scroll of taming tamed is no target -- fs7-k6 s8 killed its tame minotaur,
         # -15 alignment, and Excalibur's blast killed us)
 
@@ -247,7 +253,7 @@ class FrontDoor:
     # ------------------------------------------------------------------ the plan
 
     def _step(self):
-        if jf_config.FRONT_V3:
+        if self._v3():
             return self._step_v3()
         agent = self.agent
         pos = self._pos()
@@ -407,7 +413,7 @@ class FrontDoor:
         if self._pos() != ZAP_SPOT:
             return self._go(ZAP_SPOT, 'to the zap square')
         name = opener.object.name
-        if jf_config.FRONT_V3 and self.tries['pet_in_line'] < 20:
+        if self._v3() and self.tries['pet_in_line'] < 20:
             # a pet in the bolt's way (fs8-k6 s8: the minotaur our scroll of taming had just tamed): wait -- killing
             # it costs 15 alignment, and with the record below 0 Excalibur blasts its wielder
             for x in range(ZAP_SPOT[0] + 1, PORTCULLIS[0] + 1):
@@ -478,7 +484,7 @@ class FrontDoor:
     def _attack(self, m):
         agent = self.agent
         _, y, x, mon, _ = m
-        if jf_config.FRONT_V3 and self._engraved() and not self.dive._melee_ignores_elbereth(mon):
+        if self._v3() and self._engraved() and not self.dive._melee_ignores_elbereth(mon):
             # mon.c setmangry(): a blow at a monster that respects Elbereth, struck from an Elbereth square, costs 5
             # alignment ('You feel like a hypocrite.' -- prayers fail below 0) and deletes the engraving anyway:
             # write over it first
@@ -589,7 +595,7 @@ class FrontDoor:
         path = self._path(here, p)
         if not path:
             self.tries[('unreachable', p)] += 1
-            if jf_config.FRONT_V3 and self.tries[('unreachable', p)] in (1, 10):
+            if self._v3() and self.tries[('unreachable', p)] in (1, 10):
                 rows = []
                 for yy in range(max(-3, min(here[1], p[1]) - 2), min(17, max(here[1], p[1]) + 3)):
                     row = ''
@@ -602,14 +608,14 @@ class FrontDoor:
             if self.tries[('unreachable', p)] > 20:
                 self._stop(f'{p} unreachable')
                 return False
-            if jf_config.FRONT_V3 and self._push_toward(p):
+            if self._v3() and self._push_toward(p):
                 return True
             if p[0] <= 4:
                 return self.dive.castle._approach(p)   # explores (or digs) the west maze to the courtyard
             return self._fight_or_wait()
         n = path[0]
         if self._monster_at(n):
-            if jf_config.FRONT_V3:
+            if self._v3():
                 return self._attack_at(n)   # the blocker itself (v2 hit whatever stood on the span)
             return self._fight_or_wait()
         y, x = to_bot(*n)
@@ -863,7 +869,7 @@ class FrontDoor:
         pos = self._pos()
         self._set_state(f'dropping a scroll of scare monster at {pos}')
         self.scare_at.add(pos)   # before the drop: its atomic step's preempt checks may switch strategy (castle B005)
-        self.agent.inventory.drop(known[:1], [1])
+        self.agent.inventory.drop(known[:1], [1], note_scare=True)
         self.agent.inventory._note_dropped(known[:1], [1], force=True)
         self._log(f'scare scroll dropped at {pos}: {self.agent.message[:100]!r}')
         self._mile('scare', f'at {pos}')
@@ -886,6 +892,11 @@ class FrontDoor:
         self._log(f'taming: {self.agent.message[:160]!r}')
         self._mile('taming')
         return True
+
+    def _wand_defend(self, near):
+        """Hook: a defensive move against an adjacent hostile before the wand leg's retreat/fight decision. FRONT_V3
+        has none (always False); PASSTUNE_CRUSHER's Crusher overrides it (PASSTUNE_SCARE_WALKIN)."""
+        return False
 
     def _hold_square(self):
         if self.hold_i == 1:
@@ -994,6 +1005,8 @@ class FrontDoor:
             return self._test_wand(wand)
         near = self._near()
         if near and self._read_taming(near):
+            return True
+        if near and self._wand_defend(near):
             return True
         if near and self._hp_frac() < RETREAT_HP and pos in THRONE_ROOM and self.retreats < MAX_RETREATS:
             self.phase = None

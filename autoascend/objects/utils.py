@@ -1,7 +1,7 @@
 import functools
 
 from .data import *
-from .. import utils
+from .. import jf_config, utils
 
 
 @utils.copy_result
@@ -41,6 +41,11 @@ def possibilities_from_glyph(i):
         return ret
 
     if cat in [nh.TOOL_CLASS, nh.FOOD_CLASS]:
+        if cat == nh.TOOL_CLASS and jf_config.TOOL_GLYPH_ID and objects[obj_id] is not None:
+            # TOOL_GLYPH_ID: tools are never shuffled, so the glyph index (the arena reports GLYPH_OBJ_OFF +
+            # oc_descr_idx) is the tool's own index: a magic lamp and an oil lamp, the four bags, the horns, flutes,
+            # harps, drums and whistles that read alike in words have different glyph ids
+            return [objects[obj_id]]
         return [o for i, o in enumerate(objects) if o is not None and ord(nh.objclass(i).oc_class) == cat and \
                 (o.desc or o.name) == desc]
 

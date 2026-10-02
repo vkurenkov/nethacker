@@ -52,6 +52,10 @@ CONFUSION_POTION = O.from_name('confusion', nh.POTION_CLASS)
 BOOZE_POTION = O.from_name('booze', nh.POTION_CLASS)
 WISH_WAND = O.from_name('wishing', nh.WAND_CLASS)
 WATER_POTION = O.from_name('water', nh.POTION_CLASS)
+POLYCTL_RING = O.from_name('polymorph control', nh.RING_CLASS)
+# ID_PICK_PRIORITY: boots whose look may hide a lift (2 of the 7 random boot looks) or speed
+LIFT_BOOTS = frozenset((O.from_name('levitation boots'), O.from_name('water walking boots'),
+                        O.from_name('speed boots')))
 
 DUNGEONS_OF_DOOM, GEHENNOM = 0, 1
 
@@ -83,6 +87,8 @@ class RouteState:
         self.idle_actions = 0         # consecutive actions of ours that passed no game time
         self.ring_tested = set()      # ring glyphs tried on by the wear test
         self.no_pick_rounds = 0
+        self.tele_notes = {}          # T_STACK_BUC: (glyph, letter) of a teleportation stack -> 'cursed' | 'clean'
+        self.blind_tries = {}         # T_BLIND_READ: (glyph, letter) -> reads of that stack tried
 
 
 def state(agent):
@@ -168,7 +174,35 @@ def cursed_tele_scrolls(agent):
         for i in tele_scrolls(agent):
             if agent.inventory.items.get_letter(i) == wished and i not in out:
                 out.append(i)
+    if jf_config.T_STACK_BUC or jf_config.T_BLIND_READ:
+        # the rest of a stack whose first scroll level-teleported us unconfused is cursed too (same BUC to stack)
+        for i in tele_scrolls(agent):
+            if i not in out and stack_note(agent, i) == 'cursed':
+                out.append(i)
     return out
+
+
+def _stack_key(agent, item):
+    try:
+        return (_glyph(item), agent.inventory.items.get_letter(item))
+    except Exception:
+        return None
+
+
+def stack_note(agent, item):
+    """T_STACK_BUC: what an earlier read of this teleportation stack taught us -- 'cursed' (it level-teleported us
+    while unconfused: read.c SCR_TELEPORTATION calls level_tele() only for a cursed or confused read), 'clean'
+    (uncursed or blessed: the position prompt of a scrolltele(), or the noteleport level's 'mysterious force') -- or
+    None. Stacks hold one BUC state, so the note covers the scrolls left."""
+    key = _stack_key(agent, item)
+    return None if key is None else state(agent).tele_notes.get(key)
+
+
+def _set_stack_note(agent, key, note):
+    if key is None:
+        return
+    state(agent).tele_notes[key] = note
+    _log(agent, f'teleport stack {key[1]!r}: {note}')
 
 
 def unknown_scrolls(agent):
@@ -264,6 +298,7 @@ def note_message(agent):
             st.last_prompt_step = agent.step_count
             if st.reading is not None:
                 st.reading['prompt'] = True
+                st.reading['prompt_kind'] = 'level' if 'To what level' in msg else 'teleport'
             _tc_proven(agent, 'level' if 'To what level' in msg else 'teleport')
         if any(p in msg for p in _TC_INTRINSIC) and not st.tc_intrinsic:
             st.tc_intrinsic = True
@@ -312,9 +347,51 @@ def _tc_proven(agent, what):
 
 # ------------------------------------------------------------------------------------------------ identify
 
+def _id_value_priority(agent, item):
+    """ID_PICK_PRIORITY: rings (TC, levitation, polymorph control first), boots that may be a lift or speed,
+    amulets, wands, a known teleport scroll's BUC; None leaves the item to the base values (potions, scrolls, the
+    rest). See jf_config.ID_PICK_PRIORITY."""
+    st = state(agent)
+    cat = item.category
+    if cat == nh.RING_CLASS and not item.is_unambiguous():
+        v = 200 + 28 * (40 * _p(item, {TC_RING}) + 20 * _p(item, {LEV_RING}) + 20 * _p(item, {POLYCTL_RING}))
+        return v - (60 if _glyph(item) in st.tc_glyphs else 0)
+    if cat == nh.ARMOR_CLASS and not item.is_unambiguous() and LIFT_BOOTS & set(item.objs):
+        return 190
+    if cat == nh.AMULET_CLASS and not item.is_unambiguous():
+        return 170
+    if cat == nh.WAND_CLASS and not item.is_unambiguous():
+        if jf_config.ID_WAND_REFINE and len(item.objs) < 12:
+            return _tested_wand_value(item)
+        return 150
+    if cat == nh.SCROLL_CLASS and item.is_unambiguous() and item.object == TELE_SCROLL and not buc_known(item):
+        return 120
+    return None
+
+
+# ID_WAND_REFINE: wand types that matter to the castle / escape plans (digging, striking, opening, cold, sleep, ...)
+_ROUTE_WANDS = frozenset(('wishing', 'digging', 'sleep', 'striking', 'opening', 'cold', 'teleportation', 'polymorph',
+                          'fire', 'lightning', 'death'))
+
+
+def _tested_wand_value(item):
+    """What an identify pick on an engrave-TESTED wand is worth: the test left a candidate set (the silent five, the
+    vanish trio, sleep or death...). 30 + 120 x P(route wand) when the set mixes route and non-route types (the pick
+    decides something), 45 when every candidate is a route wand (sleep or death: both fine to zap) or none is."""
+    names = [o.name for o in item.objs]
+    useful = [n in _ROUTE_WANDS for n in names]
+    if all(useful) or not any(useful):
+        return 45
+    return 30 + 120 * _p(item, {o for o in item.objs if o.name in _ROUTE_WANDS})
+
+
 def _id_value(agent, item):
     """How much an identify pick is worth for the ceiling: rings (teleport control, levitation) first, then what
     makes or finds a trigger (teleport scrolls and their BUC), then wands, lifts, the rest."""
+    if jf_config.ID_PICK_PRIORITY:
+        v = _id_value_priority(agent, item)
+        if v is not None:
+            return v
     st = state(agent)
     cat = item.category
     if cat == nh.RING_CLASS:
@@ -350,6 +427,28 @@ def _menu_entries(lines):
     return out
 
 
+def _screen_page(agent):
+    """ID_MENU_PAGES: the menu's '(N of M)' from the raw screen -- agent.get_message_and_popup cuts the popup at that
+    marker, so single_popup never holds it. None when no page marker is shown (a one-page menu ends in '(end)')."""
+    try:
+        for row in agent._observation['tty_chars']:
+            m = _PAGE.search(bytes(row).decode(errors='replace'))
+            if m:
+                return int(m.group(1)), int(m.group(2))
+    except Exception:
+        pass
+    return None
+
+
+def in_identify_menu(agent, head, menu_pages):
+    """The identify menu is on screen: its prompt -- tty puts a menu's prompt on the first page only
+    (wintty.c tty_end_menu) -- or, with ID_MENU_PAGES, a later page of the menu we are paging through (menu_pages holds
+    the pages seen so far; it is emptied when the pick is confirmed or declined)."""
+    if 'What would you like to identify' in head:
+        return True
+    return bool(jf_config.ID_MENU_PAGES and menu_pages and _screen_page(agent) is not None)
+
+
 def _identify_step(agent, menu_pages):
     """One key for an identify menu page on screen: collect the pages, then select the best item and confirm.
     Returns the key(s) to send (a string) or None to decline (ESC)."""
@@ -357,6 +456,10 @@ def _identify_step(agent, menu_pages):
     text = ' '.join(popup)
     m = _PAGE.search(text)
     page, pages = (int(m.group(1)), int(m.group(2))) if m else (1, 1)
+    if jf_config.ID_MENU_PAGES:
+        sp = _screen_page(agent)
+        if sp is not None:
+            page, pages = sp
     by_letter = {}
     for it in _items(agent):
         try:
@@ -366,13 +469,22 @@ def _identify_step(agent, menu_pages):
     menu_pages[page] = [(l, by_letter[l]) for l, _ in _menu_entries(popup) if l in by_letter]
     if len(menu_pages) < pages and page < pages:
         return '>'
+    # ID_STACK_SKIP: the scroll that opened this menu is identify (read.c makeknown before identify_pack), and so is every
+    # item of its appearance -- the bot's item list is stale here and still scores that stack as an unknown scroll
+    skip_glyph = None
+    if jf_config.ID_STACK_SKIP and state(agent).reading is not None:
+        skip_glyph = state(agent).reading.get('glyph')
     best = None
     for pg, entries in menu_pages.items():
         for letter, it in entries:
+            if skip_glyph is not None and it.category == nh.SCROLL_CLASS and _glyph(it) == skip_glyph:
+                continue
             v = _id_value(agent, it)
             if v > 0 and (best is None or v > best[0]):
                 best = (v, pg, letter, it)
     if best is None:
+        if jf_config.ID_MENU_PAGES:
+            menu_pages.clear()   # declined: a later paged window is not this menu
         return None
     _, pg, letter, it = best
     if pg != page:
@@ -387,7 +499,7 @@ def _read(agent, item, why):
     st = state(agent)
     letter = agent.inventory.items.get_letter(item)
     st.reading = dict(glyph=_glyph(item), text=item.text, why=why, step=agent.step_count, turn=agent.blstats.time,
-                      letter=letter,
+                      letter=letter, confused=bool(agent.character.prop.confusion), prompt_kind=None,
                       worn=frozenset(_glyph(r) for r in worn_rings(agent)), prompt=False,
                       key=(agent.blstats.dungeon_number, agent.blstats.level_number, agent.blstats.depth))
     st.read_glyphs[_glyph(item)] = agent.blstats.time
@@ -404,7 +516,7 @@ def _read(agent, item, why):
         for _ in range(60):
             msg = agent.single_message or ''
             head = msg + ' ' + ' '.join(agent.single_popup[:3])
-            if 'What would you like to identify' in head:
+            if in_identify_menu(agent, head, menu_pages):
                 keys = _identify_step(agent, menu_pages)
                 if keys is None:
                     yield A.Command.ESC
@@ -503,12 +615,24 @@ def _dive_id_ready(agent):
     # only once the dive has begun: ~90% of the kit's scrolls and potions come from the Dlvl 1-3 grind anyway, and a
     # read during the grind reshuffled whole games (pr-tc15/15b: 14 of 15 jf16 games diverged, some at XL 1-2)
     dive = _dive(agent)
+    grind = False
     if dive is None or not dive.diving:
-        return None
+        # ID_GRIND_READ: the tour too, from XL ID_GRIND_XL, but only while a pick worth a scroll is carried (an unknown ring,
+        # amulet, boots or wand: _id_value_priority >= ID_GRIND_MIN_VALUE) -- otherwise the scroll waits for the dive
+        # start, when everything the grind found is there to choose from
+        if dive is None or not jf_config.ID_GRIND_READ or agent.blstats.experience_level < jf_config.ID_GRIND_XL:
+            return None
+        grind = True
     # cheap tests first: this runs on every step (the preempt chain)
     cands = list(known_identify(agent))
     cands += [i for i in _identify_candidates(agent) if not i.is_unambiguous() and i.count >= 2]
     if not cands:
+        return None
+    # ID_DIVE_HOLD: the same hold in the early dive (depth < ID_HOLD_DEPTH): 58 of the 100 identify picks of the ID2 arm went
+    # to a wand, potion or scroll and 18 of them were followed by a ring or amulet picked up later that stayed unknown
+    if (grind or (jf_config.ID_DIVE_HOLD and agent.blstats.depth < jf_config.ID_HOLD_DEPTH)) and \
+            not any((_id_value_priority(agent, i) or 0) >= jf_config.ID_GRIND_MIN_VALUE for i in _items(agent)
+                    if i.category != nh.SCROLL_CLASS):
         return None
     bl = agent.blstats
     level = agent.current_level()
@@ -808,6 +932,9 @@ def _read_trigger(agent, scroll, why):
     st = state(agent)
     bl = agent.blstats
     before = (bl.dungeon_number, bl.level_number, bl.depth)
+    noting = jf_config.T_STACK_BUC or jf_config.T_BLIND_READ
+    key = _stack_key(agent, scroll) if noting else None
+    is_tele = noting and scroll.is_unambiguous() and scroll.object == TELE_SCROLL
     try:
         _read(agent, scroll, why)
     finally:
@@ -823,6 +950,19 @@ def _read_trigger(agent, scroll, why):
                 for g in (st.reading['worn'] if st.reading else ()):
                     if g not in st.tc_glyphs:
                         st.not_tc.add(g)
+        if is_tele and st.reading and not st.reading.get('confused'):
+            # T_STACK_BUC: an unconfused read tells the stack's BUC (read.c: scursed -> level_tele(), else scrolltele())
+            try:
+                kind = st.reading.get('prompt_kind')
+                rest = [i for i in tele_scrolls(agent) if _stack_key(agent, i) == key]
+                if not rest:
+                    st.tele_notes.pop(key, None)         # the stack is used up: nothing left to note
+                elif kind == 'level' or (now != before and not controlled):
+                    _set_stack_note(agent, key, 'cursed')
+                elif kind == 'teleport' or 'A mysterious force prevents you from teleporting' in (agent.message or ''):
+                    _set_stack_note(agent, key, 'clean')
+            except Exception as e:   # bookkeeping must never break the step loop
+                agent.log(f'PROUTE stack note failed: {e!r}')
 
 
 def _unholy_water(agent):
@@ -879,6 +1019,118 @@ def _dip_ready(agent, gamble=False):
     return max(scrolls, key=lambda i: i.count), waters[0]
 
 
+def _water_to_curse(agent):
+    """T_UNHOLY_PRAY: potions of water (the 'clear' look is always water) that are not already known unholy."""
+    return [i for i in _items(agent) if i.category == nh.POTION_CLASS and i.is_unambiguous() and
+            i.object == WATER_POTION and not known_cursed(i) and 'unholy' not in _words(i)]
+
+
+def _cross_altars(agent):
+    """Known altars on this level whose alignment is known and is not ours, reachable: [(distance, (y, x))] nearest first.
+    pray.c prayer_done: a prayer on an altar of another alignment turns the potions of water lying on it to unholy water
+    whatever its outcome (p_type 0 too soon, 1 bad luck/alignment, 2 good standing): water_prayer(FALSE)."""
+    from .character import Character
+    level = agent.current_level()
+    mine = agent.character.alignment
+    if not level.altars or mine is None:
+        return []
+    bl = agent.blstats
+    dis = agent.bfs()
+    out = []
+    for pos, al in level.altars.items():
+        if al in (mine, None):
+            continue
+        p = (int(pos[0]), int(pos[1]))
+        d = 0 if p == (bl.y, bl.x) else int(dis[p])
+        if d != -1:
+            # (an altar whose alignment we have not read yet is worth the walk: two in three are not ours)
+            out.append((d + (3 if al == Character.UNKNOWN else 0), p))
+    return sorted(out)
+
+
+def _look_altar(agent, pos):
+    """Read the alignment of the altar we stand on (the ':' look, as exploration_logic.check_altar) -> alignment or None."""
+    from .character import Character
+    level = agent.current_level()
+    with agent.atom_operation():
+        agent.step(A.Command.LOOK)
+    text = agent.message or (agent.popup[0] if agent.popup else '')
+    r = re.search(r'There is an altar to [a-zA-Z- ]+ \(([a-z]+)\) here', text)
+    if r is None or r.group(1) not in Character.name_to_alignment:
+        _log(agent, f'no altar to read at {tuple(pos)}: {text[:80]!r}')
+        if not hasattr(level, 'not_altars'):
+            level.not_altars = set()
+        level.not_altars.add((int(pos[0]), int(pos[1])))
+        level.altars.pop(tuple(pos), None)
+        return None
+    al = Character.name_to_alignment[r.group(1)]
+    level.altars[tuple(pos)] = al
+    return al
+
+
+def _unholy_ready(agent):
+    """T_UNHOLY_PRAY: TC known, teleportation scrolls that would make two sure tickets once cursed, water to curse, and
+    a known cross-aligned altar on this level -> its position, else None. The price: the prayer angers our god (Luck -3,
+    prayer timeout up, 1 time in 3 a lost level; pray.c prayer_done -> gods_upset -> angrygods), which the route makes
+    up with a pass (2 sure tickets are 45/45 in the harness) -- so only with TC in hand and >= 2 scrolls to curse."""
+    if not jf_config.T_UNHOLY_PRAY or not tc_known(agent):
+        return None
+    st = state(agent)
+    if getattr(st, 'unholy_tried', False) or agent.character.prop.polymorph:
+        return None
+    dive = _dive(agent)
+    if dive is None or dive.in_gehennom():
+        return None     # pray.c: in Gehennom prayer_done returns before water_prayer
+    level = agent.current_level()
+    if level.dungeon_number == Level.SOKOBAN or not _water_to_curse(agent):
+        return None
+    tickets = sum(i.count for i in cursed_tele_scrolls(agent))
+    pool = sum(i.count for i in tele_scrolls(agent) if not known_cursed(i) and stack_note(agent, i) != 'cursed')
+    if tickets >= 2 or tickets + pool < 2:
+        return None
+    bl = agent.blstats
+    prop = agent.character.prop
+    if prop.blind or prop.confusion or prop.stun or prop.hallu or bl.hitpoints < 0.5 * bl.max_hitpoints or \
+            level.shop_interior[bl.y, bl.x] or _hostiles_within(agent, 8):
+        return None
+    altars = _cross_altars(agent)
+    return altars[0][1] if altars else None
+
+
+def _unholy_step(agent, pos):
+    """Walk to the cross-aligned altar, drop the water on it, pray, pick the (now unholy) water up; the next steps are
+    _dip_ready's dip of the teleport stack and the jump."""
+    st = state(agent)
+    bl = agent.blstats
+    if (bl.y, bl.x) != tuple(pos):
+        _log(agent, f'to the cross-aligned altar at {tuple(pos)}: unholy water for the teleport scrolls')
+        agent.go_to(*pos)
+        return
+    from .character import Character
+    level = agent.current_level()
+    if level.altars.get(tuple(pos)) == Character.UNKNOWN:
+        al = _look_altar(agent, pos)
+        _log(agent, f'altar at {tuple(pos)} is {al}')
+        return
+    waters = _water_to_curse(agent)
+    st.unholy_tried = True
+    glyphs = frozenset(_glyph(w) for w in waters)
+    _log(agent, f'UNHOLY prayer on the altar at {tuple(pos)}: dropping {[w.text for w in waters]}')
+    agent.inventory.drop(waters)
+    agent.pray()
+    _log(agent, f'UNHOLY prayer: {(agent.message or "")[:240]!r}')
+    inv = agent.inventory
+    for _ in range(3):
+        mine = [it for it in inv.get_items_below_me() if _glyph(it) in glyphs]
+        if not mine:
+            break
+        inv.pickup(mine)
+        if not [it for it in inv.items_below_me if _glyph(it) in glyphs]:
+            break
+    inv.items.update(force=True)
+    _log(agent, f'UNHOLY water now: {[w.text for w in _items(agent) if w.category == nh.POTION_CLASS]}')
+
+
 def _confusion_sources(agent):
     """(kind, item): known ways to get confused -- a stack that confused us before (cursed confuse monster) or a
     known potion of confusion or booze."""
@@ -927,7 +1179,8 @@ def _jump_step(agent):
     valley = dive is not None and dive.in_gehennom()
     lottery = jf_config.TC_LOTTERY and tele_scrolls(agent) and (_confusion_sources(agent) or prop.confusion) and \
         _lottery_place(agent)
-    if not cursed and not lts and not lottery:
+    blind = _blind_candidates(agent) if (jf_config.T_BLIND_READ and not cursed and not prop.confusion) else []
+    if not cursed and not lts and not lottery and not blind:
         return False
     if ring is not None:
         if agent.blstats.time < st.puton_block_until:
@@ -956,9 +1209,57 @@ def _jump_step(agent):
                 _log(agent, f'stepping onto the level teleporter at {(ty, tx)} with TC')
                 agent.move(ty, tx)
             return True
+    if blind:
+        # T_BLIND_READ: TC on and a teleportation stack of unknown BUC -- one read tells it (a cursed stack asks for the
+        # level: the Valley, and every scroll left is a sure ticket; any other asks for a position and is spent)
+        key = _stack_key(agent, blind[0])
+        state(agent).blind_tries[key] = state(agent).blind_tries.get(key, 0) + 1
+        _read_trigger(agent, blind[0], 'teleport scroll of unknown BUC with TC on: a cursed one is a controlled jump')
+        return True
     if lottery and _get_confused(agent, 'TC known, uncursed teleport scrolls only'):
         return True
     return False
+
+
+def _blind_candidates(agent):
+    """T_BLIND_READ: teleportation stacks whose BUC the bot does not know (the display shows no BUC word, no earlier read
+    settled it), biggest first (a cursed stack of n is n tickets). Only with TC active and unconfused, in a place where a
+    level teleport works: the read is a lottery ticket (cursed stacks are 1 in 8) that cannot hurt -- with TC on every
+    outcome is a prompt, never a random teleport -- and costs one scroll of a stack that would otherwise sit unused."""
+    if not jf_config.T_BLIND_READ or not tc_active(agent):
+        return []
+    prop = agent.character.prop
+    if prop.confusion or prop.stun or prop.polymorph or not _jump_dungeon_ok(agent):
+        return []
+    st = state(agent)
+    out = []
+    for it in tele_scrolls(agent):
+        if buc_known(it) or known_cursed(it):
+            continue
+        key = _stack_key(agent, it)
+        if key is None or stack_note(agent, it) is not None or st.blind_tries.get(key, 0) >= jf_config.T_BLIND_TRIES:
+            continue
+        out.append(it)
+    if not out:
+        return []
+    bl = agent.blstats
+    if agent.current_level().shop_interior[bl.y, bl.x] or _hostiles_within(agent, 1):
+        return []
+    out.sort(key=lambda i: -i.count)
+    return out
+
+
+def scroll_read_ok(agent, item):
+    """Hook for id-engine's read-tests of UNKNOWN scrolls (lane 6 calls it before every such read; absent -> True):
+    False only for a known-cursed scroll that may be teleportation while TC is not on -- it is a level-teleport ticket,
+    and read without TC it is a random level teleport (read.c SCR_TELEPORTATION, scursed -> level_tele())."""
+    try:
+        if item.category == nh.SCROLL_CLASS and known_cursed(item) and TELE_SCROLL in item.objs and \
+                not tc_active(agent):
+            return False
+    except Exception:
+        pass
+    return True
 
 
 def _castle_gamble_step(agent):
@@ -1036,7 +1337,8 @@ def _ready(agent):
         return False
     try:
         return bool(_altar_pickup_ready(agent) or
-                    _jump_ready(agent) or _dip_ready(agent) or _wear_tc_ready(agent) or _gamble_ready(agent) or
+                    _jump_ready(agent) or _dip_ready(agent) or _unholy_ready(agent) is not None or
+                    _wear_tc_ready(agent) or _gamble_ready(agent) or
                     _altar_ready(agent) or _dive_id_ready(agent) or _ring_test_ready(agent))
     except Exception as e:   # a readiness check must never break the preempt loop
         agent.log(f'PROUTE check failed: {e!r}')
@@ -1054,6 +1356,10 @@ def _one_step(agent):
     dip = _dip_ready(agent)
     if dip is not None:
         _dip(agent, dip[0], dip[1], 'TC known: unholy water curses the teleport stack (sure controlled jumps)')
+        return True
+    unholy = _unholy_ready(agent)
+    if unholy is not None:
+        _unholy_step(agent, unholy)
         return True
     ring = _wear_tc_ready(agent)
     if ring is not None:
@@ -1137,6 +1443,8 @@ def _jump_ready(agent):
     if cursed_tele_scrolls(agent):
         return True
     if _level_teleporters(agent) and _teleporter_approach(agent) is not None:
+        return True
+    if jf_config.T_BLIND_READ and _blind_candidates(agent):
         return True
     if jf_config.TC_LOTTERY and tele_scrolls(agent) and \
             (_confusion_sources(agent) or agent.character.prop.confusion):

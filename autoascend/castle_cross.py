@@ -1,4 +1,22 @@
-"""castle-first-pass: getting a lifted hero off the castle's west landing and into the moat before it dies there.
+"""The fast ways off the castle's west side. castle_logic.py has the geometry and the full crossing (float round the
+moat to the back door); this module holds the preempts that get a hero onto the moat, or through a wall to a trap
+door, before the west side kills it. Preempts in global_logic.global_strategy (flag values as shipped):
+
+  rush_strategy        CFP_RUSH, with CFP_MB, CL_POTION_EARLY and CL_ROUTE (ON): put on a possible lasting lift at
+                       once, quaff lift potions on the landing, then dig/float the cheapest way to a far moat entry
+  known_rush_strategy  LIFT_KNOWN_RUSH (ON): a KNOWN lasting lift goes on the moment we land where castle arrivals land
+  xorn_strategy        CFP_XORN (ON): a wall-walking polymorph form walks through the walls to a trap door
+  plunge_strategy      LIFT_PLUNGE (ON): on a castle trap door and not levitating, '>' drops us into the Valley
+  cold_strategy        LIFT_COLD (OFF): the short cold route (freeze one moat row, walk it)
+
+castle_logic's crossing calls blocker_zap and door_zap_from_afar (CFP_ZAP: the latter opens the locked back door
+(56,08) from two or more squares away; EAST_LATE_DOOR keeps it shut while a timed lift lasts) and held_elbereth /
+door_sea_fight (CFP_EEL); castle_power calls poly_prep.
+
+The rest of this docstring is castle-first-pass's analysis behind CFP_*; the later work (CL_*, LIFT_*) is explained
+in the section comments above its code and in jf_config.py.
+
+castle-first-pass: getting a lifted hero off the castle's west landing and into the moat before it dies there.
 
 Why (castle-first-pass, 2026-09-27; NetHack 3.6.6 castle.des / sp_lev.c / trap.c / dig.c):
 
@@ -110,6 +128,20 @@ def _west_phase(castle):
     if mx >= 57:
         return False
     return (mx, my) not in OUTSIDE or (mx, my) in WEST_COURTYARD
+
+
+def crusher_first(dive):
+    """LANDING_CRUSH_FIRST: the crusher is armed (a tonal instrument, the tune not yet known, not done or destroyed) and we
+    are not afloat -- the arrival tests wait for it (see jf_config)."""
+    if not jf_config.LANDING_CRUSH_FIRST or not jf_config.PASSTUNE_CRUSHER:
+        return False
+    crusher = getattr(dive, 'crusher', None)
+    if crusher is None or crusher.done or crusher.destroyed or crusher.tune is not None:
+        return False
+    castle = dive.castle
+    if castle.levitating() or castle.water_walking() or castle._floating():
+        return False
+    return crusher._instrument() is not None
 
 
 def _names(item):
@@ -383,6 +415,10 @@ def rush_strategy(dive):
         castle = dive.castle
         if not jf_config.CFP_RUSH or not _west_phase(castle):
             return None
+        if crusher_first(dive):
+            return None   # LANDING_CRUSH_FIRST: the crusher's walk to the square comes before any test
+        if jf_config.WISH_ROUTE_FIRST and _wish_route_pending(castle) and not castle._floating():
+            return None   # (tele_route's wishes and level teleport first: castle_logic.plan_step waits in place)
         pos = castle._pos()
         floating = castle._floating()
         if jf_config.CL_ROUTE and not floating and _cl_webbed(castle):
@@ -397,6 +433,8 @@ def rush_strategy(dive):
                     return lp
             cands = lift_candidates(castle)
             if cands:
+                if jf_config.LANDING_QUIET_TESTS and _land_hostiles_within(castle, 2):
+                    return None   # LANDING_QUIET_TESTS: fight2, the Elbereth rests and the guards first (see jf_config)
                 return ('lift',) + cands[0]
             if _poly_now(castle):
                 return ('poly',)
@@ -894,6 +932,14 @@ def _poly_drill_pending(castle):
     potion in a white unicorn form between two self-zaps: the forms that followed differed (a green mold, a panther
     fight, 2213 turns on the west side) and base's pass (an earth elemental through the walls, a couatl over the trap
     door) was lost; cfpj-s11 quaffed two potions as a 2-HP manes between zaps."""
+    if jf_config.CP_POLY and jf_config.CASTLE_POLY:
+        # castle-poly: CP_POLY keeps its own zap count and re-rolls forms that can't make the crossing -- the potions wait
+        # while its route runs (castle_poly.drill_pending)
+        try:
+            from . import castle_poly
+            return castle_poly.drill_pending(castle)
+        except Exception:
+            return False
     if not jf_config.CASTLE_POLY or castle._tries.get('pw_polyzaps', 0) >= 12:
         return False
     try:
@@ -904,6 +950,17 @@ def _poly_drill_pending(castle):
         if form is not None and (castle_power.crosses(form) or amphibious(castle) or wallwalker(castle.agent)):
             return False   # (a form that crosses or walks the walls: the drill is over)
         return True
+    except Exception:
+        return False
+
+
+def _wish_route_pending(castle):
+    """WISH_ROUTE_FIRST (castle-landing; castle-lift's aa92157): a wand of wishing that WISH_TELEPORT_ROUTE still wants
+    to zap (castle_logic._wish_route_first) -- the potion tests wait. castle-landing's ld1-all cra-jf14-s14~4
+    recognised the castle by ear 2 turns after the landing and quaffed three unknown potions between tele_route's
+    wishes: paralysis, then a minotaur (with the recognition pit at +6 the route had finished first)."""
+    try:
+        return castle._wish_route_first()
     except Exception:
         return False
 
@@ -925,6 +982,8 @@ def early_potion(castle):
     if t.get('cl_pot_n', 0) >= 30:
         return None
     if _poly_drill_pending(castle):
+        return None
+    if jf_config.WISH_ROUTE_FIRST and _wish_route_pending(castle):
         return None
     from .power_route import known_cursed
     # (a known potion of polymorph stays power's; a known-cursed potion of levitation lifts for one turn: potion.c)
@@ -1933,6 +1992,8 @@ def door_zap_from_afar(castle, pos):
     t = castle._tries
     names = door_wands()
     if castle.levitating() and castle._timed_levitation():
+        if jf_config.EAST_LATE_DOOR:
+            return False   # (the door stays shut until the lift ends: castle_logic._east_float_wait)
         names = names[:3]   # (rays: only once the potion's levitation is over -- see castle_logic._door_step)
     for name in names:
         wand = next((i for i in castle._items() if castle._usable_wand(i, name)), None)
@@ -1952,6 +2013,10 @@ def _poly_now(castle):
     form yet: zap ourselves now (POLY_XORN answers 'xorn'), before the potions -- castle_power's own self-zap waits at
     the bottom of the preempt chain (harness cfp-xk2-arm jf16-s0: the potion rush ran first)."""
     if not jf_config.CFP_XORN or castle._tries.get('cfp_nocontrol') or wallwalker(castle.agent):
+        return False
+    if jf_config.CP_POLY and jf_config.CP_V2:
+        # castle-poly v2: the self-zap is castle_poly's, on its launch square (with the kept rings on, POLY_XORN still
+        # answers 'xorn' there) -- this one fired where we landed and spent charges in the maze (cp-r17-on jf45-s3~4)
         return False
     if castle._tries.get('pw_polyzaps', 0) >= 12:
         return False
