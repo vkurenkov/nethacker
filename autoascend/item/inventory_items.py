@@ -7,6 +7,10 @@ class InventoryItems:
     def __init__(self, agent):
         self.agent = agent
         self._previous_inv_strs = None
+        # SQ_BFS_WEIGHT (load lane): the pack weight of the last COMPLETE update, and whether an update is under way / the list
+        # was cleared (on_panic): total_weight is a partial sum then, and agent.bfs() would read it as 'a light pack'
+        self.settled_weight = None
+        self.weight_stale = True
 
         self._clear()
 
@@ -21,6 +25,7 @@ class InventoryItems:
         self.shirt = None
 
         self.total_weight = 0
+        self.weight_stale = True
 
         self.all_items = []
         self.all_letters = []
@@ -139,6 +144,8 @@ class InventoryItems:
                 # {'speed boots': 20, 'water walking boots': 15, 'jumping boots': 20, 'elven boots': 15, 'fumble boots': 20, 'levitation boots': 15}
                 # {'luckstone': 10, 'loadstone': 500, 'touchstone': 10, 'flint': 10}
 
+            self.settled_weight = self.total_weight
+            self.weight_stale = False
             if pending is not None:
                 raise pending
             self._recheck_containers = False

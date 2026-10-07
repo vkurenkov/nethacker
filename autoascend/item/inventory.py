@@ -57,6 +57,7 @@ class Inventory:
         self.multi_container_squares = set()  # (dungeon, level, y, x) where #loot asks 'Loot which containers?'
         self._container_failures = {}         # (dungeon, level, y, x) -> failed use_container attempts
         self.unreachable_items_until = {}     # (dungeon, level, y, x) -> turn: items at a pit bottom out of reach
+        self.check_skip_until = {}            # (dungeon, level, y, x) -> turn: item squares a monster held when check_items bumped (CHECK_ITEMS_SKIP)
         self._buy_food_blocked = {}           # (dungeon, level, y, x) -> (failed walks, skip until turn): BUY_FOOD_GIVEUP
         self._box_force_tries = {}            # (dungeon, level, y, x) -> #force commands spent there (BOX_FORCE)
         self._box_force_skip = set()          # (dungeon, level, y, x): boxes BOX_FORCE leaves alone (trap, give-up)
@@ -852,6 +853,9 @@ class Inventory:
         return self.eat(item, quaff=True, smart=smart)
 
     def eat(self, item, quaff=False, smart=True):
+        if jf_config.SURV_LOG:
+            from autoascend import surv_log
+            surv_log.note_eat(self.agent, item, quaff)
         if not quaff and item.is_corpse() and self.agent.character.role == Character.MONK and \
                 ord(MON.permonst(item.monster_id).mlet) not in \
                 [MON.S_BLOB, MON.S_JELLY, MON.S_FUNGUS]:
@@ -1686,6 +1690,9 @@ class Inventory:
         if self.agent.hands_welded():
             yield False   # armor can't come off (or go on over it) with the hands welded
             return
+        if jf_config.ARMOR_UP and self.agent.character.prop.polymorph:
+            yield False   # a polymorph form (the castle's xorn / random-poly routes) wears no suit; the pieces that fell off stay put
+            return
         yielded = False
         while 1:
             best_armorset = self.get_best_armorset(armor_up=jf_config.ARMOR_UP)
@@ -1772,6 +1779,11 @@ class Inventory:
             yield False
 
         mask &= dis > 0
+        if jf_config.CHECK_ITEMS_SKIP:
+            lvkey = self.agent.current_level().key()
+            for (dn, ln, sy, sx), until in self.check_skip_until.items():
+                if (dn, ln) == lvkey and until > self.agent.blstats.time:
+                    mask[sy, sx] = False
         if not mask.any():
             yield False
         yield True
@@ -1781,7 +1793,38 @@ class Inventory:
         target_y, target_x = nonzero_y[i], nonzero_x[i]
 
         with self.agent.env.debug_tiles(mask, color=(255, 0, 0, 128)):
-            self.agent.go_to(target_y, target_x, debug_tiles_args=dict(color=(255, 0, 255), is_path=True))
+            try:
+                self.agent.go_to(target_y, target_x, debug_tiles_args=dict(color=(255, 0, 255), is_path=True))
+            except AgentPanic as e:
+                if jf_config.CHECK_ITEMS_SKIP:
+                    self._check_items_bumped(str(e), int(target_y), int(target_x))
+                raise
+
+    def _check_items_bumped(self, text, ty, tx):
+        """CHECK_ITEMS_SKIP: the walk to an unchecked item square ended in 'Monster on a next tile when moving: (ty,tx)' -- the target
+        itself, a monster sitting on the item. A sessile one (floating eye, mold, jelly: it never leaves) keeps the square off check_items'
+        list for CHECK_ITEMS_SKIP_TURNS; a monster that moves (a pet, a peaceful, a hostile) is left alone, it resolves itself. The BFS is
+        not touched (no connectivity change)."""
+        if not text.startswith('Monster on a next tile when moving'):
+            return
+        m = re.search(r'\((-?\d+),\s*(-?\d+)\)', text)
+        if not m or (int(m.group(1)), int(m.group(2))) != (ty, tx):
+            return
+        agent = self.agent
+        sessile = False
+        try:
+            from autoascend import combat
+            glyph = agent.glyphs[ty, tx]
+            sessile = bool(MON.is_monster(glyph)) and MON.permonst(glyph).mname in combat.monster_utils.ONLY_RANGED_SLOW_MONSTERS
+        except Exception:
+            pass
+        if not sessile:
+            return
+        turns = jf_config.CHECK_ITEMS_SKIP_TURNS
+        key = (*agent.current_level().key(), ty, tx)
+        if self.check_skip_until.get(key, -1) <= agent.blstats.time:
+            agent.log(f'CHECK_ITEMS_SKIP: the item square {(ty, tx)} is held by a monster (sessile); not walking there for {turns} turns')
+        self.check_skip_until[key] = agent.blstats.time + turns
 
     @utils.debug_log('inventory.go_to_unchecked_containers')
     @Strategy.wrap
@@ -2214,6 +2257,8 @@ class Inventory:
             yield True
             self.pay_or_drop_unpaid()
             return
+        if jf_config.SHOP_BLIND_GUARD and self._cannot_steer_in_shop():
+            yield False
         if self.carried_nutrition() >= jf_config.BUY_FOOD_UNTIL or agent._carries_digging_tool() or \
                 agent.get_visible_monsters():
             yield False
@@ -2257,6 +2302,15 @@ class Inventory:
         self.pickup(items[0], 1)
         self.pay_or_drop_unpaid()
 
+    def _cannot_steer_in_shop(self):
+        """SHOP_BLIND_GUARD: blind, hallucinating, confused or stunned -- a walk between the shelves bumps into the shopkeeper (a blind
+        hero does not see him: 'Wait! There's something there you can't see! It gets angry!'; a hallucinating one gets no 'Really
+        attack?' question; a confused or stunned one staggers into him). wait_out_unexpected_state_strategy waits these states out, but
+        it ranks below this layer (supply-minetown seed 1: a yellow light blinded the hero in Corsh's hardware store, buy_food walked on,
+        Mr. Corsh killed her in 4 turns)."""
+        prop = self.agent.character.prop
+        return bool(prop.blind or prop.hallu or prop.confusion or prop.stun)
+
     def _walk_to_shelf(self, key, y, x, giveup):
         """BUY_WALK_FIX: agent.go_to(y, x) for buy_food / buy_instrument. A walk that PANICKED or ended short counts as a failed
         walk (3 in a row leave the item alone for 2000 turns, `giveup`); one cut by a preempting strategy (AgentChangeStrategy: the
@@ -2293,6 +2347,10 @@ class Inventory:
                 if item.shop_status != Item.FOR_SALE or not opp_items.is_tonal(item) or not item.price or \
                         item.price > min(gold, jf_config.INSTRUMENT_BUY_MAX):
                     continue
+                if jf_config.INSTRUMENT_GLYPH:
+                    from .. import instruments
+                    if instruments.shelf_not_tonal(self.agent, level, y, x):
+                        continue      # the shelf showed a horn of plenty / drum / whistle glyph: no tune in it
                 score = -item.price - dis[y, x] / 100
                 if best is None or score > best[0]:
                     best = (score, int(y), int(x), item.text, item.price, item.glyphs[0] if item.glyphs else None)
@@ -2323,7 +2381,12 @@ class Inventory:
             yield True
             self.pay_or_drop_unpaid()
             return
-        if agent._carries_digging_tool() or agent.get_visible_monsters():
+        if jf_config.SHOP_BLIND_GUARD and self._cannot_steer_in_shop():
+            yield False
+        # INSTRUMENT_INSIDE: a hero who is already inside the shop (a hole dug on the level above dropped her in) may buy with a
+        # digging tool in the pack -- the shopkeeper only bars the DOOR to a pick-axe (jf83 s13: 190 gold, a 67 zm harp in reach)
+        inside_ok = jf_config.INSTRUMENT_INSIDE and bool(level.shop_interior[bl.y, bl.x])
+        if (agent._carries_digging_tool() and not inside_ok) or agent.get_visible_monsters():
             yield False
         if jf_config.SHOP_GUARD and agent.character.teleportitis and not agent.character.teleport_control:
             yield False

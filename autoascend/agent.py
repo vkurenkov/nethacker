@@ -15,7 +15,10 @@ from . import jf_config, jf_log, jf_scenario
 from . import power
 from . import power_route
 from . import prep_log
+from . import surv_log
+from . import pet_guard
 from . import preempt_trace
+from . import instruments
 from . import utils
 from .character import Character
 from .exceptions import AgentPanic, AgentFinished, AgentChangeStrategy
@@ -489,6 +492,11 @@ class Agent:
             # wishes lane (wish_source.py): court sounds, 'You enter an opulent throne room!', throne and wish results
             from . import wish_source
             wish_source.note_message(self)
+        if (jf_config.CRUSH_BRIDGE_GONE or jf_config.CRUSH_WATER_GUARD) and self.single_message:
+            # castle forensics (CRUSH_BRIDGE_GONE): any message that says the drawbridge is gone, not only a toggle's own;
+            # (CRUSH_WATER_GUARD: a fall into the water)
+            from . import castle_crusher
+            castle_crusher.note_message(self)
         if jf_config.CFP_XORN or jf_config.CFP_INVIS or jf_config.VALLEY_XORN:
             # castle-first-pass: our polymorph form (and invisibility) from the messages (an invisible hero's square
             # shows no form glyph); VALLEY_XORN needs 'You return to dwarven form!' too: without it a lapsed xorn kept
@@ -667,6 +675,17 @@ class Agent:
             # READINESS checkpoints (prep_log.py): reads the fresh state, logs a line when a checkpoint is due;
             # never steps, never raises
             prep_log.note(self)
+        if jf_config.SURV_LOG:
+            # survival lane (surv_log.py): hunger transitions with the food carried and the hostiles in view; logging only
+            surv_log.note(self)
+        if jf_config.PET_SWAP_GUARD:
+            # survival lane (pet_guard.py, F456): remember the squares of deadly traps under the hero; reads the message, never steps
+            pet_guard.note(self)
+        if jf_config.INSTR_LOG:
+            # instruments lane (instruments.py): logging only, never steps, never raises
+            instruments.note(self)
+        if jf_config.INSTRUMENT_PICK or jf_config.INSTRUMENT_SHOP or jf_config.INSTRUMENT_GLYPH:
+            instruments.remember(self)    # the type of every instrument glyph seen (reads only)
 
     _ATTACK_PROTECTED = re.compile(r'\b(?:watchman|watch captain|priest|priestess|guard)\b')   # (not the guardian naga)
 
@@ -856,9 +875,19 @@ class Agent:
             assert mons.any()
 
             for mname in mnames:
-                glyph = MON.from_name(mname)
+                if jf_config.CORPSE_NAME_GUARD:
+                    try:
+                        glyph = MON.from_name(mname)
+                        corpse_glyph = MON.body_from_name(mname)
+                    except AssertionError:
+                        # a name that is no monster: a shapeshifter's player-monster form ('student of stones', 'vagrant'), or a message
+                        # fragment ('rmor catches fire and burns'); the assertion ended this update and left the corpse list stale
+                        self.log(f'CORPSE_NAME_GUARD: no monster called {mname!r}, skipped')
+                        continue
+                else:
+                    glyph = MON.from_name(mname)
+                    corpse_glyph = MON.body_from_name(mname)
                 monster_id = glyph - nh.GLYPH_MON_OFF
-                corpse_glyph = MON.body_from_name(mname)
                 recorded = []
                 for y, x in zip(*utils.isin(mons, [glyph]).nonzero()):
                     # TODO: it works because level.items is updated in `inventory.check_items`
@@ -1339,6 +1368,15 @@ class Agent:
 
     @property
     def SAFE_HUNGER_PRAYER_GAP(self):
+        gap = self._safe_hunger_prayer_gap0()
+        # SURV_RESERVE (survival lane): a tour hero whose pack holds less than SURV_RESERVE_FOOD nutrition prays at Weak from
+        # SURV_RESERVE_GAP instead of eating its rations to stretch the gap to 1700 (see jf_config)
+        if jf_config.SURV_RESERVE and gap > jf_config.SURV_RESERVE_GAP and not self.global_logic.dive.diving and \
+                not self.prayer_failed and self.inventory.carried_nutrition() < jf_config.SURV_RESERVE_FOOD:
+            return jf_config.SURV_RESERVE_GAP
+        return gap
+
+    def _safe_hunger_prayer_gap0(self):
         # TOUR_WEAK_PRAYER_GAP: a longer Weak gap in the tour only (the dive has no faint guard);
         # DIVE_WEAK_PRAYER_GAP: a shorter one deep in the dive (castle: a faint beside a troll is worse)
         if self.global_logic.dive.diving and self.camp_hunger():
@@ -1350,7 +1388,7 @@ class Agent:
             if jf_config.TOUR_WEAK_PRAYER_GAP:
                 return jf_config.TOUR_WEAK_PRAYER_GAP
         elif self._hunger_deep_gap():
-            return jf_config.HUNGER_DEEP_GAP
+            return jf_config.CASTLE_HUNGER_GAP or jf_config.HUNGER_DEEP_GAP
         elif self._dive_tool_hunger_gap():
             return self._dive_tool_hunger_gap()
         elif jf_config.DIVE_WEAK_PRAYER_GAP and self.blstats.depth >= jf_config.DIVE_GAP_MIN_DEPTH:
@@ -1413,7 +1451,7 @@ class Agent:
             if jf_config.TOUR_FAINT_PRAYER_GAP:
                 return jf_config.TOUR_FAINT_PRAYER_GAP
         elif self._hunger_deep_gap():
-            return jf_config.HUNGER_DEEP_GAP
+            return jf_config.CASTLE_HUNGER_GAP or jf_config.HUNGER_DEEP_GAP
         elif self._dive_tool_hunger_gap():
             return self._dive_tool_hunger_gap()
         elif jf_config.DIVE_FAINT_PRAYER_GAP and self.blstats.depth >= jf_config.DIVE_GAP_MIN_DEPTH:
@@ -1432,7 +1470,9 @@ class Agent:
         bl = self.blstats
         near = []
         near_dist = []
-        for _, y, x, mon, _ in self.get_visible_monsters():
+        near_m = []
+        for m in self.get_visible_monsters():
+            _, y, x, mon, _ = m
             d = max(abs(int(y) - bl.y), abs(int(x) - bl.x))
             if d > jf_config.THREAT_RADIUS:
                 continue
@@ -1440,8 +1480,11 @@ class Agent:
                 continue
             near.append(mon)
             near_dist.append((mon, d))
+            near_m.append(m)
         if not near:
             return None
+        if jf_config.SURV_THREAT:
+            return self._surv_threat(near_m)
         dive = self.global_logic.dive
         # THREAT_DIFF_GAP: the difficulty trigger only from its own (longer) gap -- a rothe circled a Fainting XL5
         # on Dlvl 3 for 90 turns and hit it during a faint once the dust Elbereth had worn (t31/t32-jf16 s14, gap
@@ -1466,6 +1509,35 @@ class Agent:
                 return f'no-elbereth:{(serious or close)[0].mname}'
         if len(near) >= jf_config.THREAT_MIN_COUNT or bl.hitpoints < jf_config.THREAT_HP_FRAC * bl.max_hitpoints:
             return f'{len(near)}x{near[0].mname}'
+        return None
+
+    def _surv_threat(self, near_m):
+        """SURV_THREAT (survival lane): _hunger_threat by what the monsters near could do to a helpless hero, not by their names. The
+        old rules pray from gap 1000 (5% fail, a failed prayer ends the game) when a leprechaun (speed 15, claws that steal gold), a garter
+        snake or any two walkers stand within 5 squares at HP < 75% (446 'hunger-threat' prayers in the cand-l5 corpus: 30% for a
+        leprechaun, iguana, gecko, newt, garter snake, cave spider; 3.4% failed). Here: surv_threat.potential_damage = the damage the
+        monsters within THREAT_RADIUS would deal in SURV_FAINT_TURNS (one faint, 10-20 turns) at monst.c's dice, speed / 12 moves a
+        turn and mattacku's to-hit against a helpless hero; the ones that respect Elbereth count SURV_THREAT_ELB_FACTOR of that while an
+        intact Elbereth is under us (a dust engraving scuffs 1 turn in 40 + 3 Dex). A threat when that is at least SURV_THREAT_FRAC of
+        our HP -- the faint can end the game -- or SURV_THREAT_IGN_FRAC when it comes from a monster Elbereth cannot hold off."""
+        from . import surv_threat
+        bl = self.blstats
+        dive = self.global_logic.dive
+        elb = (self.inventory.engraving_below_me or '').lower() == 'elbereth'
+        ign = [m for m in near_m if dive._ignores_elbereth(m[3])]
+        rest = [m for m in near_m if not dive._ignores_elbereth(m[3])]
+        hp = max(1, bl.hitpoints)
+        pot_ign = surv_threat.potential_damage(self, ign) if ign else 0.0
+        pot_rest = surv_threat.potential_damage(self, rest, elbereth_intact=elb, ignores=dive._ignores_elbereth) if rest else 0.0
+        # the earlier the prayer, the riskier it is (rnz(350): 5.4% fail at gap 1000, 2.3% at 1200): the bar rises from SURV_THREAT_FRAC at gap
+        # 1200 to twice that at gap 1000 (a faint alone could then take all of our HP)
+        gap = (bl.time - self.last_prayer_turn) if self.last_prayer_turn is not None else 5000
+        scale = 1.0 + max(0.0, min(1.0, (1200 - gap) / 200.0))
+        if pot_ign >= jf_config.SURV_THREAT_IGN_FRAC * scale * hp:
+            return f'surv:{ign[0][3].mname}:{pot_ign:.0f}/{hp}'
+        if pot_ign + pot_rest >= jf_config.SURV_THREAT_FRAC * scale * hp:
+            top = max(near_m, key=lambda m: surv_threat.potential_damage(self, [m]))
+            return f'surv:{top[3].mname}:{pot_ign + pot_rest:.0f}/{hp}'
         return None
 
     def uhunger_weak_estimate(self):
@@ -1493,7 +1565,10 @@ class Agent:
             est = self.uhunger_weak_estimate()
             if est is None or est > jf_config.THREAT_WEAK_MARGIN:
                 return False
-        if not self.is_safe_to_pray(jf_config.DIVE_THREAT_GAP if diving else jf_config.THREAT_PRAYER_GAP):
+        threat_gap = jf_config.DIVE_THREAT_GAP if diving else jf_config.THREAT_PRAYER_GAP
+        if diving and jf_config.CASTLE_HUNGER_GAP and self._hunger_deep_gap():
+            threat_gap = jf_config.CASTLE_HUNGER_GAP   # CASTLE_HUNGER_GAP: the castle camp's own (shorter) gap
+        if not self.is_safe_to_pray(threat_gap):
             return False
         threat = self._hunger_threat()
         if threat is None:
@@ -1655,6 +1730,8 @@ class Agent:
                    not item.is_corpse() for item in flatten_items(self.inventory.items))
 
     def pray(self):
+        if jf_config.SURV_LOG:
+            surv_log.note_pray(self)
         gap = None if self.last_prayer_turn is None else self.blstats.time - self.last_prayer_turn
         self.log(f'PRAY hp={self.blstats.hitpoints}/{self.blstats.max_hitpoints} hunger={self.blstats.hunger_state} '
                  f'gap={gap} reason={self._pray_reason}')
@@ -1945,6 +2022,10 @@ class Agent:
                     (self.blstats.y, self.blstats.x)] = (level.key(), (expected_y, expected_x))
 
         else:
+            if jf_config.PET_SWAP_GUARD and pet_guard.hold(self, expected_y, expected_x):
+                # the step would swap the pet onto a trap square that kills it ('You feel guilty about losing your pet': god angry for good);
+                # one search turn was spent, the step did not happen
+                raise AgentPanic(f'pet swap guard: the pet at ({expected_y},{expected_x}) would land on a trap square')
             from_y, from_x = self.blstats.y, self.blstats.x
             self.direction(dir)
 
@@ -2165,17 +2246,48 @@ class Agent:
 
         walkable_diagonally = walkable & ~utils.isin(level.objects, G.DOORS) & (level.objects != -1) \
             & ~level.intact_doors
-        can_squeeze = (force_squeeze or self.inventory.items.total_weight <= 600) and \
+        weight = self.inventory.items.total_weight
+        stale = False
+        if jf_config.SQ_BFS_WEIGHT and self.inventory.items.weight_stale and self.inventory.items.settled_weight is not None:
+            # SQ_BFS_WEIGHT (load lane): InventoryItems.update() sums the weight item by item and calls get_visible_monsters() (a BFS) from
+            # inside its loop when it meets a bag; that BFS saw a partial sum <= 600, allowed every diagonal squeeze and was CACHED for the
+            # step, so the dive's later bfs() calls planned squeezes the game refuses and RETURN_DIG's cut-off timer reset (F455, B345)
+            weight = self.inventory.items.settled_weight
+            stale = True
+        can_squeeze = (force_squeeze or weight <= 600) and \
             self.current_level().dungeon_number != Level.SOKOBAN
         if can_squeeze and not force_squeeze and jf_config.ROBUST_FIXES2 and self._squeeze_blocked():
             can_squeeze = False
-        dis = utils.bfs(y, x,
-                        walkable=walkable,
-                        walkable_diagonally=walkable_diagonally,
-                        can_squeeze=can_squeeze,
-                        )
+        if jf_config.BFS_ROCK_SQUEEZE and not can_squeeze and level.dungeon_number != Level.SOKOBAN and \
+                not (jf_config.ROBUST_FIXES2 and self._squeeze_blocked()):
+            # BFS_ROCK_SQUEEZE (forensics lane): a pack over 600 cannot squeeze diagonally between two ROCK squares (hack.c
+            # test_move -> cant_squeeze_thru), but a trap, boulder, monster, door or pool beside the step is not rock: only
+            # known walls and never-seen squares block it. The plain rule above treated every non-walkable orthogonal as rock.
+            # (G.STONE: update_level marks the blank squares beside the hero as seen stone -- rock, never open)
+            squeeze_open = walkable | (level.seen & ~utils.isin(level.objects, G.WALL, G.STONE))
+            dis = utils.bfs_sq(y, x,
+                               walkable=walkable,
+                               walkable_diagonally=walkable_diagonally,
+                               can_squeeze=False,
+                               squeeze_open=squeeze_open,
+                               )
+            if jf_log.enabled() and y == self.blstats.y and x == self.blstats.x and \
+                    self.blstats.time - getattr(self, '_sq_log_t', -999) >= 50:
+                # dev log only (no JF_LOG_DIR in the arena): what the rock rule opened that the plain rule kept closed
+                plain = utils.bfs(y, x, walkable=walkable, walkable_diagonally=walkable_diagonally, can_squeeze=False)
+                gain = int(((dis != -1) & (plain == -1)).sum())
+                if gain:
+                    self._sq_log_t = self.blstats.time
+                    self.log(f'BFS_ROCK_SQUEEZE: {gain} squares reachable only by the rock rule '
+                             f'(reach {int((plain != -1).sum())} -> {int((dis != -1).sum())}, weight {self.inventory.items.total_weight})')
+        else:
+            dis = utils.bfs(y, x,
+                            walkable=walkable,
+                            walkable_diagonally=walkable_diagonally,
+                            can_squeeze=can_squeeze,
+                            )
 
-        if y == self.blstats.y and x == self.blstats.x and not force_squeeze and open_mask is None:
+        if y == self.blstats.y and x == self.blstats.x and not force_squeeze and open_mask is None and not stale:
             self.last_bfs_dis = dis
             self.last_bfs_step = self.step_count
 
@@ -2863,9 +2975,17 @@ class Agent:
         # CAMP_STAIRS_TURNS looking for the way on; the guard's early version fired 100 turns in and reshuffled games
         # that were about to get their pick)
         visit = dive._visit_start
+        need = jf_config.SQUEEZE_OUT_TURNS
+        tool_skip = True   # a tool digs round it (no drop)
+        if jf_config.SQ_OUT_TOOL and level.dungeon_number == Level.GNOMISH_MINES and jf_config.RETURN_DIG and \
+                dive.digging_tool() is not None:
+            # SQ_OUT_TOOL (load lane): RETURN_DIG's tunnelling had its RETURN_DIG_TURNS and did not free us (F455: a mattock held
+            # for 5,900 turns at a squeeze-cut '<'); the drop is the way out after SQ_OUT_TOOL_TURNS
+            tool_skip = False
+            need = min(need, jf_config.SQ_OUT_TOOL_TURNS)
         if level.dungeon_number != Level.GNOMISH_MINES or visit[0] != level.key() or \
-                t - visit[1] < jf_config.SQUEEZE_OUT_TURNS or \
-                (jf_config.RETURN_DIG and dive.digging_tool() is not None):   # a tool digs round it (no drop)
+                t - visit[1] < need or \
+                (tool_skip and jf_config.RETURN_DIG and dive.digging_tool() is not None):
             self._squeeze_out_seen = None
             return None
         last = getattr(self, '_squeeze_out_checked', None)
@@ -2912,6 +3032,8 @@ class Agent:
             target_x = self.blstats.x + dx
             if self.wield_best_melee_weapon():
                 return wait_counter
+            if jf_config.SHIELD_FIGHT and self.global_logic.dive.fight_shield():
+                return wait_counter   # SHIELD_FIGHT: a mattock digger puts its kept shield on for a real melee
             with self.env.debug_tiles([[self.blstats.y, self.blstats.x],
                                        [target_y, target_x]], color=(255, 0, 255), is_path=True):
                 self.melee_attack(target_y, target_x)
@@ -3574,6 +3696,117 @@ class Agent:
             return
         yield False
 
+    # SURV_EAT: monsters whose adjacency does not stop a meal (they never attack, or only passively when hit)
+    _EAT_PASSIVE = frozenset(('brown mold', 'yellow mold', 'green mold', 'red mold', 'shrieker', 'floating eye',
+                              'acid blob', 'gas spore'))
+
+    def surv_eat_ok(self):
+        """SURV_EAT's shared gate: Hungry or worse, a body that can eat, not the castle camps (eat_deep has those), and no
+        hostile next to us that would interrupt a meal (monster_nearby() in hack.c) -- except on an intact Elbereth with
+        only monsters that respect it (onscary: a scared monster does not count)."""
+        bl = self.blstats
+        if bl.hunger_state < Hunger.HUNGRY or self.character.prop.polymorph or self.hunger_deep():
+            return False
+        if self.global_logic.dive.levitating() or utils.isin(self.glyphs, G.SWALLOW).any():
+            return False
+        y0, x0 = bl.y, bl.x
+        if self.character.prop.hallu:
+            # hallucination: the names are random, so 'passive' and 'respects Elbereth' mean nothing -- no meal with anything next to us
+            # (A1 jf1501 s3 ate a slime mold with two attackers adjacent, shown as a lizard and a gargoyle, and was swarmed)
+            return not any(max(abs(m[1] - y0), abs(m[2] - x0)) <= 1 for m in self.get_visible_monsters())
+        adjacent = [m for m in self.get_visible_monsters()
+                    if max(abs(m[1] - y0), abs(m[2] - x0)) <= 1 and getattr(m[3], 'mname', '') not in self._EAT_PASSIVE]
+        if not adjacent:
+            return True
+        dive = self.global_logic.dive
+        return (self.inventory.engraving_below_me or '').lower() == 'elbereth' and \
+            not any(dive._ignores_elbereth(m[3]) for m in adjacent)
+
+    def _surv_meal(self):
+        """The carried food SURV_EAT eats first (eat_deep's choice): not a tin (up to 50 turns to open), tripe only when
+        Fainting, never the items worth more than their nutrition; the most filling first."""
+        bl = self.blstats
+        keep = {'eucalyptus leaf', 'sprig of wolfsbane', 'lump of royal jelly'}
+
+        def ok(item):
+            names = {getattr(o, 'name', '') for o in item.objs}
+            if names & keep or 'tin' in names:
+                return False
+            if 'tripe ration' in names and bl.hunger_state < Hunger.FAINTING:
+                return False
+            return True
+
+        food = sorted((i for i in self.edible_carried_food() if ok(i)),
+                      key=lambda i: -(self.inventory.BUY_FOOD_NUTRITION.get(i.object.name, 0) if i.is_unambiguous() else 0))
+        return food
+
+    @utils.debug_log('eat_first')
+    @Strategy.wrap
+    def eat_first(self):
+        """SURV_EAT (survival lane; F432 + the jf606 s10 / idt-fid2-jf350 s0 narratives): the meals the tour already decides on,
+        but ABOVE fight2, the Elbereth holds and the guards. Both safeguards of a hungry hero defer to the eater -- faint_guard
+        stands down while food is carried, fight2 never lets the eater run while any monster is within 7 steps -- and fight2's
+        dances with a leprechaun or a floating eye last 50-400 turns: the hero went Hungry, Weak and Fainting standing on a
+        fresh iguana corpse with three food rations in the pack, and a rothe killed it fainted. A meal is interrupted by a
+        hostile that comes next to us (hack.c monster_nearby), so starting one with the rest of the level in view costs nothing.
+        A fresh edible corpse underfoot from Hungry on; carried food only at Weak or worse (a Hungry hero keeps the old
+        hoard-and-pray policy), with the tour's own rule for when the prayer is the meal. At most two tries per game turn (a
+        meal that does not start must not spin above the fight)."""
+        bl = self.blstats
+        if not jf_config.SURV_EAT or bl.hunger_state < Hunger.HUNGRY:
+            yield False
+        last = getattr(self, '_surv_eat_try', None)
+        if last is not None and last[0] == bl.time and last[1] >= 2:
+            yield False
+        dive = self.global_logic.dive
+        item = None
+        what = None
+        level = self.current_level()
+        here = level.corpses_to_eat.get((bl.y, bl.x))
+        if here and not level.shop[bl.y, bl.x]:
+            for it in self.inventory.items_below_me:
+                if it.is_corpse() and it.count == 1 and it.monster_id in here and not self.reserve_corpse(it.monster_id) and \
+                        self._is_corpse_editable(it.monster_id, here[it.monster_id]):
+                    item, what = it, 'corpse'
+                    break
+        if item is None and bl.hunger_state >= Hunger.WEAK:
+            # eat_from_inventory's tour rule: the prayer is the meal while it is safe (the emergency layer above prays)
+            hoard = not dive.diving and not self.prayer_failed and bl.hunger_state < Hunger.FAINTING and \
+                self.is_safe_to_pray(self.SAFE_HUNGER_PRAYER_GAP) and not self._eat_before_praying()
+            if not hoard:
+                food = self._surv_meal()
+                if food:
+                    item, what = food[0], 'pack'
+        if item is None or not self.surv_eat_ok():
+            yield False
+        yield True
+        self._surv_eat_try = (bl.time, (last[1] + 1) if last is not None and last[0] == bl.time else 1)
+        self.log(f'SURV_EAT eating {what} {item.text!r} first (hunger {bl.hunger_state}, hostiles '
+                 f'{[(m[3].mname, int(m[0])) for m in self.get_visible_monsters()[:4]]})')
+        self.inventory.eat(item)
+
+    def _lift_blocks_meal(self):
+        """eat_deep refuses a meal while levitating (a potion's lift is a crossing's few turns). SURV_LIFT_EAT: a LASTING lift (a known ring of
+        levitation / boots on us, castle_logic._timed_levitation) does not block one on castle land away from the moat's edge -- the rest stop
+        before the crossing lasts 300+ turns (HP back to 85%) and the hero floated there Hungry, Weak, Fainting, with three food rations in the
+        pack, until a shark ate it (survival A1 jf1500 s6: cursed ring of levitation, prayed off, still worn)."""
+        dive = self.global_logic.dive
+        if not dive.levitating():
+            return False
+        if not jf_config.SURV_LIFT_EAT:
+            return True
+        try:
+            from . import castle_logic
+            castle = dive.castle
+            if castle.castle_key is None or self.current_level().key() != castle.castle_key or castle._timed_levitation():
+                return True
+            mx, my = castle_logic.to_map(self.blstats.y, self.blstats.x)
+            # land with no moat square next to it (an eel or a shark bites from the water to an adjacent square)
+            return castle_logic.map_char(mx, my) != '.' or \
+                any(castle_logic.map_char(mx + dx, my + dy) == '}' for dx, dy in castle_logic.DIRS)
+        except Exception:
+            return True
+
     @utils.debug_log('eat_deep')
     @Strategy.wrap
     def eat_deep(self):
@@ -3585,7 +3818,7 @@ class Agent:
         crossing's), or polymorphed (the form may not eat)."""
         bl = self.blstats
         if not self.hunger_deep() or bl.hunger_state < Hunger.HUNGRY or self.character.prop.polymorph or \
-                self.global_logic.dive.levitating():
+                self._lift_blocks_meal():
             yield False
         if jf_config.CASTLE_INNER and bl.hunger_state < Hunger.WEAK and self.global_logic.dive.inner.eat_blocked():
             yield False   # castle_inner: not in the hall / throne room / with an @ about (a meal is 5 turns, 1 in 7 rotten)
@@ -3655,6 +3888,9 @@ class Agent:
         yield True
         self.log(f'LYCAN were form Overloaded (hunger {self.blstats.hunger_state}): dropping {len(to_drop)} items')
         self.inventory.drop(to_drop, smart=False)
+        if jf_config.LYCAN_GEAR:
+            from . import lycan_gear
+            lycan_gear.note_change(self, 'unload')
 
     _TIN_SMELL = re.compile(r'It smells like (?:the )?([A-Za-z -]+?)\.')
     _BAD_TIN_WORDS = ('cockatrice', 'chickatrice', 'Medusa', 'green slime', 'were', 'little dog', 'large dog',

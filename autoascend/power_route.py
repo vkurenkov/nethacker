@@ -34,7 +34,7 @@ import re
 import nle.nethack as nh
 from nle.nethack import actions as A
 
-from . import jf_config
+from . import jf_config, utils
 from . import objects as O
 from .glyph import SS
 from .level import Level
@@ -841,7 +841,7 @@ def _put_on(agent, ring, why):
         if 'What do you want to put on?' not in agent.single_message:
             return
         yield letter
-        if 'Which ring-finger' in agent.single_message:
+        if utils.asks_ring_hand(agent.single_message):
             yield 'r' if left_used else 'l'
 
     _log(agent, f'putting on {ring.text!r}: {why}')
@@ -1335,6 +1335,13 @@ def _castle_gamble_step(agent):
 def _ready(agent):
     if agent.blstats.time < state(agent).cooldown_until:
         return False
+    if jf_config.MEDB_PIT_QUIET:
+        # MEDB_PIT_QUIET: standing in the pit of a dig under way is no quiet moment -- the pit limits our sight to the 8 squares
+        # around us (vision.c), so every 'nothing hostile within 6' test below passes with a pack closing in (cand-l5 gate-style
+        # case: a captain 4 squares away, an identify scroll read in the pit, the hole 4 moves short when it arrived)
+        dive = _dive(agent)
+        if dive is not None and dive.diving and dive._in_own_pit():
+            return False
     try:
         return bool(_altar_pickup_ready(agent) or
                     _jump_ready(agent) or _dip_ready(agent) or _unholy_ready(agent) is not None or

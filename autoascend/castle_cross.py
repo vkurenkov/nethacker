@@ -63,7 +63,7 @@ import re
 import nle.nethack as nh
 from nle.nethack import actions as A
 
-from . import jf_config
+from . import jf_config, utils
 from .castle_logic import OUTSIDE, WEST_COURTYARD, map_char, to_bot
 from .exceptions import AgentChangeStrategy, AgentFinished, AgentPanic
 from .glyph import G, SS
@@ -1847,7 +1847,7 @@ def poly_prep(passage, known_only=False):
             if 'What do you want to put on?' not in agent.single_message:
                 return
             yield letter
-            if 'Which ring-finger' in agent.single_message:
+            if utils.asks_ring_hand(agent.single_message):
                 yield 'l' if any('left' in r.text for r in worn) is False else 'r'
 
         with agent.atom_operation():
@@ -1882,7 +1882,7 @@ def _put_on_keep(castle, item):
         if 'What do you want to put on?' not in agent.single_message:
             return
         yield letter
-        if 'Which ring-finger' in agent.single_message:
+        if utils.asks_ring_hand(agent.single_message):
             yield 'r' if left_busy else 'l'
 
     with agent.atom_operation():
@@ -2095,7 +2095,7 @@ def _invis_step(castle):
             if 'What do you want to put on?' not in agent.single_message:
                 return
             yield letter
-            if 'Which ring-finger' in agent.single_message:
+            if utils.asks_ring_hand(agent.single_message):
                 yield 'r' if left_busy else 'l'
 
         with agent.atom_operation():

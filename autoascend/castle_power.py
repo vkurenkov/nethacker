@@ -585,13 +585,22 @@ def deep_poly_escape_strategy(dive):
                     zap_breach_wand(agent, bwand, why, target,
                                     agent.calc_direction(bl.y, bl.x, target[1], target[2]))
                     return
-        wand = _poly_wand(agent) if hp < 0.6 * hpmax else None
+        if jf_config.POLY_ESCAPE_STRICT:
+            # POLY_ESCAPE_STRICT: a lost fight against something that outclasses us (a minotaur or another big Elbereth-ignorer
+            # next to us, HP below POLY_ESCAPE_HP), and not in a kit that plays the drawbridge: a new form breaks the armour and
+            # drops the weapon and the digging tool, the crusher is the better route
+            crusher = getattr(dive, 'crusher', None)
+            playable = crusher is not None and jf_config.PASSTUNE_CRUSHER and crusher._instrument() is not None
+            lost = hp < jf_config.POLY_ESCAPE_HP * hpmax and any(is_big_ignorer(dive, m[3]) for m in adjacent)
+            wand = _poly_wand(agent) if (lost and not playable) else None
+        else:
+            wand = _poly_wand(agent) if hp < 0.6 * hpmax else None
         if wand is None:
             # an Elbereth-ignorer (minotaur, @) at us from the landing on: gamble each unknown wand on it now rather
             # than at critical HP (LAST_RESORT) -- sleep, striking, fire/cold/lightning, slow, polymorph... name
             # themselves on a hit; teleportation is inert here (noteleport). 24 of 61 real kits died to a minotaur,
             # most within 10 turns of the landing (castlebench pwc-dp5..dp7)
-            ignorers = [m for m in adjacent if dive._ignores_elbereth(m[3])]
+            ignorers = [m for m in adjacent if dive._scare_ignores(m[3])]   # (LANDING_LICH: a lich is not one)
             if not ignorers or hp >= 0.9 * hpmax:
                 yield False
                 return

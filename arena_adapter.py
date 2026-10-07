@@ -27,6 +27,9 @@ def _warm_jit() -> None:
         walkable = np.zeros((21, 79), dtype=bool)
         walkable[10, 10:13] = True
         utils.bfs(np.int64(10), np.int64(10), walkable=walkable, walkable_diagonally=walkable, can_squeeze=False)
+        if jf_config.BFS_ROCK_SQUEEZE:
+            utils.bfs_sq(np.int64(10), np.int64(10), walkable=walkable, walkable_diagonally=walkable, can_squeeze=False,
+                         squeeze_open=walkable)
     except Exception:
         pass
 

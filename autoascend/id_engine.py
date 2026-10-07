@@ -55,6 +55,8 @@ class _State:
         self.sell_walks = 0        # calls spent walking to a free shop square (a watchdog)
         self.sell_skips = 0        # consecutive skipped tries
         self.sell_next_turn = -1   # no sell test before this turn (a skipped try waits a few turns)
+        self.bad_spots = set()     # ID_SELL_WALK_FIX: (level key, y, x) where a drop got no offer (not a costly spot)
+        self.sell_nofree = 0       # ID_SELL_WALK_FIX: calls that found no costly free square (a retry in 20 turns each)
 
 
 def _st(agent):
@@ -237,7 +239,27 @@ def sell_id_step(agent, item):
     st = _st(agent)
     dis = agent.bfs()
     free = level.shop_interior & (level.item_count == 0) & (dis != -1)
+    if jf_config.ID_SELL_WALK_FIX:
+        # the shopkeeper's post (the square inside the door) and the doorway are not costly spots: a drop there gets no offer
+        # at all ('no clean offer': the Dlvl-2 shop of pot-ids-smoke seed 0 took three scrolls and a wand on the open door, 3 fail
+        # points). level.shop_interior drops them only when the door was seen walkable (a sticky, dilated mask), so keep off every
+        # door's neighbours (as supply.sale_shops does) and off the squares that already gave no offer
+        free &= ~utils.dilate(utils.isin(level.objects, G.DOORS), radius=1, with_diagonal=True)
+        # ...and the mask also holds squares OUTSIDE the shop (jf1150 s1: a column of 7 corridor squares beside the wall, each
+        # tried in turn): a costly spot lies next to stocked floor -- shelves fill every square but the door-side line, and a wall
+        # square lies between the shop and a corridor
+        free &= utils.dilate(level.shop_interior & (level.item_count > 0), radius=1, with_diagonal=True)
+        for k, by, bx in st.bad_spots:
+            if k == level.key():
+                free[by, bx] = False
     if not free.any():
+        if jf_config.ID_SELL_WALK_FIX:
+            # no costly square known yet (the stock is seen as we walk): look again in a while, not a failure per step
+            st.sell_next_turn = bl.time + 20
+            st.sell_nofree += 1
+            if st.sell_nofree % 10 == 0:
+                st.sell_fail += 1
+            return
         st.sell_fail += 1
         return
     if not free[bl.y, bl.x]:
@@ -250,7 +272,15 @@ def sell_id_step(agent, item):
             return
         ty, tx = min(zip(*free.nonzero()), key=lambda p: dis[p])
         agent.go_to(ty, tx)
-        return
+        if not jf_config.ID_SELL_WALK_FIX:
+            return
+        # ID_SELL_WALK_FIX: sell on the square we just reached, in this same call. Returning here let the layers below run one
+        # action before the preempt hooks looked again (agent.preempt: the strategies under a preempting one run once after it
+        # returns) -- supply.scan took a step along the shelves, the next call found us off the free square, walked back, and so
+        # on until the 40-call watchdog gave the strategy up (traced: a 1-step walk to a free square, then a step away, 39 times)
+        bl = agent.blstats
+        if (int(bl.y), int(bl.x)) != (int(ty), int(tx)):
+            return   # interrupted or blocked: the next call walks on
     st.sell_walks = 0
     st.sell_tested.add((level.key(), item.glyphs[0]))
     cat = item.category
@@ -283,6 +313,15 @@ def sell_id_step(agent, item):
         return
     offer = res.get('offer')
     if offer is None:
+        if jf_config.ID_SELL_WALK_FIX and not (res.get('only') or res.get('credit')):
+            # no offer and no word about it: not a costly spot (the shopkeeper's post, a doorway the mask took for floor): this
+            # square is off the list, the same item is asked again on another one, and only many such squares count as a failure
+            st.bad_spots.add((level.key(), int(bl.y), int(bl.x)))
+            st.sell_tested.discard((level.key(), item.glyphs[0]))
+            if len(st.bad_spots) > 8:
+                st.sell_fail += 1
+            _log(agent, f'ID_SELL {text!r}: no offer at {(int(bl.y), int(bl.x))}: not a costly spot')
+            return
         st.sell_fail += 1
         _log(agent, f'ID_SELL {text!r}: no clean offer {res}')
         return

@@ -16,6 +16,7 @@ from . import castle_front
 from . import castle_crusher
 from . import castle_inner
 from . import castle_landing
+from . import castle_landing_b
 from . import mino_guard
 from . import known_items
 from . import opp_items
@@ -25,6 +26,8 @@ from . import id_engine
 from . import shop_wish
 from . import power_route
 from . import wish_source
+from . import lycan_gear
+from . import instruments
 from .character import Character
 from .dive_logic import DiveLogic
 from .exceptions import AgentPanic
@@ -135,6 +138,17 @@ class ItemPriority(ItemPriorityBase):
                         (item.is_unambiguous() and item.object in _SQUEEZE_KEEP_KNOWN):
                     add_item(item)
 
+        # INSTRUMENT_SQUEEZE (instruments lane, off): the tonal instrument survives UNSQUEEZE's / SQUEEZE_OUT's drop to the
+        # squeeze cap too (jf841 s4: 'UNSQUEEZE: boxed in carrying 706; dropping to 550' left a harp, potions and a unicorn
+        # horn behind in Minetown -- the instrument's slot comes after the thrown daggers and the food in this order)
+        if jf_config.INSTRUMENT_SQUEEZE and self.agent.blstats.time < getattr(self.agent, '_squeeze_cap_until', -1):
+            for item in sorted(items, key=lambda i: (instruments.item_rank(i) if jf_config.INSTRUMENT_PREFER else 0,
+                                                     i not in forced_items and not self._carried(i),
+                                                     i.unit_weight(with_content=False))):
+                if opp_items.is_tonal(item):
+                    add_item(item, count=1)
+                    break
+
         # SQUEEZE_OUT (arrivals-2): a stuck camp's drop keeps its food rations and a unicorn horn ahead of the rest
         # (guard a2-g2 jf46 s3 left 2 food rations behind, a2-g3 jf48 s5 a unicorn horn)
         if jf_config.SQUEEZE_OUT and self.agent.blstats.time < getattr(self.agent, '_squeeze_out_until', -1):
@@ -233,7 +247,9 @@ class ItemPriority(ItemPriorityBase):
         # the weight-sorted pass below (the one already carried first, then the lightest: flute 5, bugle 10, horn 18,
         # harp 30). cand-g fresh: 29/270 games picked one up, 9 of them reached the castle and 7 still had it
         if jf_config.INSTRUMENT_KEEP:
-            for item in sorted(items, key=lambda i: (i not in forced_items and not self._carried(i),
+            # INSTRUMENT_PREFER: the best type first (a horn before a flute before a harp), then the carried one, then the lightest
+            for item in sorted(items, key=lambda i: (instruments.item_rank(i) if jf_config.INSTRUMENT_PREFER else 0,
+                                                     i not in forced_items and not self._carried(i),
                                                      i.unit_weight(with_content=False))):
                 if opp_items.is_tonal(item):
                     add_item(item, count=1)
@@ -347,6 +363,7 @@ class GlobalLogic:
 
         self.dive = DiveLogic(agent)
         self.landing = castle_landing.LandingGuard(self.dive)   # jf_config.LANDING_GUARD (valley-exit)
+        self.landing_b = castle_landing_b.LandingB(self.dive)   # jf_config.LANDING_LICH / LANDING_OUTRUN (landing-b lane)
         self.mino = mino_guard.MinoGuard(self.dive)   # jf_config.MINO_GUARD (minotaur lane)
         self.known = known_items.KnownItemsGuard(self.dive, self.mino)   # jf_config.KNOWN_ITEMS (dive-audit)
         self.supply = supply.Supply(agent)   # jf_config.SUPPLY_* (supply lane: shop purchases)
@@ -601,7 +618,8 @@ class GlobalLogic:
         tool = self.dive.digging_tool()
         main = self.agent.inventory.items.main_hand
         if jf_config.PREP_EXCAL_DIVE and main is not None and main is candidate:
-            if main.status == Item.CURSED or not self.agent.inventory.wield(tool):
+            hand = self.dive._excal_free_hand(tool) if jf_config.EXCAL_HAND_FIX else tool   # EXCAL_HAND_FIX: a mattock cannot be wielded over a shield
+            if main.status == Item.CURSED or not self.agent.inventory.wield(hand):
                 self.dive._prep_dip_block_until = self.agent.blstats.time + 500
             return
 
@@ -1019,6 +1037,11 @@ class GlobalLogic:
                 # a tour-mode pick trip looks for the Mines branch itself (dive_logic.FAST_BRANCH)
                 self.dive.trip_branch_strategy(),
             ])
+            # LYCAN_GEAR (forensics lane): back in human form after a forced were-form change, fetch the gear the change dropped
+            # (above the plan, below eating, fights and every emergency layer)
+            .preempt(self.agent, [
+                lycan_gear.strategy(self.agent).condition(lambda: jf_config.LYCAN_GEAR),
+            ])
             .preempt(self.agent, [
                 self.solve_sokoban_strategy()
                 .condition(lambda: self.milestone == Milestone.SOLVE_SOKOBAN and
@@ -1079,9 +1102,14 @@ class GlobalLogic:
                 self.supply.sell().every(3).condition(lambda: jf_config.SUPPLY_SELL),
                 # SUPPLY_BUY: stand on every shelf square of the shop we are in, so the prices are known
                 self.supply.scan().condition(lambda: jf_config.SUPPLY_BUY),
+                # INSTRUMENT_SHOP (instruments lane): look at, sell junk for and buy a shop's instrument -- before buy_food, whose
+                # rations would eat the gold (the list is in priority order: the first strategy whose condition holds preempts)
+                instruments.shop_strategy(self.agent).every(2).condition(lambda: jf_config.INSTRUMENT_SHOP),
                 self.agent.inventory.buy_food().every(3),
                 # INSTRUMENT_KEEP (castle-redteam): a cheap tonal instrument for sale when we carry none
                 self.agent.inventory.buy_instrument().every(3).condition(lambda: jf_config.INSTRUMENT_KEEP),
+                # INSTRUMENT_PICK (instruments lane): a tonal instrument in view is walked to and taken, in any phase
+                instruments.pick_strategy(self.agent).every(2).condition(lambda: jf_config.INSTRUMENT_PICK),
                 # power (SELL_PRICE_ID): offer unknown potions/rings/boots to a shopkeeper for their price group
                 self.agent.inventory.sell_price_identify().every(3),
                 # lift-ready (WAND_ENGRAVE_TEXT): once diving, re-test with text the wands the grind's test left unnamed
@@ -1205,6 +1233,12 @@ class GlobalLogic:
             .preempt(self.agent, [
                 self.landing.strategy(),
             ])
+            # landing-b (LANDING_LICH, LANDING_OUTRUN; castle_landing_b.py): a crusher-armed kit in the castle's west maze -- Elbereth
+            # against a lich next to us, the route's plain step instead of fight2's wait -- above the landing guard, fight2 and the
+            # Elbereth rests, below the crossing and the crusher
+            .preempt(self.agent, [
+                self.landing_b.strategy(),
+            ])
             # crossing the castle moat (castle_logic.py): above the survival layer and the fight, which
             # would drag a levitating hero back to land or up the stairs
             .preempt(self.agent, [
@@ -1279,6 +1313,13 @@ class GlobalLogic:
             # above dig_first, the Elbereth rest and fight2
             .preempt(self.agent, [
                 self.dive.deep_items_strategy().condition(lambda: jf_config.DEEP_ITEMS),
+            ])
+            # survival lane (SURV_EAT): a hungry hero eats -- the fresh corpse underfoot from Hungry, the carried food from Weak -- above
+            # fight2, the Elbereth holds and the guards, which all defer to the eater while fight2's dances starve it of turns
+            # (jf606 s10: Hungry -> Fainting on an iguana corpse, 3 rations carried, a rothe came); below the emergency layer (a due
+            # prayer first)
+            .preempt(self.agent, [
+                self.agent.eat_first(),
             ])
             .preempt(self.agent, [
                 self.agent.emergency_strategy(),

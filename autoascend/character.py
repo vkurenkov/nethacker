@@ -367,10 +367,16 @@ class Character:
             # the last HP seen before the change (this step already shows the new form's HP)
             self.hp_before_poly = getattr(self, '_last_normal_hp', None)
             self.agent.log(f'POLY changed form; HP before: {self.hp_before_poly} now {bl.hitpoints}/{bl.max_hitpoints}')
+            if jf_config.LYCAN_GEAR:
+                from . import lycan_gear
+                lycan_gear.note_change(self.agent, 'form change')
         if not polymorphed:
             bl = self.agent.blstats
             self._last_normal_hp = (bl.hitpoints, bl.max_hitpoints)
             self.hp_before_poly = None
+            if self._was_polymorphed and jf_config.LYCAN_GEAR:
+                from . import lycan_gear
+                lycan_gear.note_return(self.agent)
         self._was_polymorphed = polymorphed
 
     def were_family(self):

@@ -72,6 +72,23 @@ _DEATH_RE = re.compile(r'crushed underneath the drawbridge|crushed by the fallin
 _KILL_RE = re.compile(r'You (?:kill|destroy) (?:the |an? )?([^!]+)!')
 
 
+_FALL_RE = re.compile(r'You fall into the water|You sink like a rock|You try to crawl out of the water')
+
+
+def note_message(agent):
+    """CRUSH_BRIDGE_GONE (agent.update, every observation): remember the turn of a message that says the drawbridge is destroyed --
+    a monster's wand of striking along the bridge (dbridge.c destroy_drawbridge, muse.c mbhit), not only the Crusher's own toggles.
+    CRUSH_WATER_GUARD: the turn of a fall into the water."""
+    try:
+        msg = agent.single_message or ''
+        if jf_config.CRUSH_BRIDGE_GONE and _GONE_RE.search(msg):
+            agent._bridge_gone_turn = int(agent._observation['blstats'][nh.NLE_BL_TIME])
+        if jf_config.CRUSH_WATER_GUARD and _FALL_RE.search(msg):
+            agent._water_fall_turn = int(agent._observation['blstats'][nh.NLE_BL_TIME])
+    except Exception:
+        pass
+
+
 class Crusher(FrontDoor):
     ALWAYS_V3 = True
 
@@ -121,6 +138,9 @@ class Crusher(FrontDoor):
         self.horn_blows = 0
         self.horn_pre = False         # ...the one blow before the walk-in
         self.tame_tries = 0
+        self._cut_play = None         # CRUSH_PLAY_SAFE: (guess or None, result) of a play whose booking a preempting strategy cut short
+        self.budget_go = False        # CRUSH_BUDGET_GO: the step budget ended the crush phase (walk in for good)
+        self.water_falls = 0          # CRUSH_WATER_GUARD: falls into the water that reset the bridge belief
 
     # ------------------------------------------------------------------ helpers
 
@@ -131,6 +151,7 @@ class Crusher(FrontDoor):
         """A tonal instrument (known or not): every type it may be plays tunes, or at least one does and it hasn't
         shown itself a horn of plenty (an unknown 'horn' may be one: apply.c hornoplenty asks no 'Improvise?')."""
         best = None
+        sure = None
         for it in self.agent.inventory.items:
             if it.category != nh.TOOL_CLASS:
                 continue
@@ -140,10 +161,22 @@ class Crusher(FrontDoor):
             g = it.glyphs[0] if it.glyphs else None
             if g in self.not_tonal:
                 continue
-            if names <= TONAL:
-                return it
+            exact = None
+            if jf_config.INSTRUMENT_GLYPH or jf_config.INSTRUMENT_PREFER:
+                # the item's own glyph names the exact tool: a horn of plenty is none, a 'horn' whose glyph says tooled horn is sure
+                from . import instruments
+                exact = instruments.glyph_name(g)
+                if exact is not None and exact not in TONAL:
+                    continue
+            if names <= TONAL or exact is not None:
+                if not jf_config.INSTRUMENT_PREFER:
+                    return it
+                # INSTRUMENT_PREFER (instruments lane): play the best type -- tooled horn 5.9% of kits pass, flute 2.8%, harp 1.7%
+                if sure is None or instruments.item_rank(it) < instruments.item_rank(sure):
+                    sure = it
+                continue
             best = best or it
-        return best
+        return sure if sure is not None else best
 
     def _depth(self):
         return int(self.agent.blstats.depth)
@@ -152,8 +185,19 @@ class Crusher(FrontDoor):
         """Is the bridge down? Once we play it, our own belief (the toggles' messages) is the truth: the map's memory
         of the span keeps a lowered bridge after we close it from out of sight (rt-a1c s2: 'That drawbridge is up!'
         turn-inactivity loops walking onto it)."""
+        if self._cut_play is not None:
+            self._book_cut_play()   # CRUSH_PLAY_SAFE
         if 'That drawbridge is up' in (self.agent.message or ''):
             self.bridge_open = False
+        if jf_config.CRUSH_WATER_GUARD and self.bridge_open and getattr(self.agent, '_water_fall_turn', None) is not None:
+            # CRUSH_WATER_GUARD: a fall into the water at the span proves the bridge is not down, whatever our record says
+            ft = self.agent._water_fall_turn
+            self.agent._water_fall_turn = None
+            p = self._pos()
+            if p[0] <= 6 and 5 <= p[1] <= 11:
+                self.bridge_open = False
+                self.water_falls += 1
+                self._log(f'fell into the water at turn {ft} next to the span: the bridge is not down (belief reset, fall {self.water_falls})')
         if self.tune is not None or self.toggles:
             return self.bridge_open
         return self._sym(PORTCULLIS) == SS.S_ndoor or self._sym(SPAN) in (SS.S_vodbridge, SS.S_hodbridge)
@@ -229,6 +273,13 @@ class Crusher(FrontDoor):
         if not jf_config.PASSTUNE_CRUSHER or self.done or self.destroyed or not self.on_castle():
             return False
         agent = self.agent
+        if jf_config.CRUSH_BRIDGE_GONE and getattr(agent, '_bridge_gone_turn', None) is not None and self._pos()[0] <= 5:
+            # the bridge was destroyed by something that is not ours to play (62 of the 67 'passtune no longer moves the bridge'
+            # stops) while we are still on the west bank; a hero already inside keeps its walk-in / wand leg
+            self.destroyed = True
+            self._log(f'the drawbridge is gone (message at turn {agent._bridge_gone_turn}): no more toggles')
+            self._stop('the drawbridge was destroyed')
+            return False
         if agent.character.prop.polymorph:
             return False
         c = self.dive.castle
@@ -291,6 +342,8 @@ class Crusher(FrontDoor):
     def _step_v3(self):
         agent = self.agent
         pos = self._pos()
+        if self._cut_play is not None:
+            self._book_cut_play()   # CRUSH_PLAY_SAFE: before anything reads the bridge belief (the wait loops never call _toggle)
         if not self.logged:
             inst = self._instrument()
             inv = '; '.join(i.text for i in self.dive.castle._items())
@@ -378,7 +431,8 @@ class Crusher(FrontDoor):
         g = int(self.agent.glyphs[y, x])
         mon = MON.permonst(g) if nh.glyph_is_monster(g) else None
         if mon is not None and not nh.glyph_is_pet(g) and not self.dive._melee_ignores_elbereth(mon) and \
-                self.tries[('block', p)] < 10:
+                self.tries[('block', p)] < 10 and \
+                not (jf_config.CRUSH_WIPE_COMMIT and self._commit_active() and self._commit_worthy(mon)):
             self.tries[('block', p)] += 1
             if not self._engraved() and self._can_write():
                 self._set_state(f'Elbereth: {getattr(mon, "mname", "?")} blocks {p}')
@@ -455,6 +509,10 @@ class Crusher(FrontDoor):
         # courtyard's own monsters (x <= 4) never do
         crowd = [m for m in self._land_hostiles() if max(abs(m[1] - bl.y), abs(m[2] - bl.x)) <= radius and
                  self._crushable(m[3]) and to_map(m[1], m[2])[0] >= 6]
+        if jf_config.CRUSH_LURE_MOBILE:
+            # CRUSH_LURE_MOBILE: a monster that never moves (spotted / blue jelly, molds, lichens: mmove 0) cannot follow us over the
+            # span, so it is no crowd to lure (the sweep's _train_worthy knows it)
+            crowd = [m for m in crowd if getattr(m[3], 'mmove', 12) > 0 and getattr(m[3], 'mname', '') != 'lizard']
         ign = [m for m in crowd if self.dive._melee_ignores_elbereth(m[3])]
         if len(crowd) >= count or (ign and self._hp_frac() < 0.6):
             self.lures += 1
@@ -472,6 +530,8 @@ class Crusher(FrontDoor):
         resp = [m for m in super()._near() if not self.dive._melee_ignores_elbereth(m[3])]
         if not resp or not agent._hurt_recently(2):
             return False
+        if jf_config.CRUSH_WIPE_COMMIT and self._commit_active() and all(self._commit_worthy(m[3]) for m in resp):
+            return False   # (a fight we started by wiping the engraving goes on: the livelock wipe / hurt / Elbereth / wipe ...)
         self.tries['contact'] += 1
         if not self._engraved() and self._can_write():
             self._set_state(f'Elbereth: {[getattr(m[3], "mname", "?") for m in resp]} hurt us')
@@ -1166,6 +1226,19 @@ class Crusher(FrontDoor):
         pos = self._pos()
         self.crush_steps += 1
         if self.crush_steps > jf_config.PASSTUNE_MAX_STEPS:
+            if jf_config.CRUSH_BUDGET_GO and not self.budget_go and self.tune is not None and \
+                    self._hp_frac() >= jf_config.PASSTUNE_RESUME_HP:
+                # CRUSH_BUDGET_GO: the step budget is a safety valve, not a plan -- a healthy hero at the square with the tune known
+                # walks in for good (no more lures) instead of quitting with the bridge open and no plan (13 distinct kits of the
+                # corpus ended there at full HP and died within ~100 turns: strength-w1-instr h15.jf96-s13~s2, castle 29, 160/160 HP)
+                self.budget_go = True
+                self.lures = jf_config.PASSTUNE_LURES
+                self.crush_over = True
+                self.hold_over = True
+                self.hold_i = 0
+                self.crush_steps = 0
+                self._log(f'crusher budget spent: no more lures, walking in (kills {self.crush_kills}, toggles {self.toggles})')
+                return True
             self._stop(f'crusher budget spent ({self.crush_steps} steps)')
             return False
         sq = self._crush_square()
@@ -1199,6 +1272,8 @@ class Crusher(FrontDoor):
             self._set_state('Elbereth on the crusher square')
             agent.engrave('Elbereth')
             return True
+        if jf_config.SHIELD_SQUARE and self.dive.square_shield_step():
+            return True   # SHIELD_SQUARE (armour3): a mattock kit's kept shield goes on here, under its Elbereth, before the tune
         if self._cant_play():
             self._set_state('waiting out stun/confusion/hallucination on the crusher square')
             agent.search()
@@ -1315,6 +1390,7 @@ class Crusher(FrontDoor):
 
     def _toggle(self, why):
         """Play the known tune: opens a raised bridge, closes a lowered one."""
+        self._book_cut_play()
         self.toggles += 1
         before_open = self.bridge_open
         res = self._play(None)
@@ -1331,8 +1407,25 @@ class Crusher(FrontDoor):
             self._mile('open' if self.bridge_open else 'crush', f'toggle {self.toggles}')
         return True
 
+    def _book_cut_play(self):
+        """CRUSH_PLAY_SAFE (F362): the apply of the last play was done but a preempting strategy (MinoGuard in 84 of 117 cases) fired
+        in the atom block's end-of-block update, before _toggle noted the bridge's new state and before _mastermind learned the
+        tune or the feedback. Book it now."""
+        cut, self._cut_play = self._cut_play, None
+        if cut is None or not jf_config.CRUSH_PLAY_SAFE:
+            return
+        guess, res = cut
+        self._log(f'booking a play cut by a preempting strategy: {guess} -> {(res["msg"] or "")[-100:]!r}')
+        if guess is None:
+            self._note(res['msg'])
+        else:
+            self._mastermind_after(guess, res)
+
     def _mastermind(self):
         agent = self.agent
+        self._book_cut_play()
+        if self.tune is not None:
+            return True
         if self.plays >= jf_config.PASSTUNE_MAX_PLAYS:
             self._stop(f'tune not found in {self.plays} plays')
             return False
@@ -1347,6 +1440,12 @@ class Crusher(FrontDoor):
             self.first_play_turn = agent.blstats.time
         self.plays += 1
         res = self._play(guess)
+        return self._mastermind_after(guess, res)
+
+    def _mastermind_after(self, guess, res):
+        """What one Mastermind play told us (the part of _mastermind that follows the play: CRUSH_PLAY_SAFE books it for a play
+        a preempting strategy cut short as well)."""
+        agent = self.agent
         msg = res['msg']
         self._note(msg)
         if self.bridge_open or _OPEN_RE.search(msg):
@@ -1433,16 +1532,30 @@ class Crusher(FrontDoor):
                     continue
                 return
 
-        with agent.atom_operation():
-            agent.step(A.Command.APPLY, gen())
-        msg = agent.message or ''
-        out['msg'] = msg
-        out['improvise'] = seen['improvise']
-        maybe_plenty = 'horn of plenty' in {getattr(o, 'name', '') for o in item.objs}
-        out['plenty'] = maybe_plenty and seen['applied'] and not seen['improvise'] and not self._cant_play() and \
-            'strange sound' not in msg and 'vibrations' not in msg
-        self._log(f'played {item.text!r} ({letter}) tune {notes or "?"} passtune={seen["passtune"]} '
-                  f'-> {msg[:200]!r}')
+        def result():
+            msg = agent.message or ''
+            out['msg'] = msg
+            out['improvise'] = seen['improvise']
+            maybe_plenty = 'horn of plenty' in {getattr(o, 'name', '') for o in item.objs}
+            out['plenty'] = maybe_plenty and seen['applied'] and not seen['improvise'] and not self._cant_play() and \
+                'strange sound' not in msg and 'vibrations' not in msg
+            self._log(f'played {item.text!r} ({letter}) tune {notes or "?"} passtune={seen["passtune"]} '
+                      f'-> {msg[:200]!r}')
+            return out
+
+        if jf_config.CRUSH_PLAY_SAFE:
+            from .exceptions import AgentChangeStrategy
+            try:
+                with agent.atom_operation():
+                    agent.step(A.Command.APPLY, gen())
+            except AgentChangeStrategy:
+                # the apply is played: keep its result for the next toggle / play (see _book_cut_play)
+                self._cut_play = (tune, result())
+                raise
+        else:
+            with agent.atom_operation():
+                agent.step(A.Command.APPLY, gen())
+        result()
         agent.inventory.items.update(force=True)
         return out
 

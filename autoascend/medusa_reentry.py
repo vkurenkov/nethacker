@@ -34,6 +34,9 @@ from .exceptions import AgentPanic
 from .glyph import G, Hunger, SS
 
 FALL_TRAPS = frozenset({SS.S_trap_door, SS.S_hole})
+# medusa.des STAIR:(x1,y1,x2,y2),(0,0,0,0),up -- a random ROOM square of the box, absolute level coordinates: (y1, x1, y2, x2)
+# (MEDB_M3_LOOK; Medusa-4's is (1, 67, 20, 74), reached only with MEDUSA_REENTRY_M4)
+STAIR_BOX = {'medusa-3': (1, 32, 7, 39)}
 
 
 class Reentry:
@@ -55,6 +58,7 @@ class Reentry:
         self._walk_turn = -99    # turn of the last step of a walk to the '<'
         self._walk_block_turn = -99   # turn a walk to the '<' found every closer square taken (MEDUSA_REENTRY_AROUND)
         self._bumped = {}        # square -> turn until which an unseen monster there is assumed (a blind step that did not move us)
+        self._look_steps = {}    # MEDB_M3_LOOK: landing number -> steps taken looking for the '<'
         self._so = None          # MEDUSA_STANDOFF: the current episode {ep, key, t0, quiet, engr_turn, engr_n, off, active}
         self._so_tries = {}      # MEDUSA_STANDOFF: (level key, square) -> Elbereths written there
         self._logged = set()
@@ -166,7 +170,8 @@ class Reentry:
         bl = agent.blstats
         if d._medusa_variant_name() != 'medusa-3':
             return None
-        if d._dig_wand() is not None or d._medusa_lift_action() is not None or d._eel_hold_escape_due():
+        if (d._dig_wand() is not None and not self._wand_last()) or d._medusa_lift_action() is not None or \
+                d._eel_hold_escape_due():
             return None   # a known wand (one action) or a lift: the dive's own plan
         if d._dig_max_wet() == 0 or agent.character.prop.polymorph:
             return None
@@ -218,10 +223,14 @@ class Reentry:
         if jf_config.MEDUSA_REENTRY and self.cycles < jf_config.MEDUSA_REENTRY_MAX:
             ups = self._stairs_up(level)
             if ups:
-                dis = agent.bfs()
+                dis = agent.bfs(force_squeeze=True)   # (see _medusa_plan: the island's corners are water, not rock)
                 ds = [int(dis[p]) for p in ups if dis[p] >= 0]
                 if pos in ups:
                     ds.append(0)
+                if not ds and jf_config.MEDC_REACH_WALK:
+                    rr = self._relaxed_reach(level, pos, ups)
+                    if rr is not None:
+                        ds = [rr[0]]
                 d_up = min(ds) if ds else None
         if d_up is not None:
             need = max(need, d_up + 2)
@@ -264,6 +273,12 @@ class Reentry:
                 return ('so_engrave', (key, pos))
         return ('so_wait', None)
 
+    def _wand_last(self):
+        """MEDC_M3_WAND_LAST: on Medusa-3 a hero that also has a digging TOOL (the hole above needs one) climbs first and keeps the
+        known wand of digging for later: its zaps flood the island's squares (1/(k+1) dry, k >= 1 everywhere)."""
+        d = self.dive
+        return jf_config.MEDC_M3_WAND_LAST and d._medusa_variant_name() == 'medusa-3' and d.digging_tool() is not None
+
     def _stairs_up(self, level):
         ups = {(int(y), int(x)) for y, x in zip(*utils.isin(level.objects, G.STAIR_UP).nonzero())}
         # the '<' we came down by shows us, not the stairs: the stair memory knows it
@@ -292,7 +307,7 @@ class Reentry:
             return None
         if d.digging_tool() is None:
             return self._why('no digging tool')   # nothing to dig the hole above with: the dive's own logic
-        if d._dig_wand() is not None or d._medusa_lift_action() is not None:
+        if (d._dig_wand() is not None and not self._wand_last()) or d._medusa_lift_action() is not None:
             return self._why('a known digging wand / a lift')   # one flood roll, or a lift: the dive's own plan first
         if d._eel_hold_escape_due():
             return self._why('held by an eel')
@@ -305,12 +320,25 @@ class Reentry:
             return None   # the first landing digs its first attempts as the dive always did (the flock is still small)
         ups = self._stairs_up(level)
         if not ups:
+            if jf_config.MEDB_M3_LOOK:
+                look = self._look_plan(level, name)
+                if look is not None:
+                    return look
             return self._why('no < known')
         pos = (int(bl.y), int(bl.x))
         if pos in ups:
             return ('climb', pos)
-        dis = agent.bfs()
+        # The island's squares touch each other across water corners. agent.bfs() refuses a diagonal step between two
+        # unwalkable orthogonal neighbours once the pack weighs over 600 (utils.bfs can_squeeze: the rule for rock), but the game
+        # only squeezes the hero between ROCK (hack.c test_move bad_rock): water is no rock. A real kit weighs 700-950 with its
+        # potions and scrolls, so the island fell apart in the BFS and 43% of the real-kit games (21 of 49 in k-jf1101-m3) found
+        # 'the < is out of reach' with the stairs 3-5 steps away and dug instead. The preset kit weighs under 600: never seen there.
+        dis = agent.bfs(force_squeeze=True)
         reach = [(int(dis[p]), p) for p in ups if 0 <= dis[p] <= jf_config.MEDUSA_REENTRY_STEPS]
+        if not reach and jf_config.MEDC_REACH_WALK:
+            rr = self._relaxed_reach(level, pos, ups)
+            if rr is not None:
+                reach = [rr]
         if not reach:
             return self._why('the < is out of reach: %s' % sorted((int(dis[p]), p) for p in ups))
         nearest, up = min(reach)
@@ -323,6 +351,65 @@ class Reentry:
             if self._scare_tries.get(spot, 0) < 2:
                 return ('scare', spot)
         return ('walk', up)
+
+    def _relaxed_reach(self, level, pos, ups):
+        """MEDC_REACH_WALK: (steps, '<') by the walk's own rule (_walk_step: the eight neighbours over level.walkable plus our square,
+        monsters ignored) when agent.bfs finds no way -- which it does not where the '<' square itself has no terrain in the level memory
+        (the stairs we fell past are known from the stair memory only: objects -1, not walkable: 'the < is out of reach' with the '<'
+        next to us, jf1951 s46 / jf1953 s159) and agent.bfs refuses diagonal steps through squares of unknown terrain. None: not within
+        MEDUSA_REENTRY_STEPS even so (squares between us and the '<' never seen, or a flooded neck)."""
+        agent = self.dive.agent
+        walkable = level.walkable & ~utils.isin(agent.glyphs, G.BOULDER)
+        h, w = walkable.shape
+        best = None
+        for up in ups:
+            dist = {up: 0}
+            frontier = [up]
+            while frontier and pos not in dist:
+                nxt = []
+                for (y, x) in frontier:
+                    for dy in (-1, 0, 1):
+                        for dx in (-1, 0, 1):
+                            ny, nx = y + dy, x + dx
+                            if (dy or dx) and 0 <= ny < h and 0 <= nx < w and (ny, nx) not in dist and \
+                                    (walkable[ny, nx] or (ny, nx) == pos):
+                                dist[(ny, nx)] = dist[(y, x)] + 1
+                                nxt.append((ny, nx))
+                frontier = nxt
+            d = dist.get(pos)
+            if d is not None and d <= jf_config.MEDUSA_REENTRY_STEPS and (best is None or (d, up) < best):
+                best = (d, up)
+        if best is not None and (self.landings, 'relaxed') not in self._logged:
+            self._logged.add((self.landings, 'relaxed'))
+            agent.log(f'REENTRY relaxed reach: the < at {best[1]} is {best[0]} steps from {pos} by the walk\'s own rule '
+                      f'(agent.bfs: out of reach)')
+        return best
+
+    def _look_plan(self, level, name):
+        """MEDB_M3_LOOK: no '<' known yet. medusa.des puts it at a random ROOM square of STAIR:(32,01,39,07); the squares of that box
+        we have never seen are where it is (the island's trees block the line of sight, a lit level shows the neighbours): ('look',
+        square) for the nearest reachable square next to one of them, None when there is none or MEDB_M3_LOOK_STEPS were used."""
+        d = self.dive
+        agent = d.agent
+        bl = agent.blstats
+        box = STAIR_BOX.get(name)
+        if box is None or agent.character.prop.blind or self._look_steps.get(self.landings, 0) >= jf_config.MEDB_M3_LOOK_STEPS:
+            return None
+        from . import medusa_hop
+        y1, x1, y2, x2 = box
+        cands = [p for p in medusa_hop.model(name).land if y1 <= p[0] <= y2 and x1 <= p[1] <= x2 and level.objects[p] == -1]
+        if not cands:
+            return None
+        dis = agent.bfs(force_squeeze=True)
+        best = None
+        for c in cands:
+            for n in agent.neighbors(c[0], c[1], shuffle=False):
+                n = (int(n[0]), int(n[1]))
+                if dis[n] > 0 and level.walkable[n] and (best is None or (int(dis[n]), n) < best):
+                    best = (int(dis[n]), n)
+        if best is None:
+            return None
+        return ('look', best[1])
 
     def _hostile_near(self, radius):
         agent = self.dive.agent
@@ -337,7 +424,12 @@ class Reentry:
         if self.cycles == 0:
             return None   # we never climbed: the dive digs its first hole as usual
         pos = (int(bl.y), int(bl.x))
-        if self._hostile_near(3) or utils.any_in(agent.glyphs, G.SWALLOW):
+        hostile = self._hostile_near(3)
+        if hostile or utils.any_in(agent.glyphs, G.SWALLOW):
+            if jf_config.MEDC_ABOVE_GO and hostile and not utils.any_in(agent.glyphs, G.SWALLOW):
+                go = self._go_plan(level, key, pos, hostile)
+                if go is not None:
+                    return go
             return None   # the fight / Elbereth layers first
         hole = self.holes.get(key)
         if hole is not None and bl.time < self._walk_blocked.get(key, -1):
@@ -372,6 +464,53 @@ class Reentry:
         if not nb:
             return None   # not reachable over the map we know: a new hole beside the '>' will do
         return ('walk_hole', min(nb)[1])
+
+    def _go_plan(self, level, key, pos, hostile):
+        """MEDC_ABOVE_GO: a hostile is within 3 squares on the level above Medusa and the hole we know is at most
+        MEDC_ABOVE_GO_STEPS steps away: ('plunge' | 'step' | 'walk_hole', ...) now -- no rest, no fight, no dig elsewhere. Gates: HP at
+        least MEDC_ABOVE_GO_HP of max when the hostile is dangerous (unseen, level >= 3, ignores Elbereth, or we were hurt in the last
+        3 turns), MEDC_ABOVE_GO_PEST_HP for a pest. None: the old behaviour (the fight / Elbereth layers). The entry is the plan anyway
+        (1 in 4 skips Medusa's level, else a fresh landing on the island, whose ravens cost ~2 HP a walk at a window); a strong monster
+        at the '>' costs 10-35 HP a round, and the old answer -- a fresh hole dug right there -- has no skip chance at all."""
+        d = self.dive
+        agent = d.agent
+        bl = agent.blstats
+        hole = self.holes.get(key)
+        if hole is None or bl.time < self._walk_blocked.get(key, -1) or level.key() in d.undiggable:
+            return None
+        if bl.hitpoints < jf_config.MEDC_ABOVE_GO_HP * bl.max_hitpoints:
+            return None   # too hurt for the island as well: the prayer / fight layers
+        danger = d._hurt_since(bl.time - 3) or any(
+            getattr(m[3], 'mname', '') == 'unknown' or getattr(m[3], 'mlevel', 9) >= 3 or d._melee_ignores_elbereth(m[3])
+            for m in hostile)
+        if not danger and bl.hitpoints < jf_config.MEDC_ABOVE_GO_PEST_HP * bl.max_hitpoints:
+            return None   # a pest and too hurt for the island: the fight layer, then the rest
+        hole = (int(hole[0]), int(hole[1]))
+        if any((int(m[1]), int(m[2])) == hole for m in hostile):
+            return None   # a monster stands on the hole
+        if pos == hole:
+            if self.plunges.get(key, 0) >= 3:
+                return None
+            self._log_go('plunge', pos, hostile)
+            return ('plunge', hole)
+        if utils.adjacent(pos, hole):
+            self._log_go('step', pos, hostile)
+            return ('step', hole)
+        dis = agent.bfs()
+        nb = [(int(dis[n]), n) for n in agent.neighbors(hole[0], hole[1], shuffle=False) if dis[n] != -1]
+        nb = [t for t in nb if t[0] <= jf_config.MEDC_ABOVE_GO_STEPS]
+        if not nb:
+            return None
+        self._log_go('walk', pos, hostile)
+        return ('walk_hole', min(nb)[1])
+
+    def _log_go(self, what, pos, hostile):
+        k = ('go', self.cycles, what)
+        if k not in self._logged:
+            self._logged.add(k)
+            bl = self.dive.agent.blstats
+            self.dive.agent.log(f'REENTRY go ({what}): to the hole with {[m[3].mname for m in hostile[:3]]} within 3 at {pos} '
+                                f'(hp {bl.hitpoints}/{bl.max_hitpoints}, blind {bool(self.dive.agent.character.prop.blind)})')
 
     # -------------------------------------------------------------------- act
 
@@ -424,7 +563,8 @@ class Reentry:
         best = None
         for ny, nx in agent.neighbors(pos[0], pos[1], shuffle=False):
             n = (ny, nx)
-            if n in dist and walkable[n] and not taken[n] and (best is None or dist[n] < best[0]):
+            if n in dist and (walkable[n] or (jf_config.MEDC_REACH_WALK and n == up)) and not taken[n] and \
+                    (best is None or dist[n] < best[0]):
                 best = (dist[n], n)
         if best is None or (here is not None and best[0] >= here and best[0] > 0 and pos != up):
             # nothing closer is free: the Elbereth (or the one that stands, waited on) while something is on the way
@@ -477,6 +617,18 @@ class Reentry:
                 agent.log(f'REENTRY to the < at {arg} (hp {bl.hitpoints}/{bl.max_hitpoints}, blind '
                           f'{bool(agent.character.prop.blind)}, hostiles {[m[3].mname for m in self._hostile_near(6)[:4]]})')
             self._walk_turn = int(bl.time)
+            if jf_config.MEDUSA_REENTRY_AROUND:
+                self._walk_step(arg)
+            else:
+                d._raven_step_toward(arg)
+            return
+        if what == 'look':
+            self._look_steps[self.landings] = self._look_steps.get(self.landings, 0) + 1
+            if (self.landings, 'look') not in self._logged:
+                self._logged.add((self.landings, 'look'))
+                agent.log(f'REENTRY looking for the < (not seen yet): to {arg} from {(int(bl.y), int(bl.x))}, hp '
+                          f'{bl.hitpoints}/{bl.max_hitpoints}, hostiles {[m[3].mname for m in self._hostile_near(6)[:4]]}')
+            d._task('reentry: look for the <')
             if jf_config.MEDUSA_REENTRY_AROUND:
                 self._walk_step(arg)
             else:

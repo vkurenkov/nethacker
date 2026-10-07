@@ -39,6 +39,12 @@ tasks (`plan_step`), so every decision is re-derived from the game state.
    (`DIVE_WAND_PICKUP`; engraving with a wand of wishing makes the wish). Switches: `SHELTERED_DIG`, `DIG_ESCAPE`,
    `DIVE_REST`, `CURSED_PICK_OK`, `WAND_FIRST`, `WAND_RESERVE`, `WELD_PRAY`, `WELD_HOLD`, `SHOP_DIG`, `HUNGER_DEEP`,
    `DIVE_WAND_PICKUP`.
+   **Excalibur** (`dive_logic.py`: `prep_fountain_dip`, `excal_errand_step`; `EXCAL_PACKAGE`): a lawful hero of XL 5+ who dips her single
+   long sword into a fountain gets Excalibur 1 dip in 6 (`fountain.c`), and Excalibur triples the instrument kits' crusher walk-in. The
+   dive dips at every fountain within 30 steps (`PREP_EXCAL_DIVE`; HP 70%); a hero holding a tonal instrument also walks, at the dive
+   start and by the known stairs, to the fountains of Dlvl 1-6 (`EXCAL_ERRAND*`; XL 7, HP 90%, prayer safe: a released water demon,
+   a snake stream or a nymph is survivable only then). Switches: `PREP_EXCAL_DIVE`, `EXCAL_ERRAND`, `EXCAL_ERRAND_INSTR`,
+   `EXCAL_ERRAND_FIGHT`, `EXCAL_CALM_FIX`, `EXCAL_WAIT_FIX`, `EXCAL_STEADY`, `EXCAL_DAGGER`, `EXCAL_DEEP_DIST`.
 5. **When a fight goes wrong** (`agent.py`: `emergency_strategy`; `known_items.py`; `mino_guard.py`; `opp_items.py`).
    The order is: a prayer if it is safe; then a known escape item (a teleport scroll, a teleport or digging wand, a
    healing potion, a sleep or striking wand); then a last-resort gamble on unknown wands, potions and scrolls. A
@@ -54,6 +60,25 @@ tasks (`plan_step`), so every decision is re-derived from the game state.
    found no significant gain in `MEDUSA_DIG_ORDER`, `MEDUSA_HOP_RESERVE` or `MEDUSA_LAZY_ELB`. Switches:
    `MEDUSA_MAP`, `MEDUSA_FREEZE`, `MEDUSA_LIFT`, `MEDUSA_BLIND_HOLD`, `MEDUSA_HOP`, `COLD_RESERVE`, `DEEP_ITEMS`,
    `DEEP_BLIND_LOOK`, `MEDUSA_NO_RETREAT`.
+   Medusa-3's island has a cycle (`medusa_reentry.py`, `MEDUSA_STANDOFF` + `MEDUSA_REENTRY`): hold an Elbereth until a
+   window, walk to the '<', climb, rest, and step into the hole dug above: `trap.c fall_through` drops one level further
+   one time in four on every entry into a KNOWN hole (a fresh `dighole` always falls exactly one level), so each entry is
+   a 1-in-4 skip of her level and otherwise a new random landing on the 18-square island. Census of 616 real dev-seed
+   Medusa games (dev/medc2): Medusa-1/2 pass 95%, Medusa-4 85% (13 of 17 harness failures on the south-east islet),
+   Medusa-3 75% -- 18 of its 40 deaths on the level above, where the layer used to yield to the fight / dig layers when
+   a hostile stood within 3 squares and the dive dug a fresh hole there (no skip chance, 8 exposed turns); and a hero
+   with a known wand of digging zapped it at the island (every zap floods 50-75%) instead of cycling. Switches
+   `MEDC_ABOVE_GO` (step into the known hole at once) and `MEDC_M3_WAND_LAST` (cycle first, wand last), harness +9 and
+   +13 points (real full games, 54 paired Medusa-3 seeds: passes 42 against 35, Castle arrivals 37 against 31); see
+   their jf_config blocks. Harness (`dev/medc2`, 610 real arrival kits): Medusa-3 landings below 60% HP
+   die 14-75% of the time against 1.4-2.9% at 80%+, and a blind landing doubles the death rate. Measured and dropped
+   (null on held-out secrets): holding the Elbereth longer when the '<' is unknown, `MEDB_M3_LOOK`, lane 11's five
+   Medusa-4 knobs, `MEDUSA_REENTRY_M4`, an uncapped layer loop (the layer's body ends after 400 actions and the layers
+   below get one run: `dig_first` can walk her off the Elbereth; 27% of long games hit it, the passes do not move),
+   and `MEDC_REACH_WALK` (kept OFF: a relaxed '<' reachability test, +3 of 94 specs, not significant). On the island
+   "You feel like a hypocrite" (-5 alignment, the engraving erased) is mostly a non-flying monster falling into a pit
+   the hero dug (`trap.c mintrap`: `madeby_u`), not her swing; a harness hero starts at alignment 0, so Excalibur
+   can blast her (`artifact.c touch_artifact`) after a few: real heroes arrive with a record near the cap.
 7. **The mazes below Medusa** (`dive_logic.py`: `below_medusa`; `mino_guard.py`). They hold minotaurs, which ignore
    Elbereth. A saved wand of digging is zapped on arrival: one turn instead of about six with the pick. A landing at
    the west edge first listens for the Castle's door sounds. Switches: `WAND_RESERVE`, `WAND_CASTLE_WAIT`,
@@ -169,7 +194,7 @@ The rest is AutoAscend's: `strategy.py` (the `Strategy` combinators `preempt`, `
   `train N`, harness runs, and ledger ids. The `dev/` tools it names are in our development repository, not in
   this tree.
 
-## Ten NetHack 3.6.6 facts the plan rests on
+## Twelve NetHack 3.6.6 facts the plan rests on
 
 We checked each of these in the 3.6.6 source.
 
@@ -231,3 +256,23 @@ We checked each of these in the 3.6.6 source.
     the endgame and the Amulet stop. With teleport control, asking for any level below the Castle from the Dungeons
     of Doom lands you in the Valley (`find_hell`). While blind, you can still read a scroll whose label you have
     seen (`read.c:doread`).
+
+11. **A dwarf digs a hole in 2 + 4 calls, and a dig can never run under a shield.** `dig.c:dig` adds
+    `10 + rn2(5) + abon() + spe - erosion` to the effort every call and, for a dwarvish hero, then DOUBLES the whole
+    effort (`Race_if(PM_DWARF)`): a pit (> 50) after 2 calls, the hole (> 250) after 4 more once the digging
+    restarts in the pit (the pit stage clears the digging level), about 5 game turns a level; a pick-axe and a mattock
+    dig at the same speed, and `apply` wields the tool inside its own move. An adjacent hostile stops the occupation
+    after every call (`allmain.c: monster_nearby`). A two-handed tool is refused under a shield (`wield.c:wield_tool`)
+    and a shield under a two-handed weapon (`do_wear.c:canwearobj`); a small shield has delay 0, so wearing or taking
+    it off is one move, as is wielding a weapon. So a mattock digger's shield is off for every dig, but the dig is a
+    small part of the exposure: above Dlvl 20, 14 of 595 monster hits landed inside a dig window in 186 harness dives
+    (SHIELD_FIGHT wears it for the melee that causes the rest).
+12. **A fall into water soaks the whole pack.** `trap.c:drown` calls `water_damage_chain(invent)`: every carried
+    item, worn or not, is spared with probability (Luck + 5)/20 (25% at Luck 0), otherwise a scroll fades to blank
+    paper, a potion dilutes (twice: plain water), and an iron item rusts one level (3 at most) unless it is
+    rustproof or blessed and `rnl(4)` is 0. A worn piece then gives `a_ac + spe - min(erosion, a_ac)` AC
+    (`hack.h:ARM_BONUS`). Only iron rusts: iron shoes (AC 2) and the dwarvish iron helm (2) do, high boots (2), mithril
+    and the wooden small shield do not. A confused scroll of enchant armor is the only repair. Nothing protects the pack
+    in the pack, and dropped pieces fall with the hero only one time in three (`dokick.c:impact_drop`). A flooded
+    Medusa crossing costs about 1.9 AC at the Castle (harness: 1-2 falls +1.88 AC, 3+ falls +3.0 AC) and about one
+    scroll and two potions per fall.

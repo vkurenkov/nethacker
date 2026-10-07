@@ -33,7 +33,7 @@ from scipy import ndimage
 
 from . import objects as O
 
-from . import jf_config, jf_log, power, utils, valley, valley_walk, wish_source
+from . import jf_config, jf_log, power, sq_load, surv_gate, utils, valley, valley_walk, wish_source
 from .castle_logic import CastlePassage
 from .character import Character
 from .exceptions import AgentPanic
@@ -909,6 +909,11 @@ class DiveLogic:
         self._visit_start = (None, 0)      # (level key, turn) we arrived on the current level
         self._visit_pos = (None, None)     # (level key, (y, x)) where we arrived on it (WAND_RESERVE: castle region)
         self._door_heard = {}              # level key -> last turn 'You hear a door open.' (the castle's soldiers)
+        self._sleep_room = None            # DIVE_SLEEPERS: (level key, turn) of the last special-room entry message
+        self._sleep_seen = 0               # ...and how much of agent._message_history was scanned for it
+        self._sleep_reg = None             # ...the monsters in view then (square -> name): the sleepers (_sleepers_filter)
+        self._sleep_msg = 0                # ...and how much of the history _sleepers_filter has read for attackers' names
+        self._sleep_force = False          # DIVE_SLEEPERS harness tests (jf_scenario 'sleep_room'): the first level counts as entered
         self._landing_ear = {}             # LANDING_EAR: level key -> listen state at a castle-likely landing
         self._landing_direct = {}          # LANDING_DIRECT: level key -> state at a castle-likely landing with the crusher armed
         self._reserve_zaps = 0             # WAND_RESERVE: zaps spent on Medusa's level and below
@@ -971,6 +976,7 @@ class DiveLogic:
         self._hop_pit_steps = {}           # MEDUSA_HOP: level key -> pit-climbing steps toward the water (not tries)
         self._reserve_hops = {}            # MEDUSA_HOP_RESERVE: level key -> hops over to the next land
         self._reserve_left = {}            # MEDUSA_HOP_RESERVE: level key -> land components we left that way
+        self._stairs_hopped = {}           # MEDB_HOP_STAIRS: level key -> _medusa_rerolls when a hop toward the '<' land was chosen
         self._eel_hold_turn = -10          # last turn an eel/kraken grabbed us (or we failed to break free)
         self._eel_engraved = -10           # last turn we engraved Elbereth against such a hold
         self._fed_wait_start = None     # DIVE_FED: turn the grind first reached its end XL
@@ -983,6 +989,18 @@ class DiveLogic:
         self._shop_dig_logged = None    # SHOP_DIG: (level key, reason) last logged for not digging (logged once)
         self._shop_since = None         # SHOP_DIG: (level key, turn) we were first seen inside a shop there
         self._fed_wait_logged = False
+        self._prep_gate_done = False    # PREP_GATE: the first-dig hold is over (released, capped, or the first dig was elsewhere)
+        self._prep_gate_start = None    # ... turn the hold began
+        self._prep_gate_meals = 0       # ... prep meals eaten
+        self._prep_rest_t0 = {}         # PREP_REST: level key -> turn the level was first asked about
+        self._excal_done = False        # EXCAL_ERRAND: over (Excalibur made / no candidate / budget spent)
+        self._excal_start = None        # ... turn the errand began
+        self._excal_dips = 0            # ... dips made (all levels)
+        self._excal_wait_t0 = None      # ... turn the wait for HP / prayer on the target level began
+        self._excal_blocked = {}        # ... target level key -> turn until which it is not tried again (no known path)
+        self._excal_guard_turns = 0     # ... EXCAL_CALM_FIX: turns spent letting a hostile come (fight2 fights it) instead of handing the plan on
+        self._excal_idle = 0            # ... EXCAL_STEADY: turns spent waiting for a calm moment on the fountain level
+        self._excal_level_t0 = {}       # ... EXCAL_STEADY: level key -> turn the errand first acted on it (a walk that does not arrive is given up)
 
     # ------------------------------------------------------------------ state
 
@@ -1029,6 +1047,8 @@ class DiveLogic:
             if utils.isin(agent.glyphs, [DiveLogic.RAVEN]).any():
                 self._raven_levels.add(key)   # Medusa-3 (medusa.des: 30 hostile ravens)
                 agent.log('DIVE Medusa-3 (ravens)')
+        if jf_config.MEDB_KNOBS:
+            self._medb_knobs(key)
         if MEDUSA_MAP and key == self.medusa_level and self._medusa_variant_name() is not None:
             # a never-seen square the fixed map calls moat is no floor to walk or dig on (agent.update_level marks a
             # square first seen under a monster walkable, and on the islands those are the eels' and ravens' water)
@@ -1188,6 +1208,8 @@ class DiveLogic:
             self._door_seen = len(hist)
             if any('You hear a door open' in m for m in hist[start:] + [agent.message]):
                 self._door_heard[key] = turn
+        if jf_config.DIVE_SLEEPERS:
+            self._sleepers_note(key, turn)
         if jf_config.LANDING_EAR:
             self._landing_ear_update(level, key, turn, pos)
         if jf_config.LANDING_DIRECT:
@@ -1633,7 +1655,8 @@ class DiveLogic:
                 break
             if (level.key(), (y, x)) in self._dead_traps:
                 continue
-            d = self._neighbour_distance(dis, y, x)
+            d = self._neighbour_distance_step(dis, y, x) if jf_config.SQ_STEP_GUARD else \
+                self._neighbour_distance(dis, y, x)
             if d is not None:
                 targets.append((d + 1, y, x, 'trap'))
         targets.sort()
@@ -1645,6 +1668,151 @@ class DiveLogic:
             if dis[ny, nx] != -1 and (best is None or dis[ny, nx] < best):
                 best = dis[ny, nx]
         return best
+
+    # ------------------------------------------------ load lane (27): the squeeze limit at the last step (SQ_*)
+    def _squeeze_cut_from(self, level, ny, nx, y, x):
+        """SQ_STEP_GUARD: the step (ny, nx) -> (y, x) is a diagonal between two rock squares and the pack is over hack.c's 600
+        (or the game refused this very step at this weight): it will be refused again without a turn passing."""
+        agent = self.agent
+        weight = agent.inventory.items.total_weight
+        refused = self.__dict__.get('_sq_refused', {}).get((level.key(), (int(ny), int(nx)), (int(y), int(x))))
+        if refused is not None and weight >= refused - 0.5:
+            return True
+        # (the estimate takes the heaviest candidate of every unknown look, so a pack that merely estimates above 600 may still be allowed through:
+        # the guard acts on the estimate only SQ_STEP_MARGIN above the limit; a refusal of the game, remembered above or by _squeeze_blocked, always counts)
+        return (weight > 600 + jf_config.SQ_STEP_MARGIN or agent._squeeze_blocked()) and \
+            sq_load.squeeze_cut(level, ny, nx, y, x)
+
+    def _neighbour_distance_step(self, dis, y, x):
+        """_neighbour_distance for a last step onto (y, x): a neighbour whose step onto it is a refused squeeze does not count."""
+        agent = self.agent
+        level = agent.current_level()
+        best = None
+        for ny, nx in agent.neighbors(y, x, shuffle=False):
+            if dis[ny, nx] != -1 and (best is None or dis[ny, nx] < best) and \
+                    not self._squeeze_cut_from(level, ny, nx, y, x):
+                best = dis[ny, nx]
+        return best
+
+    def _legit_neighbour(self, y, x, only_if_cut=False):
+        """The reachable neighbour of (y, x) nearest to us whose step onto (y, x) is no refused squeeze (our own square counts), or None.
+        only_if_cut: None unless one of the NEAREST neighbours is a refused squeeze -- otherwise the caller keeps its own walk, which
+        (go_to(stop_one_before) shuffles the neighbours with agent.rng) must consume the same random numbers as without the flag."""
+        agent = self.agent
+        level = agent.current_level()
+        dis = agent.bfs()
+        reach = [(dis[ny, nx], int(ny), int(nx)) for ny, nx in agent.neighbors(y, x, shuffle=False) if dis[ny, nx] != -1]
+        if not reach:
+            return None
+        if only_if_cut:
+            best = min(d for d, _, _ in reach)
+            if not any(d == best and self._squeeze_cut_from(level, ny, nx, y, x) for d, ny, nx in reach):
+                return None
+        legit = [(d, ny, nx) for d, ny, nx in reach if not self._squeeze_cut_from(level, ny, nx, y, x)]
+        if not legit:
+            return None
+        _, ny, nx = min(legit)
+        return ny, nx
+
+    def _fresh_bfs(self):
+        """SQ_FRESH_BFS: agent.bfs() without the per-step cache (an all-False open_mask bypasses it): a BFS computed while InventoryItems.update()
+        was still summing the pack (a partial weight <= 600 allows every squeeze) may sit in the cache for the rest of the step (B341).
+        Used where a wrong 'reachable' resets a timer or plans a refused step: RETURN_DIG, _take_stairs, the squeeze-cut recovery."""
+        agent = self.agent
+        if not jf_config.SQ_FRESH_BFS:
+            return agent.bfs()
+        return agent.bfs(open_mask=np.zeros(agent.current_level().walkable.shape, dtype=bool))
+
+    def _sq_down_candidates(self):
+        """The ways down down_targets() would list on this level but for the squeeze limit: [(y, x, is_trap)]."""
+        agent = self.agent
+        level = agent.current_level()
+        if level.dungeon_number not in MAIN_LINE:
+            return []
+        out = [(int(y), int(x), False) for y, x in zip(*utils.isin(level.objects, G.STAIR_DOWN).nonzero())
+               if self._stairs_ok(level, y, x) and
+               self._avoid_stairs_until.get((level.key(), (int(y), int(x))), -1) <= agent.blstats.time]
+        if agent.blstats.experience_level >= self.required_xl(agent.blstats.depth + TRAPDOOR_LOOKAHEAD):
+            out += [(int(y), int(x), True) for y, x in zip(*utils.isin(level.objects, FALL_TRAPS).nonzero())
+                    if (level.key(), (int(y), int(x))) not in self._dead_traps and
+                    (level.key(), (y, x)) not in self._dead_traps]
+        return out
+
+    def _sq_cut_recover(self, targets):
+        """SQ_CUT_RECOVER / SQ_DEAD_DROP (load lane, see jf_config): `targets` = [(y, x, is_trap)], the known ways off this level
+        (the bot wants one) and none is reachable. When the squeeze limit alone cuts them off (bfs(force_squeeze=True) reaches
+        one) for SQ_CUT_TURNS: drop the dead load if that alone brings the pack to SQ_CUT_CAP, else after SQ_CUT_CAP_TURNS drop to
+        the squeeze cap like agent.unsqueeze (essentials = worn + wielded + digging tool <= 540), a hero with a digging tool too.
+        True: acted this step."""
+        agent = self.agent
+        level = agent.current_level()
+        key = level.key()
+        t = agent.blstats.time
+        weight = agent.inventory.items.total_weight
+        st = self.__dict__.setdefault('_sqcut', {})
+        if (weight <= 600 and not agent._squeeze_blocked()) or not targets or \
+                level.dungeon_number == Level.SOKOBAN:
+            st.pop(key, None)
+            return False
+        dis = self._fresh_bfs()
+        wide = agent.bfs(force_squeeze=True)
+        cut = []
+        for y, x, is_trap in targets:
+            if is_trap:
+                if self._neighbour_distance_step(dis, y, x) is not None:
+                    st.pop(key, None)
+                    return False   # a way down that needs no squeeze
+                if self._neighbour_distance(wide, y, x) is not None:
+                    cut.append((y, x))
+            else:
+                if dis[y, x] != -1:
+                    st.pop(key, None)
+                    return False
+                if wide[y, x] != -1:
+                    cut.append((y, x))
+        if not cut:
+            st.pop(key, None)
+            return False
+        since = st.setdefault(key, t)
+        age = t - since
+        if age < jf_config.SQ_CUT_TURNS:
+            return False
+        inv = agent.inventory
+        here = inv._here()
+        if jf_config.SQ_DEAD_DROP:
+            dead = sq_load.dead_items(agent)
+            dw = sq_load.weight_of(dead)
+            if dead and weight - dw <= jf_config.SQ_CUT_CAP:
+                agent.log(f'SQ_DEAD: {cut} cut off by the squeeze limit for {age} turns; the pack {weight:.0f} drops to '
+                          f'{weight - dw:.0f} without the dead load: {[(i.text, c, why) for i, c, why in dead]}')
+                agent._squeeze_cap_until = t + 300
+                inv.drop([i for i, _, _ in dead], [c for _, c, _ in dead])
+                inv.unreachable_items_until[here] = t + 5000
+                agent.last_bfs_step = -1
+                st[key] = t
+                return True
+            if (key, 'dl') not in st:
+                st[(key, 'dl')] = t
+                agent.log(f'SQ_DEAD: {cut} cut off {age} turns; the dead load weighs {dw:.0f} of {weight:.0f} '
+                          f'({[(i.text, c, why) for i, c, why in dead]}): not enough for {jf_config.SQ_CUT_CAP}')
+        tool = self.digging_tool()
+        if jf_config.SQ_CUT_RECOVER and age >= (jf_config.SQ_CUT_TOOL_TURNS if tool is not None else jf_config.SQ_CUT_CAP_TURNS):
+            essential = sum(i.weight() for i in inv.items.all_items if i.equipped or i is tool)
+            if essential > 540:
+                if (key, 'ess') not in st:
+                    st[(key, 'ess')] = t
+                    agent.log(f'SQ_CUT: {cut} cut off {age} turns but the essentials weigh {essential:.0f} > 540: no drop')
+                return False
+            agent.log(f'SQ_CUT: {cut} reachable only by squeezing for {age} turns (carrying {weight:.0f}, tool '
+                      f'{tool.text if tool is not None else None}): dropping to the squeeze cap')
+            agent._squeeze_cap_until = t + 300
+            agent._squeeze_out_until = agent._squeeze_cap_until   # ItemPriority: SQUEEZE_OUT's keeps (food, unicorn horn)
+            inv.arrange_items().run()
+            inv.unreachable_items_until[inv._here()] = t + 5000
+            agent.last_bfs_step = -1
+            st[key] = t
+            return True
+        return False
 
     # ------------------------------------------------------------ strategy
 
@@ -1737,6 +1905,8 @@ class DiveLogic:
         bl = agent.blstats
         digger = DIVE_REST and self._digger_here()
         rest_below = DIG_REST_BELOW if digger else REST_BELOW
+        if digger and jf_config.PREP_REST:
+            rest_below = self._dig_rest_below(rest_below)   # PREP_REST: higher on the maze levels next to the castle
         if bl.hitpoints < rest_below * bl.max_hitpoints and not agent.get_visible_monsters() and \
                 bl.hunger_state < Hunger.WEAK and not (digger and self._in_own_pit()) and \
                 not self._gehennom_digger() and not self._mino_alert() and not self.landing_pending():
@@ -1778,6 +1948,10 @@ class DiveLogic:
             return
 
         if RETURN_FIX and self._dig_out():
+            return
+
+        if jf_config.EXCAL_ERRAND and self.excal_errand_step():
+            # EXCAL_ERRAND (prep lane): the walk to a known fountain and the dips for Excalibur, before the tool hunt / Mines trip
             return
 
         if self.should_fetch_digging_tool():
@@ -1906,6 +2080,15 @@ class DiveLogic:
             agent.search(5)
             return
 
+        if jf_config.PREP_GATE and self.prep_gate():
+            # PREP_GATE (prep lane): one hold at the first dig -- HP, a meal, the prayer gap
+            return
+
+        if jf_config.SURV_DIVE_GATE and surv_gate.hold(self):
+            # SURV_DIVE_GATE (survival lane, objective B): a food-less hero holds at the first dig until its hunger prayer is made and
+            # a few hundred turns old, so that the dive does not end in an unsafe prayer at the castle
+            return
+
         self._task('descend')
         return self.descend()
 
@@ -1922,6 +2105,65 @@ class DiveLogic:
         name = getattr(mon, 'mname', '')
         return cls in (MON.S_HUMAN, MON.S_DRAGON) or name in ('minotaur', 'unknown') or name in RANGED_MONSTERS
 
+    # DIVE_SLEEPERS: the entry messages of the rooms mkroom.c fill_zoo fills with sleeping monsters (hack.c check_special_room)
+    _SLEEP_ROOM = re.compile(r"Welcome to David's treasure zoo|opulent throne room|military barracks|giant beehive|"
+                             r"disgusting nest|enter an anthole|leprechaun hall|uncanny feeling")
+
+    # an attack message names its monster: "The sergeant swings her flail.", "The wererat bites!", "You miss the sergeant.  The sergeant wields..."
+    _ATTACKER = re.compile(r"\bThe ([A-Za-z' -]+?) (?:hits|misses|just misses|bites|swings|thrusts|kicks|touches|stings|butts|claws|"
+                           r"zaps|casts|throws|shoots|fires|wields|spits|breathes|gazes|lunges|grabs|slashes)")
+
+    def _sleepers_note(self, key, turn):
+        """DIVE_SLEEPERS: arm the level when a special-room entry message arrives (every message since the last update)."""
+        agent = self.agent
+        hist = agent._message_history
+        start = self._sleep_seen
+        if start > len(hist):
+            start = 0
+        self._sleep_seen = len(hist)
+        arm = False
+        if self._sleep_force:
+            self._sleep_force = False
+            arm = True
+            agent.log('DIVE_SLEEPERS: scenario start level counts as a special room entered')
+        for m in hist[start:] + [agent.message]:
+            if m and self._SLEEP_ROOM.search(m):
+                if self._sleep_room is None or self._sleep_room[0] != key:
+                    agent.log(f'DIVE_SLEEPERS: special room entered ({m.strip()[:50]!r}): its monsters are asleep and a '
+                              f'stealthy hero does not wake them -- digging on, no fights with the ones that stay where they are')
+                arm = True
+                break
+        if arm and (self._sleep_room is None or self._sleep_room[0] != key or turn - self._sleep_room[1] > 1):
+            self._sleep_room = (key, turn)
+            self._sleep_reg = None   # the sleepers are registered at the next decision (_sleepers_filter)
+
+    def _sleepers_filter(self, close):
+        """DIVE_SLEEPERS: `close` without the monsters that sleep. Armed by a special-room entry message (at most
+        DIVE_SLEEPERS_TURNS turns ago, this level): the monsters in view when it is first asked are the sleepers (fill_zoo makes
+        every monster of the room asleep; a Valkyrie's Stealth keeps them so); one is dropped from the set when it moves from its
+        square or when an attack message names its kind (it is awake: the normal rules fight it)."""
+        if not close or self._sleep_room is None:
+            return close
+        agent = self.agent
+        key, t0 = self._sleep_room
+        now = agent.blstats.time
+        if agent.current_level().key() != key or now - t0 > jf_config.DIVE_SLEEPERS_TURNS:
+            return close
+        hist = agent._message_history
+        if self._sleep_reg is None:
+            # the monsters in view at the entry (the first decision after it, at most one turn later: a monster that walks up
+            # later is awake and must not be taken for a sleeper)
+            self._sleep_reg = {(int(m[1]), int(m[2])): getattr(m[3], 'mname', '') for m in agent.get_visible_monsters()} \
+                if now - t0 <= 1 else {}
+            self._sleep_msg = len(hist)
+        start = self._sleep_msg if self._sleep_msg <= len(hist) else 0
+        self._sleep_msg = len(hist)
+        for text in hist[start:] + [agent.message]:
+            for name in self._ATTACKER.findall(text or ''):
+                for pos in [p for p, n in self._sleep_reg.items() if n == name]:
+                    del self._sleep_reg[pos]   # it attacked: awake
+        return [m for m in close if self._sleep_reg.get((int(m[1]), int(m[2]))) != getattr(m[3], 'mname', None)]
+
     def _melee_ignores_elbereth(self, mon):
         """onscary() for melee only: @ humans and elves (also shopkeepers, guards, priests) and minotaurs
         fight on through Elbereth. Breathers, spitters and casters don't melee a hero standing on it
@@ -1933,6 +2175,24 @@ class DiveLogic:
         if name == 'unknown':
             return self.agent.blstats.time - self._hurt_on_elbereth <= 3
         return cls == MON.S_HUMAN or name == 'minotaur'
+
+    def _scare_ignores(self, mon):
+        """CASTLE_SCARE's idea of an Elbereth-ignorer (the monsters a scroll of scare monster is dropped for, held against and
+        thrown at). LANDING_LICH (landing-b lane): a lich is not one -- monmove.c onscary: liches respect a dust Elbereth, and a pile of
+        unknown scrolls (7-14% scare monster) held for a master lich that teleports next to us every ~7 turns and summons nasties at
+        14% a move only keeps the hero standing where it lands (lnd-final x4.c: 'You miss the master lich' x20 beside a dropped pile)."""
+        if jf_config.LANDING_LICH:
+            name = getattr(mon, 'mname', '')
+            if name in ('lich', 'demilich', 'master lich', 'arch-lich'):
+                return False
+            # (an unseen monster next to us right after a lich's touch / spell message is its invisible self: castle_landing_b)
+            if name == 'unknown' and self.agent.blstats.time - getattr(self, 'lich_seen_turn', -10 ** 9) <= 3:
+                return False
+        return self._ignores_elbereth(mon)
+
+    def _scare_ignores_or_not_lich(self, mon):
+        """The hold on a dropped scare pile goes on while anything hostile is within 2; with LANDING_LICH not a lich (see _scare_ignores)."""
+        return not (jf_config.LANDING_LICH and getattr(mon, 'mname', '') in ('lich', 'demilich', 'master lich', 'arch-lich'))
 
     def on_medusa_level(self):
         return self.medusa_level is not None and self.agent.current_level().key() == self.medusa_level
@@ -2653,6 +2913,10 @@ class DiveLogic:
             action = self._reentry_plan()
             if action is None:
                 return
+        # (the body ends here with the plan still applying: the layers below get ONE run before this hook is looked at again --
+        # dig_first walks off the Elbereth it was holding. Measured neutral in the harness (ledger F498/R599: an uncapped loop,
+        # 144 long Medusa-3 specs, 116 vs 119 passes), so the cap stays; the line only counts how often it is reached.)
+        agent.log(f'REENTRY body cap: {jf_config.MEDUSA_REENTRY_LOOP} actions in a row, the layers below get a run (next plan {action[0]})')
 
     def _reentry_plan(self):
         if not (jf_config.MEDUSA_REENTRY or jf_config.MEDUSA_STANDOFF):
@@ -3286,6 +3550,100 @@ class DiveLogic:
         agent = self.agent
         return agent.prayer_failed and agent.blstats.hunger_state >= Hunger.WEAK and not agent.edible_carried_food()
 
+    # ------------------------------------------------------------- PREP_GATE / PREP_REST (prep lane, lane 16)
+
+    def _prep_food(self):
+        """The most filling carried food worth a prep meal (>= 100 nutrition): no corpses, no tripe or tins (eat.c: dog food makes
+        a non-orc vomit, a tin takes up to 50 turns), nothing worth more than its nutrition (eucalyptus, wolfsbane, royal jelly),
+        and only items the bot has identified (an unknown 'food' glyph has no nutrition figure)."""
+        keep = {'eucalyptus leaf', 'sprig of wolfsbane', 'lump of royal jelly', 'tripe ration', 'tin'}
+        best, best_n = None, 0
+        for item in self.agent.edible_carried_food():
+            if item.is_corpse() or not item.is_unambiguous():
+                continue
+            if {getattr(o, 'name', '') for o in item.objs} & keep:
+                continue
+            n = int(getattr(item.object, 'nutrition', 0) or 0)
+            if n >= 100 and n > best_n:
+                best, best_n = item, n
+        return best
+
+    def prep_gate(self):
+        """PREP_GATE: one hold at the FIRST dig of a dig-dive (see the flag in jf_config). True when it acted this step.
+
+        The three readiness checks of the dive start (DIVE_FED, DIVE_PRAYER_GAP, DIVE_START_HP) only run when the dive PHASE starts;
+        a digging tool that arrives later (a Mines dwarf's pick-axe after a tool hunt that prayed at Weak) starts the dive at once,
+        so 17% of the castle arrivals had prayed < 800 turns before their first dig. Here, standing in the main dungeon at a shallow
+        depth with the tool in hand and about to descend: rest to PREP_GATE_HP on an Elbereth, eat carried food while not Satiated,
+        and -- only when the pack holds PREP_GATE_FOOD nutrition, because the wait burns that much -- wait for PREP_GATE_GAP turns
+        since the last prayer. Hostiles in view: a one-turn hold (the fight layers above this strategy answer them). Over after
+        PREP_GATE_MAX_TURNS, once nothing is left to do, below PREP_GATE_MAX_DEPTH, or for good at the first dig."""
+        agent = self.agent
+        bl = agent.blstats
+        level = agent.current_level()
+        if self._prep_gate_done or not self.diving or self.rescue or agent.prayer_failed or \
+                level.dungeon_number != Level.DUNGEONS_OF_DOOM or agent.character.prop.polymorph:
+            return False
+        if bl.depth > jf_config.PREP_GATE_MAX_DEPTH:
+            self._prep_gate_done = True   # the first dig happened deeper (a fall, a trapdoor): no hold now
+            return False
+        if self.digging_tool() is None or level.key() in self.undiggable:
+            return False
+        turn = bl.time
+        gap = None if agent.last_prayer_turn is None else turn - agent.last_prayer_turn
+        food = self._prep_food()
+        fed = bl.hunger_state == Hunger.SATIATED or agent.carried_food_nutrition() >= jf_config.PREP_GATE_FOOD
+        need_hp = bl.hitpoints < jf_config.PREP_GATE_HP * bl.max_hitpoints and bl.hunger_state < Hunger.WEAK
+        need_meal = food is not None and bl.hunger_state > Hunger.SATIATED and self._prep_gate_meals < 3 and \
+            bl.hunger_state < Hunger.WEAK
+        need_prayer = gap is not None and gap < jf_config.PREP_GATE_GAP and fed and bl.hunger_state < Hunger.HUNGRY
+        if self._prep_gate_start is None:
+            if not (need_hp or need_meal or need_prayer):
+                self._prep_gate_done = True
+                agent.log(f'PREP_GATE nothing to do at the first dig (hp {bl.hitpoints}/{bl.max_hitpoints}, hunger '
+                          f'{bl.hunger_state}, gap {gap}, food {agent.carried_food_nutrition()}, depth {bl.depth})')
+                return False
+            self._prep_gate_start = turn
+            agent.log(f'PREP_GATE start: hp {bl.hitpoints}/{bl.max_hitpoints} hunger {bl.hunger_state} gap {gap} '
+                      f'food {agent.carried_food_nutrition()} depth {bl.depth} (hp {need_hp}, meal {need_meal}, prayer {need_prayer})')
+        held = turn - self._prep_gate_start
+        if held > jf_config.PREP_GATE_MAX_TURNS or not (need_hp or need_meal or need_prayer):
+            self._prep_gate_done = True
+            agent.log(f'PREP_GATE over after {held} turns: hp {bl.hitpoints}/{bl.max_hitpoints} hunger {bl.hunger_state} gap {gap} '
+                      f'food {agent.carried_food_nutrition()} meals {self._prep_gate_meals}'
+                      f'{" (cap)" if held > jf_config.PREP_GATE_MAX_TURNS else ""}')
+            return False
+        self._task('prep hold')
+        if agent.get_visible_monsters():
+            agent.search(1)
+            return True
+        if need_hp or need_prayer:
+            # the waits come first and the meal last: the hero then leaves Satiated instead of burning the meal in the wait
+            if self._rest_elbereth():
+                return True
+            agent.search(20)
+            return True
+        self._prep_gate_meals += 1
+        agent.log(f'PREP_GATE eating {food.text!r} (hunger {bl.hunger_state})')
+        agent.inventory.eat(food)
+        return True
+
+    def _dig_rest_below(self, base):
+        """PREP_REST: the share of max HP below which a digger rests before digging, raised to PREP_REST_HP on a maze level that may
+        be the castle's neighbour (Dungeons, below Medusa, depth >= PREP_MIN_DEPTH), for the first PREP_REST_MAX_TURNS turns there."""
+        if not jf_config.PREP_REST or base >= jf_config.PREP_REST_HP:
+            return base
+        agent = self.agent
+        level = agent.current_level()
+        bl = agent.blstats
+        if level.dungeon_number != Level.DUNGEONS_OF_DOOM or bl.depth < jf_config.PREP_MIN_DEPTH or \
+                self.on_medusa_level() or self.below_medusa() is False:
+            return base
+        t0 = self._prep_rest_t0.setdefault(level.key(), bl.time)
+        if bl.time - t0 > jf_config.PREP_REST_MAX_TURNS:
+            return base
+        return jf_config.PREP_REST_HP
+
     # ------------------------------------------------------------- PREP track (prep lane)
 
     def excalibur_candidate(self):
@@ -3299,6 +3657,77 @@ class DiveLogic:
                 candidate = item
         return candidate
 
+    def _excal_wanted(self):
+        """EXCAL_ERRAND_INSTR: True when the hero should spend an errand on Excalibur at all.  The measured value of Excalibur is on the
+        crusher's walk-in (R501: instrument kits 8.3% vs 2.6% pass30); a kit without a tonal instrument has no crusher, its route is
+        something Excalibur does not touch, and an errand costs it time, food and ~3% deaths (a hero with a strong route item loses
+        that value).  With the flag the errand and the dive's dips run only while the pack holds a tonal instrument (known or a
+        candidate: opp_items.is_tonal)."""
+        if not jf_config.EXCAL_ERRAND_INSTR:
+            return True
+        try:
+            from . import opp_items
+            return any(opp_items.is_tonal(i) for i in flatten_items(self.agent.inventory.items))
+        except Exception:
+            return False   # (the gate fails closed: an inventory item the predicate cannot read must not send every hero on the errand)
+
+    def _excal_errand_live(self):
+        """EXCAL_ERRAND_FIGHT: the errand is due and the hero is on one of its levels (main dungeon, Dlvl <= EXCAL_ERRAND_MAX_DEPTH).  With a
+        digging tool in the pack dig_first (DIG_ESCAPE) preempts everything at the first monster in view and digs a hole out: the hole ends
+        the errand (the way back up to the fountains is unknown from the level below), so on these levels an ordinary monster is
+        fought first (_prep_calm: HP >= PREP_MID_ESCAPE_HP, no crowd, no boss kind, nothing that fights through Elbereth)."""
+        if not jf_config.EXCAL_ERRAND or not self.diving:
+            return False
+        try:
+            return self.agent.blstats.depth <= jf_config.EXCAL_ERRAND_MAX_DEPTH and self.excal_errand_target() is not None
+        except Exception:
+            return False
+
+    def _excal_hostile_near(self, radius):
+        """EXCAL_CALM_FIX: a hostile monster within `radius` squares (Chebyshev distance of its square from ours); slow or sessile ones (speed <= 3:
+        molds, jellies, floating eyes, lichens) count only within 2 squares.  The tuples of agent.get_visible_monsters() carry a BFS distance that is
+        -1 for a monster whose own square the BFS cannot enter, which `m[0] <= 4` read as 'next to us': a brown mold in view sent one errand hero
+        back and forth between the stairs and the digging-tool pile for 300 turns."""
+        bl = self.agent.blstats
+        for m in self.agent.get_visible_monsters():
+            d = max(abs(int(m[1]) - bl.y), abs(int(m[2]) - bl.x))
+            if getattr(m[3], 'mmove', 12) <= 3 and d > 2:
+                continue
+            if d <= radius:
+                return True
+        return False
+
+    def _excal_free_hand(self, tool):
+        """EXCAL_HAND_FIX: what to hold while the long sword is dipped (the sword in hand could be cursed by the dip and weld, locking the pick out).
+        For a hero the errand is for: the digging tool, unless it is a two-handed mattock over a worn shield -- inventory.wield refuses that and
+        the refusal blocked every dip for 500 turns (a third of the tool carriers hold a mattock: makemon.c m_initweap gives a dwarf a mattock
+        1 time in 8, a pick-axe 1 in 4) -- then the dagger (EXCAL_DAGGER) or bare hands.  Anyone else: the tool, as before."""
+        if not (jf_config.EXCAL_ERRAND and self._excal_wanted()):
+            return tool
+        if tool is not None:
+            two_handed = False
+            try:
+                two_handed = bool(tool.objs[0].bi)
+            except Exception:
+                pass
+            if not (two_handed and self.agent.inventory.items.off_hand is not None):
+                return tool
+        if jf_config.EXCAL_DAGGER:
+            dagger = self._excal_dagger()
+            if dagger is not None:
+                return dagger
+        return None
+
+    def _excal_dagger(self):
+        """EXCAL_DAGGER: the best non-cursed dagger in the pack to hold while the long sword is being dipped, or None."""
+        best = None
+        for item in flatten_items(self.agent.inventory.items):
+            if item.is_unambiguous() and item.object == O.from_name('dagger') and item.status != Item.CURSED and \
+                    not item.equipped:
+                if best is None or (item.dmg_bonus or 0) > (best.dmg_bonus or 0):
+                    best = item
+        return best
+
     def _prep_fountain_target(self):
         """PREP_EXCAL_DIVE: the nearest reachable fountain within PREP_EXCAL_DIST steps on a Dungeons of Doom level
         while a dip is safe (HP >= 70%, not Weak, no hostile within PREP_EXCAL_CALM squares, no released water demon
@@ -3306,11 +3735,15 @@ class DiveLogic:
         agent = self.agent
         bl = agent.blstats
         level = agent.current_level()
-        if not jf_config.PREP_EXCAL_DIVE or not self.diving or self.rescue:
+        # the errand's thresholds (HP, radius) apply to the heroes the errand is for (EXCAL_ERRAND_INSTR: those with a tonal instrument);
+        # the others keep PREP_EXCAL_DIVE's own (if it is on)
+        errand = jf_config.EXCAL_ERRAND and self._excal_wanted()
+        if not (jf_config.PREP_EXCAL_DIVE or errand) or not self.diving or self.rescue:
             return None
         if level.dungeon_number != Level.DUNGEONS_OF_DOOM or agent.character.alignment != Character.LAWFUL:
             return None
-        if bl.experience_level < 5 or bl.hunger_state >= Hunger.WEAK or bl.hitpoints < 0.7 * bl.max_hitpoints:
+        if bl.experience_level < 5 or bl.hunger_state >= Hunger.WEAK or \
+                bl.hitpoints < (jf_config.EXCAL_ERRAND_HP if errand else 0.7) * bl.max_hitpoints:
             return None
         if bl.time <= max(self._demon_vigil_until, self._prep_dip_block_until) or self.levitating():
             return None
@@ -3318,11 +3751,20 @@ class DiveLogic:
         if not fountains.any() or self.excalibur_candidate() is None:
             return None
         dis = agent.bfs()
-        mask = fountains & (dis != -1) & (dis <= jf_config.PREP_EXCAL_DIST)
+        dist = jf_config.EXCAL_ERRAND_DIST if errand else jf_config.PREP_EXCAL_DIST
+        if errand and jf_config.EXCAL_DEEP_DIST and bl.depth > jf_config.EXCAL_ERRAND_MAX_DEPTH:
+            dist = jf_config.EXCAL_DEEP_DIST   # EXCAL_DEEP_DIST: below the errand's levels the dive's own dips keep the short walk
+        mask = fountains & (dis != -1) & (dis <= dist)
         if not mask.any():
             return None
+        calm = jf_config.PREP_EXCAL_CALM
+        if errand and jf_config.EXCAL_CALM_FIX and jf_config.EXCAL_CALM_RADIUS:
+            calm = jf_config.EXCAL_CALM_RADIUS   # EXCAL_CALM_RADIUS: the errand hero's own, smaller, calm radius
         for m in agent.get_visible_monsters():
-            if max(abs(int(m[1]) - bl.y), abs(int(m[2]) - bl.x)) <= jf_config.PREP_EXCAL_CALM:
+            d = max(abs(int(m[1]) - bl.y), abs(int(m[2]) - bl.x))
+            if d <= calm:
+                if errand and jf_config.EXCAL_CALM_FIX and getattr(m[3], 'mmove', 12) <= 3 and d > 2:
+                    continue   # EXCAL_CALM_FIX: a mold / jelly / floating eye more than 2 squares away is no reason to skip the dip
                 return None
         ys, xs = mask.nonzero()
         i = int(np.argmin(dis[ys, xs]))
@@ -3350,7 +3792,14 @@ class DiveLogic:
         tool = self.digging_tool()
         if main is not None and main is sword:
             # never dip the sword in hand: the digging tool (or bare hands) first
-            if main.status == Item.CURSED or not agent.inventory.wield(tool):
+            hand = tool
+            if jf_config.EXCAL_HAND_FIX:
+                hand = self._excal_free_hand(tool)
+            elif hand is None and jf_config.EXCAL_DAGGER:
+                # EXCAL_DAGGER: a tool-less hero holds her dagger (d4, Basic skill) rather than bare fists (d2) while a dip's
+                # snakes / demon are one move away
+                hand = self._excal_dagger()
+            if main.status == Item.CURSED or not agent.inventory.wield(hand):
                 agent.log('PREP dip: cannot take the sword out of our hand; no dive dips for 500 turns')
                 self._prep_dip_block_until = agent.blstats.time + 500
             return True
@@ -3365,7 +3814,164 @@ class DiveLogic:
                     "You don't have anything to dip " in agent.message:
                 self._prep_dip_block_until = agent.blstats.time + 50
                 raise AgentPanic('no fountain here')
+        self._excal_dips += 1
         return True
+
+    # ------------------------------------------------------------- EXCAL_ERRAND (prep lane)
+
+    def _excal_fountain_levels(self):
+        """{level key: fountain squares known} of the main-dungeon levels of Dlvl <= EXCAL_ERRAND_MAX_DEPTH."""
+        out = {}
+        for key, lv in self.agent.levels.items():
+            if key[0] != Level.DUNGEONS_OF_DOOM or key[1] > jf_config.EXCAL_ERRAND_MAX_DEPTH:
+                continue
+            try:
+                n = int(utils.isin(lv.objects, G.FOUNTAIN).sum())
+            except Exception:
+                n = 0
+            if n:
+                out[key] = n
+        return out
+
+    def excal_errand_target(self):
+        """EXCAL_ERRAND: the level to walk to for a dip (the current one if it holds a known fountain, else the nearest main-dungeon
+        level of Dlvl <= EXCAL_ERRAND_MAX_DEPTH that does and that a known path leads to), or None when the errand is not due."""
+        cfg = jf_config
+        agent = self.agent
+        bl = agent.blstats
+        if not cfg.EXCAL_ERRAND or not self.diving or self.rescue or self._excal_done:
+            return None
+        if agent.character.alignment != Character.LAWFUL or bl.experience_level < cfg.EXCAL_ERRAND_XL or \
+                agent.prayer_failed or agent.character.prop.polymorph:
+            return None
+        if self.excalibur_candidate() is None:
+            self._excal_done = True
+            agent.log(f'EXCAL_ERRAND over: no dippable long sword left (Excalibur or none); {self._excal_dips} dips'
+                      f'{"" if self._excal_start is None else f", {bl.time - self._excal_start} turns"}')
+            return None
+        if not self._excal_wanted():
+            return None   # EXCAL_ERRAND_INSTR: no tonal instrument in the pack (yet): not an errand for this hero
+        if self._excal_dips >= cfg.EXCAL_ERRAND_MAX_DIPS or \
+                (self._excal_start is not None and bl.time - self._excal_start > cfg.EXCAL_ERRAND_TURNS):
+            self._excal_done = True
+            agent.log(f'EXCAL_ERRAND over: budget spent ({self._excal_dips} dips, '
+                      f'{bl.time - (self._excal_start or bl.time)} turns)')
+            return None
+        cur = agent.current_level()
+        if cur.dungeon_number != Level.DUNGEONS_OF_DOOM:
+            return None   # in the Mines (the tool hunt): not from there
+        levels = self._excal_fountain_levels()
+        if not levels:
+            return None
+        here = cur.key()
+        if here in levels and (not cfg.EXCAL_STEADY or self._excal_blocked.get(here, -1) <= bl.time):
+            return here
+        best = None
+        for key, n in levels.items():
+            if self._excal_blocked.get(key, -1) > bl.time:
+                continue
+            cost = (abs(key[1] - here[1]), -n)
+            if best is None or cost < best[0]:
+                best = (cost, key)
+        return None if best is None else best[1]
+
+    def excal_errand_step(self):
+        """EXCAL_ERRAND: True when it acted this step -- one walk or stair hop toward the target level, a wait for HP / prayer on it, or a
+        dip (prep_fountain_dip). False leaves the plan to its other tasks."""
+        target = self.excal_errand_target()
+        if target is None:
+            return False
+        agent = self.agent
+        bl = agent.blstats
+        cfg = jf_config
+        if self._excal_start is None:
+            self._excal_start = bl.time
+            agent.log(f'EXCAL_ERRAND start: fountains known on {self._excal_fountain_levels()}, from {agent.current_level().key()}, '
+                      f'XL {bl.experience_level} hp {bl.hitpoints}/{bl.max_hitpoints}')
+        here = agent.current_level().key()
+        if bl.hunger_state >= Hunger.WEAK:
+            return False   # the normal plan (meals, prayers) first
+        if (self._excal_hostile_near(4) if cfg.EXCAL_CALM_FIX else any(m[0] <= 4 for m in agent.get_visible_monsters())):
+            if cfg.EXCAL_CALM_FIX and self._excal_guard_turns < cfg.EXCAL_GUARD_TURNS:
+                # a hostile is close: fight2 fights it when it arrives. Handing the plan on instead lets 'descend' dig the errand away
+                # (a hole ends it: the way back up to the fountains is unknown from the level below)
+                self._excal_guard_turns += 1
+                self._task('excalibur errand: let the hostile come')
+                agent.search(1)
+                return True
+            return False   # the normal plan (fights) first
+        if cfg.EXCAL_STEADY:
+            t0 = self._excal_level_t0.setdefault(here, bl.time)
+            if bl.time - t0 > cfg.EXCAL_LEVEL_TURNS and here != target:
+                # a walk that has not got us off this level in EXCAL_LEVEL_TURNS: give the target up
+                self._excal_blocked[target] = bl.time + cfg.EXCAL_BLOCK_TURNS
+                self._excal_level_t0[here] = bl.time
+                agent.log(f'EXCAL_ERRAND: the walk to {target} stalled on {here}; target dropped for {cfg.EXCAL_BLOCK_TURNS} turns')
+                return False
+        if here != target:
+            path = agent.exploration.get_path_to_level(*target)
+            if not path:
+                self._excal_blocked[target] = bl.time + 500
+                agent.log(f'EXCAL_ERRAND: no known path to {target}')
+                return False
+            (y, x), _, direction = path[0]
+            self._task(f'excalibur errand to {target}')
+            if (bl.y, bl.x) != (y, x):
+                agent.go_to(y, x)
+                return True
+            agent.move(direction)
+            return True
+        if cfg.EXCAL_STEADY and not self._excal_fountain_reachable():
+            # the level holds a fountain we cannot walk to (BFS: a boulder, a locked door, an unexplored gap): the plan's other tasks would pull us
+            # off the level and the errand back on, one stair per turn (jf1450 s5: 100+ hops between Dlvl 1 and 2)
+            self._excal_blocked[here] = bl.time + cfg.EXCAL_BLOCK_TURNS
+            agent.log(f'EXCAL_ERRAND: no fountain of {here} is reachable from here; level dropped for {cfg.EXCAL_BLOCK_TURNS} turns')
+            return False
+        # on the target level: HP and the prayer first (a released demon is a fight; the prayer is the net)
+        hp_ok = bl.hitpoints >= cfg.EXCAL_ERRAND_HP * bl.max_hitpoints
+        prayer_ok = agent.is_safe_to_pray(cfg.EXCAL_ERRAND_GAP)
+        if not (hp_ok and prayer_ok):
+            if self._excal_wait_t0 is None:
+                self._excal_wait_t0 = bl.time
+                agent.log(f'EXCAL_ERRAND waiting on {here}: hp {bl.hitpoints}/{bl.max_hitpoints} prayer safe {prayer_ok}')
+            # EXCAL_WAIT_FIX: a Hungry hero does not wait (the wait burns the food the pack may not hold: a 580-turn wait made one hero Weak,
+            # it prayed, the prayer was unsafe again, the wait went on)
+            hungry = cfg.EXCAL_WAIT_FIX and bl.hunger_state >= Hunger.HUNGRY
+            if bl.time - self._excal_wait_t0 <= cfg.EXCAL_ERRAND_WAIT and not hungry:
+                self._task('excalibur errand: wait for HP / prayer')
+                if self._rest_elbereth():
+                    return True
+                agent.search(20)
+                return True
+            # waited long enough: dip anyway from EXCAL_ERRAND_HP_MIN of max HP (EXCAL_WAIT_FIX), else from EXCAL_ERRAND_HP as before
+            floor = cfg.EXCAL_ERRAND_HP_MIN if cfg.EXCAL_WAIT_FIX else cfg.EXCAL_ERRAND_HP
+            if bl.hitpoints < floor * bl.max_hitpoints:
+                return False   # still too hurt: no dip now
+        self._excal_wait_t0 = None
+        if not cfg.EXCAL_STEADY:
+            return self.prep_fountain_dip()
+        if self.prep_fountain_dip():
+            self._excal_idle = 0
+            return True
+        # nothing to dip at right now (a monster within 7, a demon vigil, a failed wield): hold the errand a few turns rather than hand the plan
+        # on to a task that walks us away
+        if self._excal_idle < cfg.EXCAL_IDLE_TURNS:
+            self._excal_idle += 1
+            self._task('excalibur errand: waiting for a calm moment')
+            agent.search(1)
+            return True
+        self._excal_done = True
+        agent.log(f'EXCAL_ERRAND over: no calm moment in {cfg.EXCAL_IDLE_TURNS} turns ({self._excal_dips} dips)')
+        return False
+
+    def _excal_fountain_reachable(self):
+        """EXCAL_STEADY: a fountain of this level is within EXCAL_ERRAND_DIST BFS steps."""
+        agent = self.agent
+        fountains = utils.isin(agent.current_level().objects, G.FOUNTAIN)
+        if not fountains.any():
+            return False
+        dis = agent.bfs()
+        return bool((fountains & (dis != -1) & (dis <= jf_config.EXCAL_ERRAND_DIST)).any())
 
     _PREP_PICKUP_GLYPHS = None
 
@@ -3674,6 +4280,8 @@ class DiveLogic:
         agent = self.agent
         if not DIG_FIRST or not self.diving:
             yield False
+        if jf_config.SURV_DIVE_GATE and surv_gate.active(self):
+            yield False   # SURV_DIVE_GATE: a hold is in progress -- what shows up is fought (fight2), not dug away from
         level = agent.current_level()
         if jf_config.LANDING_EAR:
             self._landing_ear_decide()   # (a castle-likely landing counts as undiggable while we listen)
@@ -3691,6 +4299,8 @@ class DiveLogic:
             yield False   # nothing to run from: the dive plan digs as usual
         if monsters and self.prep_mid_level() and self._prep_calm(monsters):
             yield False   # PREP_MID: an ordinary fight is fought (fight2) -- dig out only when it isn't
+        if monsters and jf_config.EXCAL_ERRAND_FIGHT and self._excal_errand_live() and self._prep_calm(monsters):
+            yield False   # EXCAL_ERRAND_FIGHT: an ordinary fight on the errand's levels is fought (fight2), not dug away from
         if monsters and jf_config.THRONE_HUNT and wish_source.hunt_level(self) and wish_source.hunt_calm(self, monsters):
             yield False   # THRONE_HUNT: the same while the court is being hunted
         if DIG_ESCAPE and level.dungeon_number != GEHENNOM:
@@ -3969,6 +4579,8 @@ class DiveLogic:
         radius = jf_config.AT_DIG_RADIUS if jf_config.AT_ELBERETH_FIX else 1
         close = adjacent + [m for m in monsters if max(abs(m[1] - bl.y), abs(m[2] - bl.x)) == 2 and 0 < m[0] <= 2] \
             if radius >= 2 else adjacent
+        if jf_config.DIVE_SLEEPERS:
+            close = self._sleepers_filter(close)   # DIVE_SLEEPERS: an @ that sleeps in its room is dug beside, not fought
         if any(self._melee_ignores_elbereth(m[3]) for m in close):
             # an @ next to us: fight it. Digging beside it is futile: any attack, hit or miss, stops the dig
             # occupation before its next turn (mhitu.c hitmsg/missmu -> stop_occupation; allmain.c runs the
@@ -4003,6 +4615,8 @@ class DiveLogic:
         max_wet = self._dig_max_wet()
         if jf_config.MEDUSA_HOP and (max_wet is None or max_wet > 0):
             hop = self._hop_action()   # MEDUSA_HOP: across a 1-wide channel to land with a dry square
+            if hop is None and jf_config.MEDB_HOP_STAIRS:
+                hop = self._hop_action(stairs=True)   # MEDB_HOP_STAIRS: ...or to the land with the '<'
             if hop is not None:
                 return hop
         up = self._medusa_reroll_stairs(max_wet)
@@ -4646,7 +5260,7 @@ class DiveLogic:
             if 'What do you want to put on?' not in agent.single_message:
                 return
             yield letter
-            if 'Which ring-finger' in agent.single_message:
+            if utils.asks_ring_hand(agent.single_message):
                 yield 'r'
 
         with agent.atom_operation():
@@ -4783,6 +5397,16 @@ class DiveLogic:
         # of a Medusa-3 island, searching, until an invisible stalker killed it)
         if not (DIG_ESCAPE and self.on_medusa_level()) or self.agent.blstats.time < self._medusa_reroll_blocked_until:
             return None
+        if jf_config.MEDB_KNOBS and getattr(self, '_medb_on', False):
+            # MEDB_KNOBS (MEDUSA_REROLL_WET = 1): the land we stand on has a dry square by the level's fixed map (Medusa-4's hut:
+            # its inside is out of sight from the shore) -- dig there, do not climb for a 'too wet' islet we only see the wet half of
+            name = self._medusa_variant_name()
+            if name is not None:
+                from . import medusa_hop
+                m = medusa_hop.model(name)
+                comp = m.comp.get((int(self.agent.blstats.y), int(self.agent.blstats.x)))
+                if comp is not None and comp in m.dry:
+                    return None
         if MEDUSA_SKIP:
             # A hole or trap door drops an extra level 1 time in 4 (trap.c fall_through: newlevel++ while
             # !rn2(4)), so every hole dug from the level above skips Medusa's level outright a quarter of the time,
@@ -4836,11 +5460,12 @@ class DiveLogic:
         # the '>' we stand on now would lead straight back to the islet
         self._avoid_stairs_until[(agent.current_level().key(), (agent.blstats.y, agent.blstats.x))] = 10 ** 9
 
-    def _hop_action(self):
+    def _hop_action(self, stairs=False):
         """MEDUSA_HOP (see medusa_hop.py): on Medusa's level, standing on land that has no dry square, a chain of 1-wide
         moat channels leads to land that has one -- ('hop', (launch, water, p_cross, left)): walk to `launch`, then step
         into `water`; the crawl-out (trap.c drown) puts us on the far side with probability p_cross (`left`: our land
-        component when this is a MEDUSA_HOP_RESERVE hop to wet land, else None). None: not applicable."""
+        component when this is a MEDUSA_HOP_RESERVE hop to wet land, else None). None: not applicable. stairs: the
+        MEDB_HOP_STAIRS plan instead (to the land with the '<'; only asked when the usual plan has nothing)."""
         if not (jf_config.MEDUSA_HOP and DIG_ESCAPE and self.diving and self.on_medusa_level()):
             return None
         agent = self.agent
@@ -4863,23 +5488,45 @@ class DiveLogic:
         from . import medusa_hop
         bl = agent.blstats
         here = (int(bl.y), int(bl.x))
-        plan = medusa_hop.plan(name, here, max_cost=jf_config.MEDUSA_HOP_COST_WET)
-        left = None
-        if plan is None:
-            if not jf_config.MEDUSA_HOP_RESERVE:
-                return None   # (nothing is touched before this point: not even agent.bfs()'s per-step cache)
-            dis = agent.bfs()
-            options, left = self._reserve_options(name, here, dis)
-        else:
-            # a long chain (Medusa-4's south-east islet: three channels, 5.5 expected tries among the snakes) passed no
-            # more often than digging in place (harness 13 of 20 both ways): hop only over a short chain, or off land
-            # whose driest square is wet enough that a pick-axe hole there is a long shot (k >= MEDUSA_HOP_WET_K moat
-            # neighbours)
-            kmin = min(medusa_hop.model(name).k[p] for p in medusa_hop.model(name).comps[plan['comp']])
-            if plan['cost'] > jf_config.MEDUSA_HOP_COST and not (kmin >= jf_config.MEDUSA_HOP_WET_K):
+        late = jf_config.MEDB_HOP_LATE   # MEDB_HOP_LATE: the chain is judged on the squares that are left (see there)
+        if stairs:
+            plan = self._stairs_plan(name, here)
+            if plan is None:
                 return None
+            left = None
             dis = agent.bfs()
             options = plan['options']
+        else:
+            if self._stairs_hopped.get(key) == self._medusa_rerolls:
+                # MEDB_HOP_STAIRS: we hopped over for the '<' and stand on its land now: the climb (_medusa_reroll_stairs) comes
+                # next, not a hop onward (the reserve hop or a long chain to dry land took the hero back and forth across the
+                # channel until the tries ran out: harness jf1110 s166) -- unless dry land is a cheap hop away
+                mdl = medusa_hop.model(name)
+                if mdl.comp.get(here) in self._stairs_comps(mdl) and medusa_hop.plan(name, here, max_cost=jf_config.MEDUSA_HOP_COST) is None:
+                    return None
+            plan = medusa_hop.plan(name, here, max_cost=max(jf_config.MEDUSA_HOP_COST_WET, jf_config.MEDB_HOP_LATE_COST)
+                                   if late else jf_config.MEDUSA_HOP_COST_WET)
+            left = None
+            if plan is None:
+                if not jf_config.MEDUSA_HOP_RESERVE:
+                    return None   # (nothing is touched before this point: not even agent.bfs()'s per-step cache)
+                dis = agent.bfs()
+                options, left = self._reserve_options(name, here, dis)
+            else:
+                # a long chain (Medusa-4's south-east islet: three channels, 5.5 expected tries among the snakes) passed no
+                # more often than digging in place (harness 13 of 20 both ways): hop only over a short chain, or off land
+                # whose driest square is wet enough that a pick-axe hole there is a long shot (k >= MEDUSA_HOP_WET_K moat
+                # neighbours)
+                kmin = min(medusa_hop.model(name).k[p] for p in medusa_hop.model(name).comps[plan['comp']])
+                if late:
+                    kmin = max(kmin, self._comp_kmin_now(medusa_hop.model(name), plan['comp']))
+                    if plan['cost'] > jf_config.MEDUSA_HOP_COST_WET and kmin < jf_config.MEDB_HOP_LATE_K:
+                        return None
+                if plan['cost'] > jf_config.MEDUSA_HOP_COST and \
+                        not (kmin >= (jf_config.MEDB_HOP_LATE_K if late else jf_config.MEDUSA_HOP_WET_K)):
+                    return None
+                dis = agent.bfs()
+                options = plan['options']
         if not options:
             return None
         mask = agent.monster_tracker.monster_mask
@@ -4901,7 +5548,64 @@ class DiveLogic:
                     best = cand
         if best is None:
             return None
+        if stairs:
+            self._stairs_hopped[key] = self._medusa_rerolls
         return ('hop', (best[2], best[3], best[4], left))
+
+    def _medb_knobs(self, key):
+        """MEDB_KNOBS (jf_config): MEDUSA_DIG_ORDER / MEDUSA_BLIND_DIG / MEDUSA_REROLL_WET = 1 while on Medusa-1/2/4, the
+        defaults elsewhere (module constants, switched at the level change; the variant is known once enough squares agree)."""
+        global MEDUSA_BLIND_DIG, MEDUSA_DIG_ORDER, MEDUSA_REROLL_WET
+        saved = getattr(self, '_medb_saved', None)
+        if saved is None:
+            saved = self._medb_saved = (MEDUSA_BLIND_DIG, MEDUSA_DIG_ORDER, MEDUSA_REROLL_WET)
+        on = key == self.medusa_level and self._medusa_variant_name() in ('medusa-1', 'medusa-2', 'medusa-4')
+        if on != getattr(self, '_medb_on', False):
+            self._medb_on = on
+            MEDUSA_BLIND_DIG, MEDUSA_DIG_ORDER, MEDUSA_REROLL_WET = (True, True, 1) if on else saved
+            self.agent.log(f'DIVE MEDB_KNOBS {"on" if on else "off"}: blind_dig/dig_order/reroll_wet = '
+                           f'{(MEDUSA_BLIND_DIG, MEDUSA_DIG_ORDER, MEDUSA_REROLL_WET)}')
+
+    def _stairs_plan(self, name, here):
+        """MEDB_HOP_STAIRS: the hop plan (medusa_hop.plan_to) from our land to the land that holds a known '<', or None: flag
+        off, Medusa-3, no reroll left, our land has a dry square, the reroll would not climb from here (it needs the best
+        square to have MEDUSA_REROLL_WET moat neighbours or none: _medusa_reroll_stairs), or we stand on the '<' land."""
+        if not jf_config.MEDB_HOP_STAIRS or name == 'medusa-3' or self._medusa_rerolls >= MEDUSA_REROLLS:
+            return None
+        from . import medusa_hop
+        mdl = medusa_hop.model(name)
+        src = mdl.comp.get(here)
+        if src is None or src in mdl.dry:
+            return None
+        mw = self._dig_max_wet()
+        if not (mw is None or mw >= MEDUSA_REROLL_WET):
+            return None
+        goals = self._stairs_comps(mdl)
+        if not goals or src in goals:
+            return None
+        return medusa_hop.plan_to(name, here, goals, max_cost=jf_config.MEDB_HOP_STAIRS_COST)
+
+    def _stairs_comps(self, model):
+        """MEDB_HOP_STAIRS: ids of the fixed map's land components that hold a '<' we know of on this level."""
+        agent = self.agent
+        level = agent.current_level()
+        ups = {(int(y), int(x)) for y, x in zip(*utils.isin(level.objects, G.STAIR_UP).nonzero())}
+        ups |= {(int(p[0]), int(p[1])) for p, dest in level.stair_destination.items()
+                if dest[0][0] == level.dungeon_number and dest[0][1] < level.level_number}
+        return {model.comp[p] for p in ups if p in model.comp}
+
+    def _comp_kmin_now(self, model, comp):
+        """MEDB_HOP_LATE: the fewest moat neighbours any square of land component `comp` still has as the level looks now
+        (flooded squares gone, their neighbours wetter), over the squares not refused as dig spots; 99 when none is left."""
+        agent = self.agent
+        level = agent.current_level()
+        key = level.key()
+        best = 99
+        for p in model.comps[comp]:
+            if agent.glyphs[p] in WET or level.objects[p] in WET or (key, p) in self._bad_dig_spots:
+                continue
+            best = min(best, self._wet_neighbours(*p))
+        return best
 
     def _reserve_options(self, name, here, dis):
         """MEDUSA_HOP_RESERVE: no chain of channels leads to dry land (Medusa-3's island, whose neighbour is wet too), but
@@ -5188,7 +5892,9 @@ class DiveLogic:
         best, best_dps = None, None
         for item in flatten_items(agent.inventory.items):
             if not item.is_weapon() or item.objs[0].bi or item.status not in (Item.UNCURSED, Item.BLESSED) or \
-                    not re.search(r'\b(uncursed|blessed)\b', item.text):
+                    not (re.search(r'\b(uncursed|blessed)\b', item.text) or
+                         (jf_config.MATTOCK_SHIELD_SWORD and re.search(r'(?<!\w)[+-]\d+ ', item.text) and
+                          not re.search(r'\bcursed\b', item.text))):
                 continue
             to_hit, dmg = agent.character.get_melee_bonus(item, large_monster=False)
             dps = utils.calc_dps(to_hit, dmg)
@@ -5202,7 +5908,8 @@ class DiveLogic:
         (_shield_phase) and nothing is within 2, wield the best one-handed weapon and put the shield back on. At most 3 tries
         a level; shield_off undoes it the moment a dig is refused."""
         agent = self.agent
-        if not jf_config.MATTOCK_SHIELD or not self.diving or self.shield_locked() or not self._shield_phase():
+        if not jf_config.MATTOCK_SHIELD or not self.diving or self.shield_locked() or agent.character.prop.polymorph or \
+                not self._shield_phase():
             yield False
         shield = self._shield_candidate()
         if shield is None or self._near_hostiles(radius=2):
@@ -5231,6 +5938,11 @@ class DiveLogic:
         if agent.inventory.items.main_hand is not None and agent.inventory.items.main_hand.objs[0].bi:
             self.shield_lock(50)
             return
+        # (the wield's steps rebuilt every Item: the shield picked in the condition is stale and wear() would assert 'nested
+        # containers' -- dig-mix: 3 games, healed by the next try)
+        shield = self._shield_candidate()
+        if shield is None:
+            return
         agent.log(f'MATTOCK_SHIELD: wearing {shield.text!r} (AC {agent.blstats.armor_class}, depth {agent.blstats.depth})')
         agent.inventory.wear(shield)
         agent.log(f'MATTOCK_SHIELD: worn, AC {agent.blstats.armor_class}')
@@ -5255,6 +5967,82 @@ class DiveLogic:
         agent.log(f'MATTOCK_SHIELD: a dig was refused for the shield: taking off {shield.text!r}')
         self.shield_lock()
         agent.inventory.takeoff(shield)
+
+    def square_shield_step(self):
+        """SHIELD_SQUARE (armour3 lane, jf_config): at the castle's crusher square a mattock kit puts the kept shield on -- the best
+        one-handed weapon first (the one fight2 would wield), then the shield. One game move per call; True: a move was spent."""
+        agent = self.agent
+        if not jf_config.SHIELD_SQUARE or not jf_config.MATTOCK_SHIELD or not self.diving or agent.character.prop.polymorph or \
+                not self.mattock_digger():
+            return False
+        shield = self._shield_candidate()
+        if shield is None:
+            return False
+        main = agent.inventory.items.main_hand
+        if main is not None and main.status == Item.CURSED:
+            return False
+        tries = self.__dict__.setdefault('_square_shield_tries', {})
+        key = agent.current_level().key()
+        if tries.get(key, 0) >= 4:
+            return False
+        if main is None or main.objs[0].bi:
+            one_handed = [i for i in flatten_items(agent.inventory.items) if i.is_weapon() and not i.objs[0].bi]
+            best = agent.inventory.get_best_melee_weapon(items=one_handed) if one_handed else None
+            if best is None:
+                return False   # nothing but the mattock to fight with: the shield would leave the hands empty
+            tries[key] = tries.get(key, 0) + 1
+            agent.log(f'SHIELD_SQUARE: wielding {best.text!r} instead of {main.text if main else None!r}')
+            agent.inventory.wield(best)
+            return True
+        tries[key] = tries.get(key, 0) + 1
+        agent.log(f'SHIELD_SQUARE: wearing {shield.text!r} (AC {agent.blstats.armor_class}, HP {agent.blstats.hitpoints}/'
+                  f'{agent.blstats.max_hitpoints})')
+        agent.inventory.wear(shield)
+        # (the line readiness.py reads as 'the armour lane's AC after a wear action' -- MATTOCK_SHIELD: worn, AC n -- and the MS state)
+        agent.log(f'MATTOCK_SHIELD: worn, AC {agent.blstats.armor_class}')
+        from . import prep_log
+        prep_log.force(agent, 'MS')
+        return True
+
+    def fight_shield(self):
+        """SHIELD_FIGHT (armour3 lane, jf_config): fight2 has chosen to melee and the one-handed weapon is in hand -- put the
+        kept shield on first when the fight is worth two moves (this wear and the take-off of the next dig). A mattock digger's
+        shield sits in the pack all dive (dig_with_tool), yet the hits land outside the dig windows (see jf_config). True:
+        a game move was spent wearing it (fight2 re-decides on the next step); False: nothing done."""
+        agent = self.agent
+        if not jf_config.SHIELD_FIGHT or not jf_config.MATTOCK_SHIELD or not self.diving or \
+                agent.character.prop.polymorph or not self.mattock_digger():
+            return False
+        bl = agent.blstats
+        level = agent.current_level()
+        in_dive = level.dungeon_number == Level.DUNGEONS_OF_DOOM and bl.depth <= jf_config.SHIELD_FIGHT_MAX_DEPTH
+        # SHIELD_FIGHT_CASTLE: where MATTOCK_SHIELD's own pass would wear it (the courtyard once the maze is behind us, the Valley)
+        # but a hostile within 2 squares always stops that pass -- and the fights are exactly there
+        if not in_dive and not (jf_config.SHIELD_FIGHT_CASTLE and self._shield_phase()):
+            return False
+        main = agent.inventory.items.main_hand
+        if main is not None and (main.status == Item.CURSED or main.objs[0].bi):
+            return False   # (a two-handed weapon still in hand: fight2's weapon choice is not ours to override)
+        shield = self._shield_candidate()
+        if shield is None:
+            return False
+        near = [m for m in self._near_hostiles(radius=jf_config.SHIELD_FIGHT_RADIUS)
+                if getattr(m[3], 'mmove', 12) > 0 and getattr(m[3], 'mname', '') not in self._PASSIVE_SESSILE]
+        diffs = [getattr(m[3], 'difficulty', 8) for m in near]
+        threat = sum(diffs)
+        if threat < jf_config.SHIELD_FIGHT_MIN_THREAT or max(diffs, default=0) < jf_config.SHIELD_FIGHT_MIN_ONE:
+            return False   # (a jackal pack is no reason to spend two moves)
+        tries = self.__dict__.setdefault('_shield_fight_tries', {})
+        key = level.key()
+        if tries.get(key, 0) >= jf_config.SHIELD_FIGHT_TRIES:
+            return False
+        tries[key] = tries.get(key, 0) + 1
+        agent.log(f'SHIELD_FIGHT: wearing {shield.text!r} against {[m[3].mname for m in near[:4]]} (threat {threat}, AC '
+                  f'{bl.armor_class}, HP {bl.hitpoints}/{bl.max_hitpoints}, depth {bl.depth})')
+        if not agent.inventory.wear(shield):
+            return True   # (refused: no game time passed, but the try is booked and the caller must not loop on it)
+        agent.log(f'SHIELD_FIGHT: worn, AC {agent.blstats.armor_class}')
+        return True
 
     def digging_tool(self):
         inv = self.agent.inventory.items
@@ -6066,7 +6854,7 @@ class DiveLogic:
         tool = self.digging_tool()
         if tool is None or agent.character.prop.polymorph or agent.character.prop.blind or self._tool_blocked():
             return False
-        dis = agent.bfs()
+        dis = self._fresh_bfs()
         if any(dis[p] != -1 for p in exits):
             st['since'].pop(key, None)
             return False
@@ -6577,6 +7365,8 @@ class DiveLogic:
             wet = [self._wet_neighbours(*p) for p in floor if self._diggable_spot(*p, max_wet=8)]
             if jf_config.MEDUSA_HOP:
                 hop = self._hop_action()   # MEDUSA_HOP: across a 1-wide channel to land with a dry square
+                if hop is None and jf_config.MEDB_HOP_STAIRS:
+                    hop = self._hop_action(stairs=True)   # MEDB_HOP_STAIRS: ...or to the land with the '<'
                 if hop is not None:
                     self._escape_act(hop)
                     return True
@@ -6622,6 +7412,8 @@ class DiveLogic:
             return True
         if tool is not None:
             rest_below = GEHENNOM_DIG_REST_BELOW if self.in_gehennom() else DIG_REST_BELOW
+            if jf_config.PREP_REST:
+                rest_below = self._dig_rest_below(rest_below)
             if agent.blstats.hitpoints < rest_below * agent.blstats.max_hitpoints and \
                     not (DIVE_REST and self._in_own_pit()) and not self.xorn_buffer() and not self._mino_alert():
                 self._task('rest before digging')
@@ -6907,9 +7699,52 @@ class DiveLogic:
                     agent.current_level().dungeon_number == Level.DUNGEONS_OF_DOOM:
                 self.castle.on_bottom(key)
 
+    def _lev_guard_step(self):
+        """LEV_GUARD (survival lane, ledger F471): a levitating hero can neither dig down ('You can't reach the floor.' -- 20 tries and the level is
+        marked undiggable) nor take the stairs down ('You are floating high above the stairs.': an AssertionError in agent.move, 5759 of them without a
+        game turn in survival A1 jf1505 s13). That game's MEDUSA_LIFT put the ring of levitation on at Medusa's arrival, the crowded arrival sent it
+        back up the stairs (RETREAT), and nothing took the ring off on the level above. Off Medusa's level and the castle (the lift and the crossing
+        float on purpose; Gehennom waits in try_dig_down): an uncursed levitation ring comes off (as _valley_descend does), anything else (a potion,
+        a cursed ring) is waited out with search(5), for at most LEV_GUARD_MAX turns per level, then the old behaviour. True: a step was spent."""
+        agent = self.agent
+        if not self.levitating() or agent.character.prop.polymorph:
+            return False
+        key = agent.current_level().key()
+        # (a MEDUSA_LIFT float of another level -- the one the RETREAT climbed out of -- is no reason to stay up)
+        if self.on_medusa_level() or (self._lift is not None and self._lift.get('key') == key) or self.castle.active() or \
+                self.in_gehennom():
+            return False
+        bl = agent.blstats
+        st = self.__dict__.setdefault('_lev_guard', {})
+        t0 = st.setdefault(key, bl.time)
+        if bl.time - t0 > jf_config.LEV_GUARD_MAX:
+            return False
+        ring = None
+        if not st.get('cursed') and st.get('tries', 0) < 3:
+            ring = next((i for i in agent.inventory.items if i.category == nh.RING_CLASS and i.equipped and
+                         'levitation' in i.text and i.status != Item.CURSED), None)
+        if ring is not None:
+            st['tries'] = st.get('tries', 0) + 1
+            agent.log(f'LEV_GUARD removing {ring.text!r}: levitating off Medusa and the castle, no dig or stairs down')
+            self._task('levitating: take the ring off')
+            with agent.atom_operation():
+                agent.step(A.Command.REMOVE)
+                if 'What do you want to remove?' in agent.message:
+                    agent.type_text(agent.inventory.items.get_letter(ring))
+            agent.inventory.items.update(force=True)
+            if 'cursed' in agent.message:
+                st['cursed'] = True
+            return True
+        agent.log(f'LEV_GUARD waiting for the levitation to end ({bl.time - t0} turns on this level)')
+        self._task('levitating: wait for it to end')
+        agent.search(5)
+        return True
+
     def descend(self):
         agent = self.agent
         if self._landing_listen_step():
+            return
+        if jf_config.LEV_GUARD and self._lev_guard_step():
             return
         if self.try_dig_down():
             return
@@ -6918,6 +7753,9 @@ class DiveLogic:
                 self._walk_through_traps():
             targets = self.down_targets()
         if not targets:
+            if (jf_config.SQ_CUT_RECOVER or jf_config.SQ_DEAD_DROP) and \
+                    self._sq_cut_recover(self._sq_down_candidates()):
+                return
             if self._stall_descend():
                 return
             self.exploration(None).until(agent, self._budgeted(lambda: bool(self.down_targets()))).run()
@@ -6951,6 +7789,13 @@ class DiveLogic:
             if agent.current_level().key() == key:
                 self._dead_traps.add((key, (y, x)))   # can't go down here (levitating...): don't retry it
             return
+        if jf_config.SQ_STEP_GUARD:
+            # SQ_STEP_GUARD: go_to(stop_one_before) walks to the NEAREST neighbour, which may be one whose step in is a refused squeeze
+            # (a3-base-jf1305 s12): stand on a neighbour that needs none
+            nb = self._legit_neighbour(y, x, only_if_cut=True)
+            if nb is not None and (agent.blstats.y, agent.blstats.x) != nb:
+                agent.go_to(*nb)
+                return
         if not utils.adjacent((agent.blstats.y, agent.blstats.x), (y, x)):
             agent.go_to(y, x, stop_one_before=True)
             return
@@ -6977,6 +7822,14 @@ class DiveLogic:
             # the portal sweep looped on this 51 times without the clock moving
             level.intact_doors[y0, x0] = True
             raise AgentPanic('diagonal step out of a doorway')
+        if jf_config.SQ_STEP_GUARD and 'carrying too much to get through' in agent.message:
+            # SQ_STEP_GUARD: hack.c refused the diagonal squeeze without a turn; remember the pair so down_targets() leaves it
+            # alone until the pack gets lighter (a3-base-jf1305 s12 stepped onto a Dlvl-12 trap door 6,400 times at one turn)
+            weight = agent.inventory.items.total_weight
+            self.__dict__.setdefault('_sq_refused', {})[(key, (int(y0), int(x0)), (int(y), int(x)))] = weight
+            agent._squeeze_refused = (agent.blstats.time, weight)
+            agent.log(f'SQ_STEP_GUARD: the step {(y0, x0)} -> {(y, x)} onto the {what} is a squeeze refused at weight {weight:.0f}')
+            raise AgentPanic(f'squeeze refused onto the {what}')
         if agent.current_level().key() == key and (agent.blstats.y, agent.blstats.x) == (y, x):
             # didn't fall (e.g. "You escape a trap door."): step off so the next try steps on again
             agent.log(f'DIVE {what} did not trigger')
@@ -8218,8 +9071,19 @@ class DiveLogic:
             # -- so we can strike it dead from the square. Drop every scroll that may be one when an
             # Elbereth-ignorer comes within 2 (the kits carry 6-8 unknown scroll types; 12 of 61 hold one).
             from .castle_landing import scare_radius   # LANDING_GUARD: at first sight, not only at 2
+            # MEDB_SCARE_MELEE: on Medusa's level (not the castle: death is not free here) only a monster whose MELEE Elbereth does
+            # not stop (@, minotaur) makes us drop our unknown scrolls for good; a cobra, a naga or a snake pack is answered by the
+            # Elbereth the dig engraves, and the scrolls (the castle's cursed teleport pair among them) stay in the pack
+            ignorer = self._melee_ignores_elbereth if (jf_config.MEDB_SCARE_MELEE and self.on_medusa_level()) \
+                else self._scare_ignores
             near = [m for m in agent.get_visible_monsters()
-                    if max(abs(m[1] - pos[0]), abs(m[2] - pos[1])) <= scare_radius() and self._ignores_elbereth(m[3])]
+                    if max(abs(m[1] - pos[0]), abs(m[2] - pos[1])) <= scare_radius() and ignorer(m[3])]
+            if jf_config.LANDING_SCARE_NARROW:
+                # LANDING_SCARE_NARROW (landing-b lane): the pile of unknown scrolls (7-14% scare monster) only for what Elbereth does
+                # not stop in melee (minotaur, @ humans and elves); a monster that respects Elbereth gets the dust one (72% a
+                # write) from elbereth_rest / castle_landing_b, or is walked away from
+                near = [m for m in near if self._melee_ignores_elbereth(m[3])]
+                adjacent = [m for m in adjacent if self._melee_ignores_elbereth(m[3])]
             trouble = bool(near) or (bool(adjacent) and bl.hitpoints < GEHENNOM_SCARE_BELOW * bl.max_hitpoints)
         else:
             if not adjacent:
@@ -8334,7 +9198,9 @@ class DiveLogic:
         bl = agent.blstats
         level = agent.current_level()
         tool = self.digging_tool()
-        if self._castle_scare() and any(self._ignores_elbereth(m[3]) for m in agent.get_visible_monsters()):
+        if jf_config.SCARE_DIG_BLOCK and tool is not None and bl.time < self._dig_blocked_until:
+            tool = None   # dig_with_tool just failed to start the dig: rest on the scroll instead of spinning on the same keys
+        if self._castle_scare() and any(self._scare_ignores(m[3]) for m in agent.get_visible_monsters()):
             self._scare_threat_turn = bl.time
         if self._castle_scare() and (level.key() in self.undiggable or self.castle.active() or tool is None or
                                       self.levitating()):
@@ -8348,7 +9214,7 @@ class DiveLogic:
             held = turn - (self._scare_drop_turn or turn)
             pending = self.landing_pending()   # LANDING_FOCUS: the crusher's walk is ahead -- a short hold, no HP rest
             if held < jf_config.CASTLE_SCARE_HOLD and \
-                    (any(max(abs(m[1] - y0), abs(m[2] - x0)) <= 2 for m in mons) or
+                    (any(max(abs(m[1] - y0), abs(m[2] - x0)) <= 2 and self._scare_ignores_or_not_lich(m[3]) for m in mons) or
                      turn - getattr(self, '_scare_threat_turn', -10 ** 9) <
                      (jf_config.LANDING_FOCUS_HOLD if pending else 150)):
                 return 'rest'
@@ -8872,12 +9738,14 @@ class DiveLogic:
                 return True
             agent.move(direction)
             return True
-        dis = agent.bfs()
+        dis = self._fresh_bfs()
         reachable = [p for p in stairs if dis[p] != -1]
         if reachable:
             agent.go_to(*min(reachable, key=lambda p: dis[p]))
             return True
-        near = [(self._neighbour_distance(dis, *p), p) for p in stairs]
+        # (SQ_STEP_GUARD: a neighbour whose last step onto the stairs is a refused squeeze does not count)
+        near = [((self._neighbour_distance_step if jf_config.SQ_STEP_GUARD else self._neighbour_distance)(dis, *p), p)
+                for p in stairs]
         near = [(d, p) for d, p in near if d is not None]
         if not near:
             if self._walk_through_traps(climbing=direction == '<'):
@@ -8906,6 +9774,17 @@ class DiveLogic:
                 # no longer plans it, but this direct step did, ~15 times a turn (gen-audit ga-e1-jf46 s3: 9374
                 # refusals on Mines 1 until the camp's CAMP_STAIRS_TURNS gave the '>' up)
                 return False
+        if jf_config.SQ_STEP_GUARD and self._squeeze_cut_from(agent.current_level(), pos[0], pos[1], y, x):
+            # SQ_STEP_GUARD: the same diagonal squeeze, refused before it is tried (F455: coll-l6c-jf1100 s6's Mines '<', 6,500 turns);
+            # another neighbour of the stairs that needs no squeeze is walked to instead
+            lv = agent.current_level()
+            legit = [(dis[ny, nx], int(ny), int(nx)) for ny, nx in agent.neighbors(y, x, shuffle=False)
+                     if dis[ny, nx] != -1 and not self._squeeze_cut_from(lv, ny, nx, y, x)]
+            if legit:
+                _, ny, nx = min(legit)
+                agent.go_to(ny, nx)
+                return True
+            return False
         agent.move(agent.calc_direction(pos[0], pos[1], y, x))
         return True
 
@@ -9364,6 +10243,9 @@ class DiveLogic:
                             agent.log(f'RETURN up stairs at {p} known from their destination {d[0]}')
                         exits.append((int(p[0]), int(p[1])))
         if jf_config.RETURN_DIG and direction == '<' and self._return_dig(exits):
+            return
+        if (jf_config.SQ_CUT_RECOVER or jf_config.SQ_DEAD_DROP) and exits and \
+                self._sq_cut_recover([(int(y), int(x), False) for y, x in exits]):
             return
         if exits and self._take_stairs(exits, direction):
             return

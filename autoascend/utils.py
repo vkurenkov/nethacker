@@ -1,4 +1,5 @@
 import functools
+import re
 from functools import partial, wraps
 from itertools import chain
 
@@ -8,6 +9,19 @@ import numpy as np
 import toolz
 
 from .strategy import Strategy
+
+_RING_HAND = re.compile(r'Which [^,?\n]+, Right or Left\?')   # body_part(FINGER) can be two words ('minor current', 'large scale')
+
+
+def asks_ring_hand(message):
+    """Is the put-on prompt asking which hand? do_wear.c doputon: 'Which %s%s, Right or Left?' with "ring-" for a humanoid form
+    and body_part(FINGER) otherwise -- 'Which ring-finger' for the hero, 'Which foreclaw' in a clawed polymorph form (a disenchanter,
+    a xorn...). The handlers only knew the first; in a clawed form the prompt stayed open and every later key was typed into it
+    (ledger B319). RING_PROMPT_FIX (off) accepts any 'Which <part>, Right or Left?'."""
+    if 'Which ring-finger' in message:
+        return True
+    from . import jf_config
+    return bool(jf_config.RING_PROMPT_FIX) and _RING_HAND.search(message) is not None
 
 
 @nb.njit(cache=True)
@@ -32,6 +46,41 @@ def bfs(y, x, *, walkable, walkable_diagonally, can_squeeze):
                             (abs(dy) + abs(dx) <= 1 or
                              (walkable_diagonally[py, px] and walkable_diagonally[y, x] and
                               (can_squeeze or walkable[py, x] or walkable[y, px])))):
+                        if dis[py, px] == -1:
+                            dis[py, px] = dis[y, x] + 1
+                            buf[size] = (py, px)
+                            size += 1
+
+    return dis
+
+
+@nb.njit(cache=True)
+def bfs_sq(y, x, *, walkable, walkable_diagonally, can_squeeze, squeeze_open):
+    """bfs() with its own squeeze mask (jf_config.BFS_ROCK_SQUEEZE): a diagonal step needs `can_squeeze` or at least one of the two
+    orthogonal squares to be `squeeze_open`. bfs() reads `walkable` for that test, but hack.c test_move/cant_squeeze_thru only
+    refuses a diagonal step when BOTH orthogonal squares are ROCK (IS_ROCK: stone, walls, trees, secret doors/corridors); a trap, a
+    boulder, a monster, water, a door or a forbidden square beside the step does not matter. squeeze_open = every square that
+    is not rock. The loop is bfs()'s, line for line."""
+    dis = np.zeros(walkable.shape, dtype=np.int32)
+    dis[:] = -1
+    dis[y, x] = 0
+
+    buf = np.zeros((walkable.shape[0] * walkable.shape[1], 2), dtype=np.uint32)
+    index = 0
+    buf[index] = (y, x)
+    size = 1
+    while index < size:
+        y, x = buf[index]
+        index += 1
+
+        for dy in [-1, 0, 1]:
+            for dx in [-1, 0, 1]:
+                py, px = y + dy, x + dx
+                if 0 <= py < walkable.shape[0] and 0 <= px < walkable.shape[1] and (dy != 0 or dx != 0):
+                    if (walkable[py, px] and
+                            (abs(dy) + abs(dx) <= 1 or
+                             (walkable_diagonally[py, px] and walkable_diagonally[y, x] and
+                              (can_squeeze or squeeze_open[py, x] or squeeze_open[y, px])))):
                         if dis[py, px] == -1:
                             dis[py, px] = dis[y, x] + 1
                             buf[size] = (py, px)

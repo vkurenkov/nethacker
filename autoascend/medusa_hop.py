@@ -140,8 +140,15 @@ def plan(name, pos, max_cost=12.0):
       comp (ours), path (comp ids), cost (expected tries over the chain), options (the first edge's options sorted
       best p_cross first: [(p_cross, W, launches)])."""
     m = model(name)
+    return plan_to(name, pos, m.dry, max_cost)
+
+
+def plan_to(name, pos, goals, max_cost=12.0):
+    """plan() toward any of the land components `goals` (a set of component ids; MEDB_HOP_STAIRS: the ones that hold a '<').
+    None when `pos` is already on a goal component, on no land, or no chain costs at most max_cost."""
+    m = model(name)
     src = m.comp.get(tuple(pos))
-    if src is None or src in m.dry:
+    if src is None or src in goals:
         return None
     best = {src: (0.0, None)}
     heap = [(0.0, src)]
@@ -150,7 +157,7 @@ def plan(name, pos, max_cost=12.0):
         cost, u = heapq.heappop(heap)
         if cost > best[u][0] + 1e-9:
             continue
-        if u in m.dry:
+        if u in goals:
             goal = u
             break
         if cost > max_cost:

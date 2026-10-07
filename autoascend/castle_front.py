@@ -110,6 +110,9 @@ class FrontDoor:
         self.phase = None            # 'wand' once in the throne room
         self.tower_i = 0             # index into TOWER_ORDER
         self.chest_fail = 0
+        self._commit_until = -1      # CRUSH_WIPE_COMMIT: game turn until which a started fight with a respecter is not interrupted by Elbereth
+        self._unreach_since = {}     # CRUSH_GO_FIX: target -> game turn its unreachability began
+        self._unreach_turn = {}      # CRUSH_GO_FIX: target -> last game turn counted
 
     # ------------------------------------------------------------------ helpers
 
@@ -481,6 +484,14 @@ class FrontDoor:
                 return m
         return near[0]
 
+    def _commit_active(self):
+        """CRUSH_WIPE_COMMIT: we wiped our Elbereth a moment ago to fight a monster that respects it, and are healthy enough to go on."""
+        return int(self.agent.blstats.time) <= self._commit_until and self._hp_frac() >= jf_config.CRUSH_COMMIT_HP
+
+    def _commit_worthy(self, mon):
+        """A respecter worth fighting to the end: not a xorn (4 attacks a round, 100 HP to kill: F347) and not above level 10."""
+        return getattr(mon, 'mname', '') != 'xorn' and getattr(mon, 'mlevel', 0) <= 10
+
     def _attack(self, m):
         agent = self.agent
         _, y, x, mon, _ = m
@@ -491,7 +502,12 @@ class FrontDoor:
             self.tries['unwrite'] += 1
             self._set_state(f'wiping our Elbereth before fighting {getattr(mon, "mname", "?")}')
             agent.engrave('x')
+            if jf_config.CRUSH_WIPE_COMMIT and self._commit_worthy(mon):
+                # CRUSH_WIPE_COMMIT: the wipe is the first half of a fight; _contact must not write the Elbereth again before the blow
+                self._commit_until = int(agent.blstats.time) + jf_config.CRUSH_COMMIT_TURNS
             return True
+        if jf_config.CRUSH_WIPE_COMMIT and self._commit_active() and self._commit_worthy(mon):
+            self._commit_until = int(agent.blstats.time) + jf_config.CRUSH_COMMIT_TURNS   # keep fighting what we committed to
         self._set_state(f'fighting {getattr(mon, "mname", "?")} at {to_map(y, x)}')
         with agent.atom_operation():
             agent.step(A.Command.FIGHT)
@@ -593,7 +609,44 @@ class FrontDoor:
         here = self._pos()
         self._set_state(f'walking {why} {p}')
         path = self._path(here, p)
+        if path and jf_config.CRUSH_GO_FIX:
+            self._unreach_since.pop(p, None)
         if not path:
+            if jf_config.CRUSH_GO_FIX:
+                # CRUSH_GO_FIX: one failure per game turn (a refused boulder push takes none), restarted whenever a path exists, and
+                # the stop needs CRUSH_GO_TURNS turns of it (kf-instr-x4-l6c jf90-s11~s2: 21 failures inside one turn ended the
+                # crusher of a hero at 104/104 HP with 69 kills)
+                now = int(self.agent.blstats.time)
+                since = self._unreach_since.get(p)
+                if since is None:
+                    since = self._unreach_since[p] = now
+                    self.tries[('unreachable', p)] = 0
+                fresh = now != self._unreach_turn.get(p)
+                if fresh:
+                    self._unreach_turn[p] = now
+                    self.tries[('unreachable', p)] += 1
+                if now - since > jf_config.CRUSH_GO_TURNS and self.tries[('unreachable', p)] > 20:
+                    self._stop(f'{p} unreachable for {now - since} turns')
+                    return False
+                if not fresh:
+                    # the attempt made earlier in this very game turn (a refused boulder push, a step into a wall) took no game
+                    # time: let a turn pass (fight what is next to us, else search) instead of repeating it until the
+                    # 'turn inactivity' guard fires (f19-smoke1 jf90-s11~s2: 199 identical steps inside one turn)
+                    near = [m for m in self._hostiles_adjacent() if map_char(*to_map(m[1], m[2])) != '}']   # (moat monsters are left alone)
+                    if near:
+                        return self._attack(self._pick_target(near))
+                    self._set_state(f'letting a turn pass: {p} unreachable')
+                    self.agent.search()
+                    return True
+                if self._v3() and self.tries[('unreachable', p)] in (1, 10):
+                    self._log(f'no path {here} -> {p} (turn {now})')
+                if self._v3() and self._push_toward(p):
+                    return True
+                if self._boulder(p) and self.dive.castle._smash_boulder():
+                    return True
+                if p[0] <= 4:
+                    return self.dive.castle._approach(p)   # explores (or digs) the west maze to the courtyard
+                return self._fight_or_wait()
             self.tries[('unreachable', p)] += 1
             if self._v3() and self.tries[('unreachable', p)] in (1, 10):
                 rows = []
@@ -1101,6 +1154,8 @@ class FrontDoor:
         self._mile('tower', name)
         if pos == chest:
             return self._chest_step()
+        if jf_config.CHEST_OPEN_FIX and self._kick_chest_pending(chest, pos):
+            return True
         if self._objects_at(chest):
             self._mile('chest_seen', f'{name} {chest}')
             return self._go(chest, f'to the {name} tower chest')
@@ -1165,6 +1220,8 @@ class FrontDoor:
             self._log(f'chest check failed: {e}')
             return True
         content = chest.content
+        if content is not None and content.locked and jf_config.CHEST_OPEN_FIX:
+            return self._open_locked_chest()
         if content is not None and content.locked:
             self.tries['force'] += 1
             if self.tries['force'] > 25:
@@ -1192,6 +1249,112 @@ class FrontDoor:
         inv.items.update(force=True)
         if self._wand_in_pack() is not None:
             self._mile('wand', self._wand_in_pack().text)
+        return True
+
+    def _open_locked_chest(self):
+        """CHEST_OPEN_FIX: the locked tower chest under us, best way first (castle_inner._unlock_chest and castle_treasury._open do
+        the same): a key / lock pick / credit card (lock.c pick_lock: quiet, nothing breaks); else a weapon that #force can use is
+        wielded (a blade pries 2 x its large-monster die per turn and breaks 1 time in ~125 per failed turn unless it is an artifact,
+        lock.c forcelock; the next best blade takes over when one broke) and #force pries or bashes; else the chest is kicked from a
+        neighbouring square (dokick.c: the lock breaks 1 kick in 5, wake_nearby each kick)."""
+        from . import castle_treasury as T
+        agent = self.agent
+        inv = agent.inventory
+        self.tries['force'] += 1
+        if self.tries['force'] > 80:
+            self.chest_fail += 100
+            return True
+        tools = [i for i in inv.items if i.is_unambiguous() and i.object.name in T.UNLOCKERS]
+        if tools and self.tries['chest_unlock'] < 8:
+            tool = min(tools, key=lambda i: T.UNLOCKERS.index(i.object.name))
+            letter = inv.items.get_letter(tool)
+            self.tries['chest_unlock'] += 1
+
+            def responses():
+                if 'What do you want to use or apply?' not in agent.single_message:
+                    return
+                yield letter
+                for _ in range(3):
+                    msg = agent.single_message or ''
+                    if 'In what direction?' in msg or 'direction' in msg.lower():
+                        yield '.'
+                        continue
+                    if ('unlock it?' in msg or 'pick its lock?' in msg) and '[yn' in msg:
+                        yield 'y'
+                        return
+                    return
+
+            self._set_state(f'unlocking the chest with {tool.text!r}')
+            with agent.atom_operation():
+                agent.step(A.Command.APPLY, responses())
+            self._log(f'chest unlock {self.tries["chest_unlock"]}: {(agent.message or "")[-120:]!r}')
+            inv.items.update(force=True)
+            return True
+        wielded = inv.items.main_hand
+        if (wielded is None or not T._can_force_with(wielded)) and self.tries['wield_blade'] < 4 and \
+                not (wielded is not None and wielded.status == wielded.CURSED):
+            from .exceptions import AgentPanic
+            blades = sorted((i for i in inv.items if T._blade(i) is not None and i.status != i.CURSED),
+                            key=lambda i: (-T._blade(i), T._artifact(i)))
+            others = [i for i in inv.items if T._can_force_with(i) and i.status != i.CURSED and i not in blades]
+            cands = blades + others
+            if cands:
+                cand = cands[min(self.tries['wield_blade'], len(cands) - 1)]
+                self.tries['wield_blade'] += 1
+                self._set_state(f'wielding {cand.text!r} to force the chest open')
+                try:
+                    inv.wield(cand)
+                except (AssertionError, AgentPanic) as e:
+                    self._log(f'wield failed: {e}')
+                inv.items.update(force=True)
+                return True
+            wielded = inv.items.main_hand
+        if wielded is not None and T._can_force_with(wielded) and self.tries['force_try'] < 50:
+            self.tries['force_try'] += 1
+            self._set_state('forcing the chest lock')
+            with agent.atom_operation():
+                agent.step(A.Command.FORCE)
+                if 'force its lock?' in agent.message or 'force its lid?' in agent.message or '[ynq]' in agent.message:
+                    agent.type_text('y')
+            self._log(f'force: {agent.message[:160]!r}')
+            if 'broke!' in (agent.message or ''):
+                inv.items.update(force=True)
+            return True
+        return self._kick_off_chest()
+
+    def _kick_off_chest(self):
+        """CHEST_OPEN_FIX, the last resort: step off the chest onto a free tower square; _kick_chest_pending kicks it from there
+        and the next steps walk back onto it to look again."""
+        if self.tries['chest_kick'] >= 25:
+            self.chest_fail += 100
+            return True
+        agent = self.agent
+        pos = self._pos()
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)):
+            q = (pos[0] + dx, pos[1] + dy)
+            if self._walkable(q) and not self._monster_at(q) and not self._boulder(q) and \
+                    any(q in TOWERS[t][4] for t in TOWERS):
+                self._set_state(f'off the chest to {q} to kick it open')
+                self._kick_at = pos
+                y, x = to_bot(*q)
+                agent.direction(agent.calc_direction(agent.blstats.y, agent.blstats.x, y, x))
+                return True
+        self.chest_fail += 100
+        return True
+
+    def _kick_chest_pending(self, chest, pos):
+        """CHEST_OPEN_FIX: next to the chest we stepped off to kick (see _kick_off_chest)."""
+        kick_at = getattr(self, '_kick_at', None)
+        if kick_at is None or kick_at != chest:
+            return False
+        if max(abs(pos[0] - chest[0]), abs(pos[1] - chest[1])) != 1:
+            return False
+        self._kick_at = None
+        self.tries['chest_kick'] += 1
+        y, x = to_bot(*chest)
+        self._set_state('kicking the chest')
+        self.agent.kick(y, x)
+        self._log(f'chest kick {self.tries["chest_kick"]}: {(self.agent.message or "")[-120:]!r}')
         return True
 
     def _test_wand(self, wand):

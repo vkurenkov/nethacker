@@ -66,6 +66,8 @@ LEATHER_DRUM = O.from_name('leather drum')
 EARTHQUAKE_DRUM = O.from_name('drum of earthquake')
 CAMERA = O.from_name('expensive camera')
 BUGLE = O.from_name('bugle')
+MAGIC_FLUTE = O.from_name('magic flute')
+MAGIC_HARP = O.from_name('magic harp')
 # BUGLE_SCARE: the mercenaries a bugle wakes and turns hostile (music.c awaken_soldiers: is_mercenary)
 _MERCENARIES = frozenset(('soldier', 'sergeant', 'lieutenant', 'captain', 'watchman', 'watch captain'))
 HORNS = frozenset((TOOLED_HORN, FROST_HORN, FIRE_HORN, HORN_OF_PLENTY))
@@ -78,7 +80,15 @@ TONAL = frozenset(O.from_name(n) for n in ('tooled horn', 'frost horn', 'fire ho
 def is_tonal(item):
     """A tool that may play the passtune: one of its possible types is tonal (an unknown 'horn' may still be a horn
     of plenty; castle_crusher learns that from a play)."""
-    return item.category == nh.TOOL_CLASS and bool(item.objs) and bool(set(item.objs) & TONAL)
+    ok = item.category == nh.TOOL_CLASS and bool(item.objs) and bool(set(item.objs) & TONAL)
+    if ok and jf_config.INSTRUMENT_GLYPH:
+        # INSTRUMENT_GLYPH: the item's own object glyph (obs['inv_glyphs'] / the map) names the exact tool -- tools are not
+        # shuffled in the arena's glyph ids -- so a horn of plenty is no instrument and a 'harp' is one of the two harps
+        from . import instruments
+        names = [instruments.glyph_name(g) for g in (item.glyphs or [])]
+        if names and all(n is not None for n in names):
+            return any(n in instruments.TONAL_NAMES for n in names)
+    return ok
 DRUMS = frozenset((LEATHER_DRUM, EARTHQUAKE_DRUM))
 
 G_GENO = 0x0020
@@ -438,15 +448,36 @@ def instrument_kind(agent, item):
             return 'scare' if jf_config.BUGLE_SCARE and bugle_ok(agent) else None
         if item.object == CAMERA:
             return None if item.text in state(agent).empty else 'camera'
+        if jf_config.LANDING_MAGIC and item.text not in state(agent).empty:
+            # LANDING_MAGIC: a known magic instrument is a weapon (see jf_config): sleep / charm / a cold or fire ray
+            if item.object == MAGIC_FLUTE:
+                return 'sleep'
+            if item.object == MAGIC_HARP:
+                return 'charm'
+            if item.object == FROST_HORN:
+                return 'frost'
+            if item.object == FIRE_HORN:
+                return 'fire'
         return None
     if objs <= HORNS:
-        what = state(agent).horn_glyphs.get(item.glyphs[0] if item.glyphs else None)
+        g = item.glyphs[0] if item.glyphs else None
+        what = state(agent).horn_glyphs.get(g)
+        if what is None and jf_config.INSTRUMENT_GLYPH and g is not None:
+            # INSTRUMENT_GLYPH: the item's own glyph names the horn -- a tooled horn is known to scare from the start (the
+            # wishes lane's harness: the same horn identified 21/448 passes against 18/448 unidentified, +3.8 points of landing
+            # survival, mino_guard step 1b instead of the late 8b), a horn of plenty to do nothing; frost / fire stay 'horn'
+            # (a 6d6 ray at the minotaur is still the point of blowing one)
+            from . import instruments
+            what = _GLYPH_HORN.get(instruments.glyph_name(g))
         if what == 'scare':
             return 'scare'
         if what is not None:
             return None   # a horn of plenty, or a ray horn the game has named by now
         return 'horn'
     return None
+
+
+_GLYPH_HORN = {'tooled horn': 'scare', 'horn of plenty': 'plenty'}
 
 
 def bugle_ok(agent):
@@ -491,6 +522,10 @@ def keep_kind(agent, item):
             return 'camera'
         return None
     if objs <= HORNS:
+        if jf_config.INSTRUMENT_GLYPH and item.glyphs:
+            from . import instruments
+            if instruments.glyph_name(item.glyphs[0]) == 'horn of plenty':
+                return None       # INSTRUMENT_GLYPH: nothing to keep a horn of plenty for
         return 'horn'
     return None
 

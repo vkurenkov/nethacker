@@ -28,7 +28,7 @@ Everything here is from NetHack 3.6.6 (castle.des, sp_lev.c, mkmaze.c, trap.c, z
 import nle.nethack as nh
 from nle.nethack import actions as A
 
-from . import jf_config
+from . import jf_config, utils
 from .exceptions import AgentChangeStrategy, AgentFinished, AgentPanic
 from .glyph import G, SS
 from .level import Level
@@ -202,6 +202,24 @@ class CastlePassage:
             for k in [k for k in self._tries if str(k[0] if isinstance(k, tuple) and k else k).startswith('route')]:
                 del self._tries[k]
             self._log(f'level detected: {key} (depth {self.agent.blstats.depth})')
+            if jf_config.POTION_LOG:
+                self._log_potions()
+
+    def _log_potions(self):
+        """POTION_LOG (log only): what the bot knows about every potion in the pack at the castle's recognition -- text, count,
+        the number of types it can still be, P(levitation), and the candidate names when there are at most 6."""
+        try:
+            from . import power
+            rows = []
+            for it in self._items():
+                if it.category != nh.POTION_CLASS:
+                    continue
+                objs = [getattr(o, 'name', '?') for o in it.objs]
+                rows.append(f'{it.text}|n{len(objs)}|lev{power.p_of(it, {power.LEV_POTION}):.2f}|' +
+                            (','.join(sorted(objs)) if len(objs) <= 6 else '*'))
+            self._log('POTIONS ' + '; '.join(rows) if rows else 'POTIONS none')
+        except Exception as e:   # a log line must never end the passage
+            self._log(f'POTIONS log failed: {e!r}')
 
     def note_level(self):
         """DiveLogic.update, every step: coming up from Gehennom into the Dungeons means the castle (the
@@ -385,6 +403,8 @@ class CastlePassage:
             if action == 'puton':
                 out.append(('amulet' if item.category == nh.AMULET_CLASS else 'ring', item))
             elif action == 'quaff':
+                if not self._quaff_ok(item):
+                    continue   # CASTLE_NO_BLIND_QUAFF: an unknown potion is not drunk for a lift here
                 out.append(('potion', item))
             elif action == 'wear':
                 out.append(('boots', item))
@@ -397,6 +417,44 @@ class CastlePassage:
             # 'zap' (a known wand of cold) and a known frost horn: _cold_source; 'engrave': the bot's own
             # wand_engrave_identify
         return out
+
+    def _crusher_route_live(self):
+        """A tonal instrument is carried and the crusher has neither finished nor destroyed the bridge: its tune cannot be
+        played while hallucinating, confused or stunned (castle_crusher._cant_play), and a lift pulls the hero off its square."""
+        crusher = getattr(self.dive, 'crusher', None)
+        if crusher is None or not jf_config.PASSTUNE_CRUSHER:
+            return False
+        try:
+            return not crusher.done and not crusher.destroyed and crusher._instrument() is not None
+        except Exception:
+            return False
+
+    def _quaff_ok(self, item):
+        """CASTLE_NO_BLIND_QUAFF (see jf_config): may the plan drink this potion for a lift? A potion that is known (levitation,
+        polymorph) always may; an unknown one only where the lift can pass (castle CASTLE_QUAFF_DEPTH), when the price groups
+        and elimination have made it likely levitation and harmless, and when no crusher route would be spoiled."""
+        if not jf_config.CASTLE_NO_BLIND_QUAFF or item.is_unambiguous():
+            return True
+        from . import power
+        depth = int(self.agent.blstats.depth)
+        p_lev = power.p_of(item, {power.LEV_POTION})
+        danger = power._danger(item, power._POTION_DANGER)
+        why = None
+        if depth < jf_config.CASTLE_QUAFF_DEPTH:
+            why = f'depth {depth} < {jf_config.CASTLE_QUAFF_DEPTH}: a timed lift ends in the Valley'
+        elif p_lev < jf_config.CASTLE_QUAFF_MIN_P:
+            why = f'P(levitation) {p_lev:.2f} < {jf_config.CASTLE_QUAFF_MIN_P}'
+        elif danger > jf_config.CASTLE_QUAFF_MAX_DANGER:
+            why = f'danger {danger:.2f} > {jf_config.CASTLE_QUAFF_MAX_DANGER}'
+        elif self._crusher_route_live():
+            why = 'the crusher route is alive'
+        seen = self.__dict__.setdefault('_quaff_skipped', set())
+        if why is not None:
+            if item.glyphs[0] not in seen:
+                seen.add(item.glyphs[0])
+                self._log(f'NO_BLIND_QUAFF: not quaffing {item.text!r} ({why})')
+            return False
+        return True
 
     def _wish_route_first(self):
         """WISH_ROUTE_FIRST (castle-landing; off): while WISH_TELEPORT_ROUTE still wants a wish (tele_route.route_wish:
@@ -500,7 +558,7 @@ class CastlePassage:
             if 'What do you want to put on?' not in agent.single_message:
                 return
             yield letter
-            if 'Which ring-finger' in agent.single_message:
+            if utils.asks_ring_hand(agent.single_message):
                 yield 'r'
 
         try:
@@ -1244,6 +1302,27 @@ class CastlePassage:
             agent.last_bfs_step = -1
         self._tries.pop('wielded', None)   # the pick-axe is in hand now
         return True
+
+    def route_peek(self):
+        """landing-b lane (LANDING_OUTRUN, LANDING_LICH): what _route_step would do next, without doing it -- ('step' | 'dig' |
+        'attack' | 'boulder', (map x, map y)) -- or None when the route is not in use (flag off, a hero already out of the maze,
+        no digging tool, the route given up) or finds no way. Reads the state only (no turn, no RNG)."""
+        agent = self.agent
+        if not jf_config.LANDING_ROUTE or self._pos()[0] >= 0 or self._tries.get('route_off') or \
+                self.dive.digging_tool() is None:
+            return None
+        plan = self._route_plan()
+        if plan is None:
+            return None
+        n, _ = plan
+        mx, my = n[0] - COL0, n[1] - ROW0
+        if self._monster_at(mx, my):
+            return 'attack', (mx, my)
+        if agent.glyphs[n[1], n[0]] in G.BOULDER:
+            return 'boulder', (mx, my)
+        if agent.current_level().walkable[n[1], n[0]]:
+            return 'step', (mx, my)
+        return 'dig', (mx, my)
 
     def _approach(self, spot, route=False):
         """Walk (exploring the west maze if need be) to a courtyard square."""

@@ -372,6 +372,10 @@ LIZARD_KEEP = True
 # AC per castle arrival 0.47 -> 0.12, castle arrivals 84 vs 79 of 186 (n.s.), depth >= 25 reached 128 vs 127, 26 wear passes in
 # 60 kits cost 3 turns each (max 10) and no HP; what is left is blocked by a known-cursed worn piece (0.6 AC) or not in the pack.
 # ARMOR_UP also logs 'ARMOR_UP slot ...' / 'ARMOR_UP wear pass done: AC n' lines.
+# Replicated on the final code (R466 dig-arms2, R480 dig-mix with MATTOCK_SHIELD and ARMOR_VALUE): castle arrivals 84, 88, 89
+# against 79, 79, 78 of 186; AC at Medusa -0.41 +-0.11 / -0.35 +-0.10 paired. Castle harness (wishes lane R453, 448 instrument kits):
+# 12 -> 18 passes. A worn suit is swapped only for a gain of 2+ AC (the swap takes ~12 turns at a worse AC); no pass while
+# polymorphed.
 ARMOR_UP = True
 # eat poisonous corpses (not only when Weak) at HP >= max(POISON_EATS_MIN_HP, 60%) during the tour
 POISON_EATS = False
@@ -1297,7 +1301,13 @@ CL_FLEE = False
 # the 105 cand-g castle arrivals carried a bugle (ItemPriority keeps horns, drums and cameras, not bugles). Lift suite
 # with a bugle added to every kit (225 games an arm): minotaur deaths 55 -> 46, passes 17 -> 18; parked until the
 # dive keeps bugles.
-CL_BUGLE_WEST = False
+# Minotaur lane (R538, R544, R547; castle-kf-bugle-x4 / x4h = the 112 real castle arrivals x 4 level salts with an unidentified bugle wished, dev salts 1-4 and
+# held-out salts 5-8, 448 games an arm, kit-clustered paired): in the 251 / 261 games with a minotaur awake in the west maze at t0 the crusher square 45.0 -> 71.7%
+# (+25.2 pt, t +6.1) dev and 43.3 -> 70.1% (+27.7 pt, t +7.4) held-out, crush_over +27.4 / +19.0 pt (t +7.7 / +6.1), throne +10.5 / +7.8 pt, killed by a
+# minotaur -23.5 / -25.1 pt (t -6.0 / -6.6), pass30 3 -> 7 and 6 -> 8 (pooled 9 -> 15, +10/-4); in the 197 / 187 games with none (min-r2) nothing moves
+# (pass30 9 -> 9 and 12 -> 11). The woken garrison costs nothing measurable: the games that cross the bridge in both arms reach the throne / tower / pass30 alike
+# (pass30 30 -> 30), and the 121 crossings that only exist with the flag convert 4% to pass30 against 10.5% (F472). 0.0 for bugle-less kits.
+CL_BUGLE_WEST = True
 
 # --- power-route (TC_*, power_route.py): teleport control + a level-teleport trigger from what the dive carries ---
 # TC_ROUTE (ON): learn which ring gives teleport control from the game's prompts ('Where do you want to be
@@ -1665,7 +1675,7 @@ PREP_EXCAL_XL = 0
 # MEASURED (R178, vs cand-g, 90 fresh pinned games jf43-48): Excalibur carried at castle arrival 22 of 41 vs 5 of 36,
 # READINESS -0.0002 (t -0.4, neutral), progress -0.037 (t -2.45): the pre-pick dips on Dlvl 2-4 reshuffle the Mines
 # trip. Off.
-PREP_EXCAL_DIVE = False
+PREP_EXCAL_DIVE = True
 PREP_EXCAL_DIST = 30
 PREP_EXCAL_CALM = 7
 # PREP_MID: the XP-earning middle game. With a digging tool in the pack (the way out), each main-line level from
@@ -2308,12 +2318,13 @@ MEDUSA_REENTRY_FLOODS = 0       # climb only after this many floods on the islan
 MEDUSA_REENTRY_HP = 0.5         # ...or below this share of max HP (climb whatever the flood count)
 MEDUSA_REENTRY_SCARE = True     # Elbereth before the walk to the '<' when two ravens are next to us and it is 2+ steps away
 MEDUSA_REENTRY_LOOP = 400       # actions the layer takes in a row before it hands control back (see reentry_strategy)
-MEDUSA_REENTRY_MAX = 10
+MEDUSA_REENTRY_MAX = 30         # was 10 (medusa-b, R509): in the real-kit harness the 16 of 212 games that used up 10 climbs passed 4/16 on the
+                                # final dig lottery; with 30 the same games pass 14/16 (an entry into the hole skips the level 1 time in 4)
 MEDUSA_REENTRY_STEPS = 8
 MEDUSA_REENTRY_COMMIT = 3        # a walk this near the '<' is finished, not held, when the window closes
 MEDUSA_REENTRY_REST = 0.9
 MEDUSA_REENTRY_REST_MAX = 400
-MEDUSA_REENTRY_TOTAL = 2500     # the standoff and the cycle give up this many turns after the first landing on Medusa's level
+MEDUSA_REENTRY_TOTAL = 9000     # the standoff and the cycle give up this many turns after the first landing on Medusa's level (was 2500; 10-16 climbs take 1000-2500)
 MEDUSA_REENTRY_BLIND_MAX = 60   # turns waited above for sight to return before the hole is entered blind
 MEDUSA_REENTRY_HOLE_STEPS = 40
 MEDUSA_REENTRY_M4 = False
@@ -2532,10 +2543,9 @@ WISH_SINGLE_EARLY = False   # dev (harness): single_wish chooses as an early wis
 WISH_SINGLE_V2 = True
 # WISH_V2_GDSM (off): single_wish_v2 may also wish for a 'blessed greased +3 gray dragon scale mail' when the pack already holds a horn
 # (the crusher route is there and armour class multiplies it) -- only with ARMOR_UP on as well (without it the bot never wears a
-# carried piece). UNMEASURED end to end when this was written: V2_VAL_GDSM is the AC gradient of the identified-horn arm (AC <= -2 8.3%)
-# and the metrics' causal test (instrument kits forced to AC -4: 12 -> 25 of 448), not an arm of its own; the arm (ledger I326, runs
-# w10-armor1 igdsm vs ictl) decides. Stake is tiny either way (a horn kit's lamp wish: ~0.0005 passes per game), so it stays off until
-# measured.
+# carried piece). MEASURED (ledger R453, runs w10-armor1 igdsm vs ictl, 448 instrument kits, paired): on kits that already hold a horn-like
+# instrument the mail adds nothing (13 -> 12 passes), on the other instrument kits 5 -> 15, overall 18 -> 27 (+18/-9, p 0.12), so
+# V2_VAL_GDSM is now 0.0 and the candidate never wins; the flag stays only so that a different arm can switch the branch back on.
 WISH_V2_GDSM = False
 # WISH_V2_SHADOW (off, dev): log, once per game at the first step, what single_wish_v2 and the phase-1 single_wish would wish for the
 # pack as it is ('WISHSRC [shadow] ...'), without wishing -- the per-kit decision of both policies on the same harness games.
@@ -2684,6 +2694,13 @@ PREEMPT_SAFE = True
 # before (the Mines' gnomes: 48 prompts in the corpus; DWARF_HUNT wants a peaceful dwarf's pick-axe).
 ATTACK_GUARD = True
 ATTACK_GUARD_CAP = 3
+# SHOP_BLIND_GUARD (off; the same family as ATTACK_GUARD): buy_food / buy_instrument (BUY_FOOD and INSTRUMENT_KEEP are on in cand-l5)
+# walk between the shelves of a shop while the hero is blind, hallucinating, confused or stunned -- their layer outranks
+# wait_out_unexpected_state_strategy, which waits those states out, and none of the two checks them. A blind hero cannot see the
+# shopkeeper ('Wait! There's something there you can't see! It gets angry!' -- no 'Really attack?' question to refuse), so harness
+# supply-minetown seed 1 (a yellow light exploded in Corsh's hardware store at T9745) ends with 'killed by Mr. Corsh; the shopkeeper'
+# 14 turns later in both arms of every run. On: the two strategies stand down (paying for what was picked up still runs).
+SHOP_BLIND_GUARD = True
 
 # --- landing lane (lane 1 "landing", readiness program phase 2, 2026-10-01 night; dive_logic._landing_direct_update, ...) ---
 # All OFF in the commit that adds them. Evidence (harness castle-k-instr-x4 = 112 real castle arrivals + an unidentified tonal
@@ -2753,6 +2770,121 @@ LANDING_FOCUS_HOLD = 12
 # which layer spends the turns. Plays exactly as without it.
 STRAT_TRACE = False
 
+# --- landing-b lane (lane 12 "landing-b", readiness program phase 2, 2026-10-02; castle_landing_b.py) ---
+# All OFF in the commit that adds them. The same castle landing as the landing lane's (west maze -> crusher square), for kits with
+# a tonal instrument (the crusher armed, PASSTUNE_CRUSHER); measured on castle-kf-instr-x4 against cand-l5 + the four landing flags.
+# (A known-potion-of-speed quaff at the landing was asked for and cancelled by main: R471 15/447 vs 18/448, n.s.; not built.)
+# LANDING_LICH (off): a covetous master lich / arch-lich teleports next to the hero 1 move in 5 (wizard.c tactics: mnexto; 1 in 33
+# while it flees) and never walks (monmove.c m_move: covetous monsters skip the movement code), then casts at 14% a move
+# (mcastu.c: summon nasties 3 spells in ml, aggravate 2, touch of death 5 in 25 for an arch-lich) with castmu's mspec_used >= 2:
+# one cast per 2 turns. A lich that is scared by Elbereth (monmove.c onscary: liches respect it; dochug skips mattacku, so no
+# touch of death, destroy armor, curse, weaken, stun or psi bolt) flees rnd(10) turns (1 in 7: rnd(100)) and teleports only 1 move
+# in 33 meanwhile; undirected spells (summon) it still casts. Mode 1: engrave Elbereth when a lich is next to us (seen, or the
+# 'It touches you / Something casts a spell' of an invisible one) and no Elbereth-ignorer is, then go on. Mode 2: also before a
+# dig of the maze route (4 turns standing: a dig is not interrupted by a monster that Elbereth scares, hack.c monster_nearby)
+# while a lich was seen in the last LANDING_LICH_MEMORY turns. Mode 3: also step / dig on from an Elbereth read back intact.
+# MEASURED with LANDING_OUTRUN mode 2 ('ol'; ledger R493, R508, F433), paired per game, kit-clustered, vs cand-l6's flags: castle-kf-instr-x4 (dev
+# salts, 448 games) crusher square 241 -> 282 (+9.2 pt, t +5.8), crush_over 122 -> 138 (t +2.3), pass30 21 -> 22; castle-kf-instr-x4h (HELD-OUT level
+# salts 5-8, 448 games) square 224 -> 271 (+10.5 pt, t +6.2, +58/-11), crush_over 121 -> 135 (t +2.5), throne 79 -> 85, pass30 20 -> 21; pooled 896
+# games: square 465 -> 553 (+9.8 pt, t +8.3, sign test p 3e-15), crush_over 243 -> 273 (+3.4 pt, t +3.0), throne +0.5 (n.s.), pass30 41 -> 43 (n.s.).
+# Alone (mode 3, the 88 lich-context games of the dev suite): square 29 -> 36 (t +1.8). The squares it adds are weak arrivals and a lich
+# castle is lost at the square anyway (crush_over 2 of 16 squares against 57-62% elsewhere): it buys arrivals, not passes.
+LANDING_LICH = True
+LANDING_LICH_MODE = 3        # the measured mode (R1 / R2 'ol'); 1 and 2 are the weaker ones of the ablation
+LANDING_LICH_MEMORY = 40
+LANDING_LICH_ENGRAVES = 8       # at most this many Elbereths a game against a lich
+# LANDING_OUTRUN (off; needs LANDING_ROUTE): while the walk out of the west maze is ahead and the route's next square is a plain
+# step (no dig, no monster on it), take it instead of leaving the turn to fight2 (which waits for the hostile to come: 878 fight2
+# turns in the first 40 turns of 400 landings had nobody adjacent, the hero stood still in 494 of them). A monster that moved
+# cannot melee in the same move (monmove.c dochug case 1) and speed-9 to 12 monsters never catch a walker (mon.c mcalcmove), so a
+# walking hero is meleed only on the turns a faster monster gets a second move (a minotaur, speed 15: 25% of turns, not 125%).
+# Mode 1: only when no hostile is next to us. Mode 2: also with hostiles next to us, if the step ends out of reach of every
+# awake hostile in view. The step is refused when its square is next to a hostile (it would be attacked on arrival). Mode 3: also
+# the route's DIG (apply + 3 dig moves) while no hostile is within 3 squares, instead of fight2's wait for the monster to arrive
+# (the effort is kept when the monster interrupts: dig.c 'You continue digging').
+# MEASURED (R493; castle-kf-instr-x4, 448 paired games): mode 2 alone square 241 -> 262 (+4.7 pt, t +3.05, +33/-12), crush_over 122 -> 131 (t +1.6),
+# pass30 21 -> 22; with LANDING_LICH see there (held-out confirmed). It acts only for a crusher-armed (tonal instrument) kit in the castle's west
+# maze. Half of the squares it adds arrive below 50% HP and the crusher rests them to >= 80% before the walk-in (F433), but those heroes are the
+# weak ones (XL / HPmax / AC) and die later to xorns and soldiers: pass30 stays flat.
+LANDING_OUTRUN = True
+LANDING_OUTRUN_MODE = 2       # the measured mode (R1 'o2', R2 'ol'); 1 = only with nobody next to us, 3 = also the route's dig
+# LANDING_ELBDIG (off; needs LANDING_ROUTE): the maze route's dig (apply + 3 dig moves, 3 turns standing) with a monster within 3
+# squares that respects Elbereth and none that ignores it: write Elbereth first (one move, a typo 28% of the time, read back and
+# written again), dig from it, then walk on. A scared monster neither attacks nor interrupts the dig (hack.c monster_nearby:
+# !onscary; dochug: no mattacku while scared) and flees rnd(10) turns; fight2 would hit it instead (and a hit on a scared monster
+# wipes the engraving: mon.c setmangry) and an unscared one stops the dig on every turn ('You stop digging').
+# MEASURED (ledger R516) only inside the bundle 'oepl' = OUTRUN mode 3 + ELBDIG + SCARE_NARROW + LICH mode 3: vs cand-l6's flags square +14.6 pt
+# (dev, 367 games, t +7.2) / +14.3 pt (held-out, 366 games, t +5.5), but vs 'ol' (OUTRUN mode 2 + LICH mode 3) on the held-out salts only +3.0 pt
+# (t +1.5), crush_over equal, pass30 19 -> 14 and killed by a minotaur +4.0 pt (t +2.7): no better than 'ol', hence OFF (no ablation of the parts).
+LANDING_ELBDIG = False
+# LANDING_SCARE_NARROW (off): CASTLE_SCARE (dive_logic.gehennom_scare) drops the pile of unknown scrolls when an Elbereth-ignorer is
+# within 2 -- and its idea of one includes every breather and caster (RANGED_MONSTERS), invisible 'unknown' attackers and, with
+# 'adjacent monster and HP < 50%', ANY monster: 97 of 259 landings with neither a minotaur nor a lich dropped it within 30 turns (earth
+# elementals, sharks, frost giants, vortices, xorns), 187 of 373 with a minotaur, 43 of 64 with a lich (lnd-final x4.c+x4h.c); among
+# those landings 39% / 26% / 9% reached the crusher square. The pile holds the hero on its square (castle: up to CASTLE_SCARE_HOLD, with
+# LANDING_FOCUS 12 turns after the last 'ignorer' in view and while anything is within 2) with a 7-14% chance that one of the scrolls is
+# scare monster. With the flag the pile is only for monsters that ignore Elbereth in melee (dive._melee_ignores_elbereth: the minotaur,
+# @ humans and elves, an unseen attacker that hurt us on an Elbereth); the others get Elbereth (elbereth_rest, castle_landing_b) or the walk.
+LANDING_SCARE_NARROW = False
+# LANDING_MAGIC (off; needs the minotaur guard, MINO_GUARD): a KNOWN magic instrument is used on a minotaur in view (mino_guard
+# 'magic' plans, opp_items.instrument_kind 'sleep' / 'charm' / 'frost' / 'fire'; TOOL_GLYPH_ID names the type from the glyph). music.c
+# do_improvisation: a magic flute with charges (rn1(5,4) = 4-8) 'produces soft music' and put_monsters_to_sleep(XL*5) sleeps every
+# monster with distu < XL*5 (6 squares at XL 8) that fails sleep_monst(d(10,10) turns, resist(TOOL_CLASS) at MR 0: never) -- the
+# minotaur sleeps ~55 turns, one blow; a magic harp charm_monsters((XL-1)/3+1 = 3 -> adjacent only) tames what fails resist() (a
+# minotaur: never) -- a 15HD pet; a frost / fire horn with charges fires a ray of rn1(6,6) = 6-11 d6 (avg 30) along the direction asked
+# (the Valkyrie resists the cold bounce; fire only with room for it to die out). Why: the census of real instruments (instruments lane
+# F408, 180 base games) has 17 of 45 magic (fire horn 6, frost horn 4, magic harp 4, magic flute 3) and 16 bugles against 6 tooled horns;
+# a magic type was never used as a weapon (the guard's HORN_SCARE handles tooled horns and unknown horns only) while the minotaur kills
+# 27% of the instrument-kit landings (castle-kf-instr-x4: 120 of 448).
+# MEASURED (ledger R510, R515), minotaur-context landings of the 112 real castle kits whose instrument is a magic flute / magic harp / frost
+# horn / fire horn (by kit, 6 charges; suites castle-kf-instrmag-x4 and, on held-out level salts, castle-kf-instrmag-x4h), paired per game,
+# kit-clustered: dev 251 games killed by a minotaur 121 -> 59 (t -5.8), square 92 -> 115 (t +3.9), crush_over 37 -> 66, pass30 4 -> 10; held-out 172
+# games 91 -> 41 (t -6.5), square 61 -> 90 (t +5.2), crush_over 19 -> 53, pass30 0 -> 8 (+8/-0); pooled 423 games: square +11.1 pt (t +5.9), crush_over
+# +12.8 pt (t +5.8), throne +8.6 pt (t +4.7), pass30 4 -> 18 (0.95% -> 4.26%, +14/-0, t +3.6). Games where no magic blow was played are the same in
+# both arms. Real mix: 38% of found instruments are magic (F408), so about +0.7 pt pass30 on the instrument-kit population.
+LANDING_MAGIC = True
+
+# --- minotaur lane (lane 22 "minotaur", readiness program phase 2, 2026-10-02..07; mino_guard.py, castle_landing_b.py, opp_items.py) ---
+# Both flags below are OFF in the commit that adds them. The minotaur is first seen at 1-2 squares in the castle's dark west maze (m_move heads for the
+# hero's true square from anywhere: set_apparxy), and an awake one that reaches a hero without a stopper kills her in 2-3 turns (3d10+3d10+2d8 a round).
+# Elbereth does not stop it (monmove.c onscary); a tooled horn or a bugle does (music.c awaken_monsters / awaken_soldiers: every monster within distu <
+# XL*10 that fails resist() flees with no timer, a minotaur has MR 0), and a frost / fire horn without charges plays as a tooled horn (do_improvisation:
+# do_spec && spe > 0 false). The recovery is the weak point: monmove.c dochug gives a fleeing monster with fleetim 0 and FULL HP a 1/25 chance a move to
+# regain courage (~20 turns), so a scared minotaur hovering round the crusher square walks back and hits for 35-56 before the guard (which waited
+# HORN_REFRESH = 15 turns, or its arrival next to us) blows again.
+# The lane's big find is not a flag of this block: bugle kits (the commonest real instrument, 16 of 45) had no minotaur scare on the castle at all;
+# CL_BUGLE_WEST (above) gives them one (R538, R544).
+# HORN_REBLOW (off; the lane recommends ON): blow the scare instrument again the moment the nearest awake minotaur, seen within HORN_REBLOW_NEAR squares,
+# is closer than it was a turn or two ago -- a scared one moves away or hovers, one that regained courage comes in -- instead of waiting out HORN_REFRESH.
+# Model (dev/minotaur/exp7.py, recovery 1/25 a move): attack rounds in 200 turns round the crusher square 4.1 with cand-l7's guard, 0.23 with the re-blow on
+# 'within 2 squares and closer' (25 blows), 0.24 within 3 squares (105 blows). Harness (dev/minotaur/mkplan.py plans r1c, r2; kit-clustered paired, the 251
+# minotaur-context games of a suite): a tooled horn in every kit (castle-kf-horn-x4): crusher square 186 -> 194 (+2.7 pt, t +2.2), crush_over 106 -> 126
+# (+7.9 pt, t +2.9, +28/-8), throne 51 -> 50, pass30 13 -> 15 (t +1.0), killed by a minotaur 66 -> 65 (the games kept alive at the square die later to
+# other killers); a bugle in every kit with CL_BUGLE_WEST (castle-kf-bugle-x4, against min-r0's arm): square 180 -> 185 (t +1.3), crush_over 99 -> 113
+# (+4.9 pt, t +1.6, +26/-12), throne 45 -> 40, pass30 7 -> 8, minotaur kills 76 -> 72. Flag-off identity: 112 of 112 harness games replay the control's
+# action lists, on the merged tree (min-r2) and on this one (min-r3).
+HORN_REBLOW = True
+HORN_REBLOW_NEAR = 2
+# LANDING_WANDID (off; NOT adopted; castle_landing_b.py, needs PASSTUNE_CRUSHER and a tonal instrument like the other landing-b layers): engrave-test the
+# unknown wands (castle_power._engrave_test, ~2 turns each) at the landing, before the route goes on, when nothing hostile is within LANDING_WANDID_QUIET
+# squares and no minotaur is in view. Why: castle_power.arrival_step -- the engrave tests of the arrival drill -- is called from castle_logic.plan_step,
+# the bottom of the preempt chain, and the crusher's approach never gets there: 0 engrave tests in the 251 minotaur-context games of lb-r1 x4.ol, so the
+# guard zaps its unknown wands blind (63 of 251 games). Those zaps: wand of speed monster 11 (10 of the 11 games died to the minotaur: 4/3 faster),
+# polymorph 8 (0 died), sleep 8 (2), slow 5 (3); the kits that hold a speed / make-invisible / create-monster wand (27 of 112) reach the crusher square
+# 33% against 50%, while 16% hold an unknown sleep / death / teleportation wand. A tested wand has its type list narrowed (best_zap and the known-wand
+# steps of the guard use it); a known speed monster wand is never zapped at a minotaur. Result: the mechanism works (unknown guard zaps 94 -> 55 on
+# castle-kf-flute-x4, a wooden flute in every kit) but moves nothing: flute suite, 251 minotaur-context pairs: square 113 -> 116, minotaur kills 141 -> 139,
+# pass30 3 -> 6 (t +1.6); the mixed castle-kf-instr-x4, all 448 kits (min-r2): start 418 -> 413 (t -2.3: the two turns of a test cost five games before the
+# route starts), crush_over 145 -> 152 (t +1.2), pass30 24 -> 20 (t -1.0). 67 of the 183 tests of min-r1c were cut by a layer that preempts (ARMOR_UP
+# wearing a helm or boots 17, fight2, Crusher.strategy); dev/minotaur/data/wandid_cuts.patch retries them (unmeasured).
+LANDING_WANDID = False
+LANDING_WANDID_MAX = 6
+LANDING_WANDID_QUIET = 3
+# Dropped in this lane, code removed again (still in the branch history, c2bca28..56b547e): MINO_KITE (a Fast hero steps away from an awake minotaur so that it
+# has to move and cannot melee, dochug case 1: chase model +4 pt, harness null -- square -0.9 pt t -0.5, minotaur kills -3.7 pt t -1.8 on the flute suite; the
+# dark maze hides the dead ends), MINO_STRIKE (strike a minotaur frozen by a magic flute: a swing wakes it 1 time in 10, two of two smoke games died),
+# MINO_SCARE_ZAP and MINO_EMPTY_SCARE (never measured).
+
 # --- arrivals lane (phase 2, 2026-10-02): more live castle arrivals; every flag below is OFF in the commit that adds it ---
 # EAT_SWEEP (off): after a fight, walk to the fresh corpses of our own kills and eat them. Measured on the cand-l5 gate / jf650-659
 # base: the hero's kills leave ~7,200 nutrition per game (monst.c cnutrit x corpse chance) and she eats <= 3,550 of it; with
@@ -2786,9 +2918,12 @@ REST_STICKY_TURNS = 300
 
 # --- armour lane (phase 2; wear / keep logic; ledger F382, R423): AC at the castle arrival ---
 # Castle arrivals (cand-k, 112): AC mean 0.7, median 0; the crusher route passes 6.8% at AC <= -2 against 2.0% above (F380,
-# kit-clustered, z 4.0), and AC at Medusa moves the pass by 0.029 per point (F067). dev/digbench.py on 186 real dig starts:
-# ARMOR_UP alone takes 0.3-0.4 AC; the next block is the mattock kits (32% of dig starts, AC +2.3 at the castle against -0.4 for
-# pick-axe kits): the dive drops the starting +3 small shield (4 AC) because a dwarvish mattock is two-handed.
+# kit-clustered, z 4.0; causal: every kit forced to AC -4 doubles it, R433). CAUSAL AC response on 186 real dig starts at AC -4 /
+# own / +4 (F402, dev/ac_poke_report.py): P(reach Medusa) 86 / 78.5 / 77% (+1.1 points per AC point), P(castle | Medusa) 52.5 /
+# 52.7 / 54.9% (nothing), P(castle) +0.3 points per point (n.s.) -- AC pays in the first dive levels and at the castle, not from
+# Medusa to the castle (the observational 65% vs 51% step there was kit quality). dev/digbench.py: ARMOR_UP alone takes
+# 0.3-0.4 AC; the next block is the mattock kits (32% of dig starts, AC +2.3 at the castle against -0.4 for pick-axe kits): the
+# dive drops the starting +3 small shield (4 AC) because a dwarvish mattock is two-handed.
 # MATTOCK_SHIELD (off): the shield is KEPT, not dropped, when the dive digs with a mattock (dive_logic.dig_with_tool, dig_toward;
 # ItemPriority._split keeps it in the pack), and it goes back on where the mattock is not in use: on the castle level once the
 # west maze is behind us or the visit is 60 turns old (the castle's own dig routes -- west dig, boulder smash, door digging --
@@ -2806,6 +2941,698 @@ MATTOCK_SHIELD_LOCK = 60
 # worn. It acts wherever wear_best_stuff / the item priority run (the tour's gather_items; the dive with ARMOR_UP).
 ARMOR_VALUE = True
 
+# --- forensics lane (phase 2, 2026-10-02; dev/forensics/*): bugs found by reading full dev-seed game logs; every flag OFF in the commit that adds it ---
+# BFS_ROCK_SQUEEZE (off): agent.bfs refuses a diagonal step between two squares that are not `walkable` once the pack weighs more
+# than 600 (utils.bfs: `can_squeeze or walkable[py, x] or walkable[y, px]`). hack.c test_move only refuses it when BOTH orthogonal
+# squares are ROCK (cant_squeeze_thru: IS_ROCK = stone, walls, trees, secret doors/corridors; 'You are carrying too much to get
+# through'). A trap, a boulder, a monster, a closed door, a pool or a forbidden square beside the step is no rock, yet the plain rule
+# counts it as one, so a plate-mail hero (610 worn) boxed in by a trap on its only orthogonal exit has 'reachable=1' for good:
+# coll-base-jf1102 s10 stood 9,300 turns (T10500-19800) on the Mines-5 square (19,8) between walls with a level teleporter
+# north of it and floor on both diagonals, dead to a soldier ant in the end; UNSQUEEZE cannot drop worn plate mail (essential
+# 610 > 540). With the flag the squeeze test of utils.bfs_sq reads `walkable | (seen & ~wall & ~stone)` (update_level marks the
+# blank squares beside the hero as seen stone: first version of the flag let those count as open and the game refused 18 steps in
+# one replay, 'You are carrying too much to get through'); after a refusal in the game (agent._squeeze_blocked) the plain rule is
+# back for SQUEEZE_REFUSED_TURNS. Not in Sokoban.
+BFS_ROCK_SQUEEZE = False
+
+# LYCAN_GEAR (off; ledger B324): a lycanthrope's forced change into its beast (1/80 per turn, allmain.c) drops the worn armour, the
+# shield and the weapon on the floor (break_armor/drop_weapon; the pack's load too when were_unload fires), and nothing walks back for
+# the pile: the dive never runs gather_items, the tour only inside its exploration, and the escape digs leave the level. Dev corpus
+# (834 unique cand-l5-family games): 89 infected, 55 changed form (castle band 29% vs 55% clean), AC ends >= 4 worse in 10 of 38 games
+# with a change and AC 10 (stripped) at death in 9 of them. lycan_gear.py: back in human form, same level, no hostile within
+# LYCAN_GEAR_RADIUS, HP >= LYCAN_GEAR_HP, at most LYCAN_GEAR_TURNS of human time after the last drop (the beast spell, 500-999 turns, does not
+# count): walk to the newest drop square, pickup_and_drop_items, wear_best_stuff, wield_best_melee_weapon (squares that are unreachable
+# are struck off; given up after LYCAN_GEAR_TRIES entries that moved nowhere or LYCAN_GEAR_SPEND turns spent in the layer).
+# Replays (dev/forensics/lg_report.py): jf850 s4 (starves on Dlvl 3 with AC 10) fetched helm and shield, AC 6 -> 2, and went on to Dlvl 18.
+LYCAN_GEAR = False
+LYCAN_GEAR_TURNS = 600
+LYCAN_GEAR_HP = 0.4
+LYCAN_GEAR_RADIUS = 6
+LYCAN_GEAR_TRIES = 30
+LYCAN_GEAR_SPEND = 250
+LYCAN_GEAR_LEGS = 12     # entries towards one square before it is struck off
+
+# CORPSE_NAME_GUARD (off; forensics lane, from the medusa-b report): agent._update_level_corpses takes the monster's name out of the kill message
+# ('You kill the student of stones!') and looks it up with MON.from_name -> glyph/monster.py id_from_name, which ASSERTS on an unknown name. A
+# shapeshifter in a player-monster form ('The arch-lich turns into a student of stones!'; vagrant, dresser, reconnoiterer, joshu, brigand, pilferer,
+# magician, exhumer ... are the rank titles x_monnam prints for player monsters) or a message fragment ('rmor catches fire and burns') ended the
+# update with an AssertionError and left the corpse list stale. Dev corpus: 96 bot logs of 51 distinct games (98 assertions in 18,324 unique
+# games, 0.3%). With the flag the name is skipped and logged ('CORPSE_NAME_GUARD: no monster called ...').
+CORPSE_NAME_GUARD = True
+
+# SCARE_DIG_BLOCK (off; forensics lane, from the medusa-b report): dive_logic._scare_hold chose 'dig' on a scare monster scroll although dig_with_tool had
+# just failed to start the dig (no prompt: 'You can't do that while carrying so much stuff.' when Overtaxed, or an apply prompt that refuses the tool's
+# letter) and set _dig_blocked_until; _scare_hold_loop then spun on the same keys with no game turn passing until the 200-step 'turn inactivity'
+# assertion (about 200 wasted steps, caught and restarted). Dev tracebacks: 11 in the non-gate harness logs, 1 in the 18,324 full games. With the flag
+# _scare_hold treats the tool as absent while _dig_blocked_until runs, so the hold falls back to resting on the scroll.
+SCARE_DIG_BLOCK = True
+
+# CHECK_ITEMS_SKIP (off; forensics lane, ledger F436): 53 of 834 unique cand-l5-family games (6.4%) loop on 'AgentPanic: Monster on a next tile when
+# moving' >= 100 times (castle band 36% against 55%, 479,000 turns between first and last panic); in 38 of them (72%, dev/forensics/sessile_types.py)
+# the most frequent goto target of the STATUS heartbeats IS the blocked square: inventory.check_items walks to the nearest unchecked item square, an
+# item lies under a floating eye / mold / jelly, the bump raises the panic, the sessile memory forgets the monster after 150 (1000) unseen turns and
+# the item glyph pulls the bot back (supply-base-jf603 s8: a floating eye at (7,70), 15,000 turns on Dlvl 1; the random-walk breaker never changes
+# the target). With the flag a bump at the target itself, by a sessile monster (floating eye, mold, jelly, acid blob, gas spore), keeps that square
+# off check_items' list for CHECK_ITEMS_SKIP_TURNS; any other monster is left alone. Only the list of check_items is touched: the BFS and every
+# other strategy are as before, so no way is closed (unlike SESSILE_LOOP, which closes the blocker's square for the BFS and was a coin flip in
+# R318/R319/R416). Replays of 8 type-A loop games: bump panics 1464 -> 16 (jf603 s8), 1514 -> 262, 845 -> 29, 710 -> 20, 1703 -> 242, 812 -> 143,
+# 942 -> 767 (jf847 s3: the loop moved to open_visit_search, a type-B loop), see the ledger result.
+CHECK_ITEMS_SKIP = False
+CHECK_ITEMS_SKIP_TURNS = 5000
+
+# --- instruments lane (phase 2, 2026-10-02; bot/autoascend/instruments.py): more castle arrivals with a tonal instrument ---
+# Every flag below acts only when a tonal glyph (the exact type: tools are unshuffled in the arena's glyph ids, U306/U308) is on the
+# map or in a shop, or a tonal item is in the pack: a game without one replays the base byte-identically (dev/instr_census.py
+# triggers lists the games that can differ; a3, a FULL set, jf840: 14 of 15 msgs files identical, the 15th leaves the base at
+# the first lane event, game turn 13826).
+# Ground truth, 165 base games (dev/instr_truth.py over JF_TRUTH runs idt-base-jf79..84, iyg-base-jf115/116, instr-base-jf840..842;
+# ledger F363): a tonal instrument lay on a visited level (Dlvl 1-4, the Gnomish Mines, shop shelves) or was acquired in 18% of the
+# games and the bot carried one out of 7%. 14 lay on shop shelves in 12 games (1 bought: gold 0-35 against quotes of 20-100 zm, four
+# of them in TOOL shops, two behind a pick-axe), 13 on the floor (6 picked up; the others seen while the dive or the Mines camp
+# travelled and never approached, or out of sight), and 2 of the 8 instruments carried to the castle in 345 base games were
+# horns of plenty (no tune).
+#
+# INSTR_LOG (off; logging only, a game plays exactly as without it): 'INSTR ...' lines in the dev bot log -- every instrument glyph
+# the map shows (first sighting per square, with the task running), every instrument the bot has looked at with the item
+# knapsack's verdict (count) or the shelf price, and every change of the instruments in the pack with the messages around it.
+INSTR_LOG = False
+# INSTRUMENT_PICK (off; instruments.pick_strategy, a layer of global_logic's shop block): a tonal instrument in view is walked to and
+# taken when the pack holds none, at a calm moment (no hostile within 7, HP >= INSTRUMENT_PICK_HP of the maximum and no HP lost in the
+# dive logic's recent history, not Weak, not levitating, no hallucination, blindness, stun or confusion), outside shops, within
+# INSTRUMENT_PICK_DIST steps, on Dungeons/Mines levels above INSTRUMENT_PICK_MAX_DEPTH, only while the dive runs.
+# gather_items runs only inside the tour's exploration (explore1), so an instrument seen while the dive or the Mines camp travels
+# was never approached (a harp on the way out of Mines 2, a magic harp seen on Dlvl 4 in the dive, ...).
+# The detour is optional, so it waits for a quieter moment than the dive does: instr-a6-jf844 s6 started a 16-step walk to a wooden
+# flute on Dlvl 10 at HP 66/105, 8 turns after a raven, a quantum mechanic and blindness, met a mountain centaur with a wand of
+# sleep and died there (base: the same game dug down and reached Dlvl 27). The first version asked for half the HP only.
+# The walk is short on purpose: of the 7 walks in the lane's arms (instr-a4 / a6) five were 1-7 steps (an item next to the dive's path
+# that the dive and the Mines camp never take), and the one of 16 steps ended in a death. A diversion that kills 1 time in 100 costs
+# more progress (~0.4 per death) than an instrument adds (~2% of a pass, ~0.2 progress).
+INSTRUMENT_PICK = False
+INSTRUMENT_PICK_DIST = 10
+INSTRUMENT_PICK_MAX_DEPTH = 20
+INSTRUMENT_PICK_HP = 0.75
+# INSTRUMENT_SQUEEZE (off; ItemPriority._split): the tonal instrument is kept under UNSQUEEZE's / SQUEEZE_OUT's drop to the squeeze cap
+# (550/590) like the wands, rings and amulets of SQUEEZE_KEEP. jf841 s4: 'UNSQUEEZE: boxed in (1 squares) carrying 706.4; a squeeze
+# reaches 13: dropping to 550' left a harp, two potions and a unicorn horn on the floor of Minetown (the dive never gathers them
+# again); the instrument's slot in the order comes after the thrown daggers and the food.
+INSTRUMENT_SQUEEZE = False
+# INSTRUMENT_INSIDE (off; inventory.buy_instrument): a hero who is already inside a shop (a hole dug on the level above drops her in)
+# buys the instrument with a digging tool in the pack -- the shopkeeper only bars the DOOR to a pick-axe (shk.c u_entered_shop).
+# jf83 s13 (base): fell into Sipaliwini's general store on Dlvl 4 with 190 gold and a pick-axe, stood on a 67 zm harp (cap 70) and
+# did not buy it: buy_instrument refuses while a digging tool is carried. (INSTRUMENT_SHOP covers it too, with the higher cap.)
+INSTRUMENT_INSIDE = False
+# INSTRUMENT_SHOP (off; instruments.shop_strategy, in global_logic's shop block before buy_food): the instrument-only part of the
+# supply lane's shop machinery inside the lane's own module -- a tonal glyph on a shop square is walked to (the price shows when we
+# stand on it), the instrument bought up to INSTRUMENT_SHOP_MAX zm (also by a hero inside the shop with a digging tool), and with
+# INSTRUMENT_SELL the pack's potions/scrolls/wands/rings/amulets worth least to us are sold to a shop that buys them
+# (supply.plan_sales / sell_offer, budget: at most 10 milli-passes of loss) when the gold falls short. Harness: a 100 zm magic harp
+# (base cap 70: left), a junk pack sold for it, a hero with a pick-axe inside the shop. A hardware (tool) shop buys only tools, so
+# its instruments need gold from elsewhere (4 of the 13 shop cases): not covered.
+INSTRUMENT_SHOP = False
+INSTRUMENT_SELL = False
+INSTRUMENT_SHOP_MAX = 140     # highest unit price paid (harp / frost / fire horn: base 50 -> 67-100 zm at CHA 7-10, 133 at CHA <= 5)
+# INSTRUMENT_GLYPH (off; opp_items.is_tonal / instrument_kind / keep_kind, inventory._instrument_for_sale): the item's own object glyph
+# names the exact tool -- a horn of plenty, a drum or a whistle is no instrument for the drawbridge tune, so INSTRUMENT_KEEP stops
+# carrying a horn of plenty as "the instrument" (a1 jf840 s14: the floor glyph said "horn of plenty" at distance 1, the bot took the
+# horn, carried it to the castle and learned there that it plays no tune; 2 of 11 random "horn"s are plenty), buy_instrument skips a
+# shelf whose glyph said so (harness instr-shop-plenty: with INSTRUMENT_BUY_MAX 140 the base paid 100 zm for one), and a horn whose
+# glyph says tooled horn scares from the start (mino_guard step 1b instead of the unknown horn's late 8b; the wishes lane measured +3.8
+# points of landing survival, castle-k-real-x4 + one horn: identified 21/448 passes, 'a horn' 18/448). Not TOOL_GLYPH_ID: only the
+# instrument decisions ask; nothing else about tools changes (the two compose).
+INSTRUMENT_GLYPH = True
+# INSTRUMENT_PREFER (off; instruments.RANK): which instrument to take, buy, keep and play when more than one is on offer. The crusher
+# passes 5.9% of tooled-horn kits, 2.8% of flute kits, 1.7% of harp kits and 1.56% of bugle kits (cand-l5, metrics F374 / R467: a blown
+# horn scares, the PASSTUNE_HORN_XORN / _PRESS flags), so: tooled horn, then frost / fire horn, flute, harp = bugle. ItemPriority keeps the best
+# instrument (the first rule used to keep the carried one, then the lightest: a flute before a horn), a better one than the pack's is
+# still picked up or bought (INSTRUMENT_PICK / SHOP), and castle_crusher plays the best. An unidentified 'horn' counts as the mean of
+# its tonal types (the glyph, INSTRUMENT_GLYPH, makes it exact).
+INSTRUMENT_PREFER = True
+# --- potions lane (phase 2, lane 14; ledger F4xx): what the castle does with unidentified potions, and knowing them earlier ---
+# CASTLE_NO_BLIND_QUAFF (off): the castle's passage plan (power.passage_plan -> CastlePassage._plan -> castle_cross.early_potion,
+# the stranded try, CFP_PRUSH) drinks EVERY unknown potion that may be levitation, in a chain, at the first quiet moment of the
+# landing (CL_POTION_EARLY). A potion of levitation is 42 of 908 potions (4.6%), so each blind quaff is a lift 1 time in 22 and
+# the other 21 are: sleeping 4.6% and paralysis 4.6% (nomul(-rn1(10, 25)): 25-34 helpless turns, potion.c peffects),
+# hallucination 4.4% (rn1(200, 600): 600-799 turns, during which the bot cannot name a minotaur, and the crusher cannot play a
+# tune: music.c asks 'Improvise?' only while not Stunned/Confused/Hallucinating), blindness 4.4% (250-449 turns), confusion 4.6%
+# (16-22), booze 4.6% (3d8), sickness 4.6% (-3..-6 on a random attribute and d10 HP), polymorph 1.1% (the armour breaks), acid.
+# The lift itself converts nothing: the cand-l5 harness (castle-kf-potlev-x4: 112 real kits + one unidentified uncursed potion of
+# levitation, 448 games) floats 220 heroes and passes 0 (R409: 0/157 at castle 29), the lifted hero lives a median 19 turns (sharks
+# 57, xorns 45, minotaurs 25 of 221). And a timed lift (10-149 turns, potion.c) can only end in the Valley (castle depth + 1): a
+# pass needs castle 29. With the flag a potion that is not KNOWN to be levitation is not quaffed by the castle plan unless
+# (a) the castle is CASTLE_QUAFF_DEPTH (29) or deeper, (b) the price groups / elimination leave P(levitation) >= CASTLE_QUAFF_MIN_P
+# (a 200-zm potion is levitation 34%, speed 34%, enlightenment 16%, full healing 8%, polymorph 8%: nothing that kills), (c) the
+# danger-weighted risk of what it may be is at most CASTLE_QUAFF_MAX_DANGER (power._POTION_DANGER), and (d) no crusher route is
+# alive (a tonal instrument carried, the crusher neither done nor destroyed: a lift pulls the hero off the crusher square and
+# hallucination, confusion or stun make it unable to play the tune). Known potions (levitation, polymorph, healing) are untouched,
+# as are the last-resort quaff at critical HP and the Medusa / Valley quaffs.
+# MEASURED (ledger R495, 228 paired real-kit games that quaff, castle-kf-real-x4, cand-l6b flags): NOT better and NOT recommended
+# ON -- alive past 1000 turns 51 vs 65 (the held-still hero on Elbereth lives longer than the one that acts), pass30 2 vs 1,
+# Valley 7 vs 10, mean log(1+turns) -0.06 [-0.33, +0.22]; it helps at castle 29 (alive>100 30 vs 21, 49 pairs) and hurts at castles
+# 25-28 (alive>1000 36 vs 54, 179 pairs), and nothing converts without a route item. In the instrument kits the castle plan quaffs
+# in 7 of 448 games (LANDING_CRUSH_FIRST holds the tests), so it can change 7 games there.
+CASTLE_NO_BLIND_QUAFF = False
+CASTLE_QUAFF_DEPTH = 29
+CASTLE_QUAFF_MIN_P = 0.25
+CASTLE_QUAFF_MAX_DANGER = 0.5
+# ID_SELL_WALK_FIX (off; needs ID_SELL): id_engine.sell_id_step walks to a free shop square and returns; the layers under it run
+# one action before the preempt hooks look again (agent.preempt), supply.scan steps along the shelves, the next call finds the
+# hero off the free square and walks back -- 39 calls in the id-sell preset (trace: 'at (6,70) -> free (5,69) dist 1' repeated),
+# then 'no free square reached after 40 moves' adds 2 to sell_fail, three times, and ID_SELL_MAX_FAIL 6 switches the strategy off
+# after 3 scrolls (supply lane F409: rings, wands and potions, tested last, are never priced). With the flag the exchange happens
+# in the same call that reached the square. Second defect, same flag: the free square can be the doorway or the shopkeeper's post
+# (level.shop_interior is a sticky, dilated mask that keeps them when the door was not yet seen walkable): a drop there gets no offer
+# and the old code counted a failure and never asked that item again on the level (a real game, jf1150 s0 Dlvl 2: three scrolls and
+# a wand on the open door). With the flag the squares next to any door and the squares that gave no offer are off the list, the item is
+# asked again elsewhere, and only more than 8 such squares count as a failure.
+ID_SELL_WALK_FIX = False
+# RING_PROMPT_FIX (off; ledger B319): the put-on handlers (castle_logic._put_on_ring, castle_cross x3, power_route, tele_route,
+# dive_logic) answer 'Which ring-finger, Right or Left?' only. do_wear.c doputon asks 'Which %s%s, Right or Left?' with "ring-" for a
+# humanoid form and body_part(FINGER) otherwise: in a clawed polymorph form (a disenchanter after a ring of polymorph or a wand
+# zap) it is 'Which foreclaw, Right or Left? [rl]'. The prompt stayed open, every later key (polymorph zaps, quaffs, digs) was typed
+# into it, and the game died in a zero-time loop ('turn inactivity', 30 repeats at one game turn; castle-kf-real-x4 jf79-s1~s1 with a
+# known potion of levitation added). utils.asks_ring_hand accepts any 'Which <part>, Right or Left?' with the flag on.
+RING_PROMPT_FIX = True
+# POTION_LOG (off, log only): one 'CASTLE POTIONS ...' line when the castle is recognised -- every potion of the pack with the number
+# of types it can still be, P(levitation) and (up to 6) the candidate names: the arrival kit knowledge the PREP line cannot show
+# (its 'bid' keeps candidate lists of at most 4, and a 200-zm group has 5). Draws no random number and takes no game action.
+POTION_LOG = False
+# --- end potions lane ---
+# --- armour3 lane (phase 2, wave 2): the shield in the dive's fights ---
+# SHIELD_FIGHT (off; needs MATTOCK_SHIELD): a mattock digger takes the +3 small shield off for every dig (dig.c: a dwarvish mattock
+# is two-handed, wield_tool refuses it under a shield) and, with MATTOCK_SHIELD, keeps it in the pack until the castle. But the dive
+# does not spend its exposure digging: a dwarvish hero's hole takes 2 + 4 dig turns (dig.c dig(): effort += 10 + rn2(5) + abon() +
+# spe - erosion, DOUBLED every turn for a dwarf; > 50 = pit, > 250 = hole), and in 186 harness dives only 14 of 595 monster hits above
+# Dlvl 20 landed inside a dig window; the rest land in melee, Elbereth work and walks -- above all against the @ class (elves,
+# soldiers: they ignore Elbereth, so dive_logic fights them: 21 of the 37 deaths above Medusa in the 186 dives: 18 elves, 3 soldier-class). A pick-axe digger keeps the shield on
+# for all of it. With the flag, when fight2 chooses to melee a threat (the near hostiles' difficulties sum to SHIELD_FIGHT_MIN_THREAT
+# within SHIELD_FIGHT_RADIUS squares) and the one-handed weapon is already in hand, the shield goes on first (1 move: do_wear.c, a small
+# shield has delay 0); the next dig takes it off again through dig_with_tool (1 move). At most SHIELD_FIGHT_TRIES wears a level, only
+# above SHIELD_FIGHT_MAX_DEPTH (Medusa's level and the castle have their own dig/shield logic).
+# MEASURED (harness, paired by kit and salt, the pinned-clock tree with the flag vs without; a3-run1 + a3-run2): 60 mattock dig kits x 7
+# salts (420 pairs) P(reach Medusa) +2.1 pt [-1.0, +5.2] (+22/-13, sign p .175); with the 122 + 122 elf-pair kits (E2: two Grey-elves
+# next to the hero at Dlvl 11, E3: three) 664 pairs: reach Medusa +2.7 pt [-0.3, +5.9] (+51/-33, p .063), died above Medusa -2.6 pt
+# (+34/-51, p .082), castle arrivals -0.8 pt [-4.3, +2.8] (n.s.); only the 335 pairs where it fired (84% of the E games, 25% of the
+# M games): reach Medusa +5.1 pt [-0.6, +11.3]. The AC oracle (-4 from the start) gives +7.1 pt reach Medusa (p .003) and no castle gain
+# either (F402: AC helps the early dive, not Medusa -> castle). Inert on kits that dig with a pick-axe. Optional, low risk.
+SHIELD_FIGHT = False
+SHIELD_FIGHT_MIN_THREAT = 6
+SHIELD_FIGHT_MIN_ONE = 5   # ... and at least one of them this hard (monst.c difficulty: Woodland-elf 6, Green-elf 7, Grey-elf 8, hill orc 4)
+SHIELD_FIGHT_RADIUS = 3
+SHIELD_FIGHT_MAX_DEPTH = 20
+SHIELD_FIGHT_TRIES = 3
+# SHIELD_FIGHT_CASTLE (off; with SHIELD_FIGHT): the same wear in the castle courtyard (past the west maze, or 60 turns into the visit)
+# and in the Valley -- dive_logic._shield_phase, where MATTOCK_SHIELD's shield_up already wants it but refuses while any hostile is
+# within 2 squares, i.e. during the crush, the garrison and the walk-in. The castle's digs (door, boulder) still take it off through
+# shield_off after a refusal.
+SHIELD_FIGHT_CASTLE = False
+# SHIELD_SQUARE (off; needs MATTOCK_SHIELD): the shield goes on at the castle's crusher square. MATTOCK_SHIELD's shield_up wears it
+# only when no hostile is within 2 squares and, with the mattock in hand, after wielding a one-handed weapon whose text says
+# 'uncursed' or 'blessed' -- the starting 'a +1 long sword' says neither (objnam.c implicit_uncursed), the moat's sea monsters are
+# within 2 squares of the bank in most landings, and the square's Elbereth / tune work never melees: in the C.B castle run (144
+# mattock kits, a3-run1) the shield was on at the square in 31 of 75 games; of the 44 without it 36 still held the mattock, 27 of
+# them with a plain '+1 long sword'. With the flag castle_crusher._crush_phase, standing on its Elbereth (or when none can be
+# written), wields the best one-handed weapon fight2 would use (1 move) and puts the shield on (1 move) before the tune.
+# MEASURED (a3-run2, the same 144 mattock castle kits per arm, paired; B = base, SQ = this flag, SQS = this flag + MATTOCK_SHIELD_SWORD,
+# O = the AC oracle -4 from the start): shield on at the first tune/open/crush milestone B 45%, SQ 91%, SQS 91%; crusher funnel
+# square 75/75/75 (O 85), crush_over 42/45/48 (O 53), throne 23/24/25 (O 31), pass30 6/7/7 (O 8). SQS vs B: crush_over +4.2 pt
+# [+0.7, +7.6] (+7/-1, sign p .070), died to a minotaur -3.5 pt (0/-5, p .062), alive > 1000 turns +2.8 pt [-1.4, +9.0], pass30 +0.7 pt
+# (+2/-1, n.s.). The square count does not move: CASTLE_WEST_DIG digs east out of the west maze with the mattock in both hands, so the
+# shield cannot be on before the courtyard -- the oracle's +10 at the square is landing AC, out of reach for a mattock kit. Needs the
+# crusher (a tonal instrument in the pack). Expected G14 value ~ +1.5..3% (a third of the castle starts, +7..14% pass30 on them).
+SHIELD_SQUARE = False
+# MATTOCK_SHIELD_SWORD (off): dive_logic._one_hand_weapon (shield_up's weapon) also accepts a weapon whose text shows its enchantment
+# ('a +1 long sword', 'a rusty +1 long sword'): the starting kit and anything identified have bknown set, and with implicit_uncursed
+# the 'uncursed' of such a weapon is not printed; a found weapon shows no '+N'. Without it shield_up cannot wield the sword (B320).
+# MEASURED (a3-run2 castle, see SHIELD_SQUARE): added to SHIELD_SQUARE (whose own hook runs after the square milestone line) it takes
+# the shield-on share at the square milestone from 41% to 72% (the courtyard walk wears it through MATTOCK_SHIELD's own shield_up),
+# and the pair is the better of the two arms (crush_over 48 vs 45, alive > 1000 turns 17 vs 12 of 144). A weapon that shows '+N' and no
+# BUC word has a known enchantment and, from the starting kit or an identify, a known BUC (welded-weapon log lines: 3 in each of the
+# three arms, the kits' own cursed items).
+MATTOCK_SHIELD_SWORD = False
+# --- end armour3 lane ---
+
+# --- prep lane (phase 2, 2026-10-02; lane 16): the hero's STATE when it enters the castle level; every flag below is OFF ---
+# Mechanics (3.6.6 source; ledger F412) and the census of 379 dev-seed castle arrivals (F413): the emergency prayer is heard iff the
+# prayer timeout is <= 200, and the timeout after a good prayer is rnz(350) (91.5% heard 800 turns after it, 55% after 200); 31% of
+# arrivals prayed < 800 turns earlier, 73% of those for HUNGER (the prayer is the food of the 42% who carry none), 17% of all arrivals
+# before the dive's first level (DIVE_PRAYER_GAP / DIVE_FED / DIVE_START_HP are checked only when the dive PHASE starts, not when a
+# digging tool arrives mid-phase: the Mines tool hunt prays at Weak, the pick-axe comes, the dive starts at once). HP at arrival is
+# mean 0.89 of max (the dive loses 0.08 between the first dig and the castle, mostly at Medusa and in the mazes); a rest costs 5
+# turns per HP at XL 7-8 (allmain.c regen_hp) while a filler maze below Medusa has 0-2 minotaurs that ignore Elbereth and arrive
+# 0-20 turns after a landing, so no rest belongs on those levels (dev/prep/mkmaze.py measures the cost curve): the safe place to
+# prepare is the first dig, on a shallow level.
+# PREP_GATE (off): one hold at the FIRST dig of a dig-dive (the hero stands in the main dungeon at depth <= PREP_GATE_MAX_DEPTH with a
+# digging tool in hand, about to dig or take a '>'): rest (on an Elbereth, nothing hostile in view) to PREP_GATE_HP of max HP; eat
+# carried food (not corpses, tripe or tins) while not Satiated (eat.c: a meal can choke only a hero that is already Satiated when it
+# starts eating, so this is safe); and, when the pack holds PREP_GATE_FOOD nutrition (the wait burns that much), wait until
+# PREP_GATE_GAP turns have passed since the last prayer (an emergency prayer at the castle is then heard 91.5% of the time instead of ~60%).
+# At most PREP_GATE_MAX_TURNS turns in all; skipped for rescue dives and after a failed prayer.
+PREP_GATE = False
+PREP_GATE_MAX_DEPTH = 14
+PREP_GATE_HP = 0.95
+PREP_GATE_GAP = 800
+PREP_GATE_FOOD = 800
+PREP_GATE_MAX_TURNS = 1000
+# PREP_REST (off): on the maze levels that may be the castle's neighbour (below Medusa, depth >= PREP_MIN_DEPTH) a digger rests to
+# PREP_REST_HP of max HP before digging instead of DIG_REST_BELOW (0.6), at most PREP_REST_MAX_TURNS per level. Kept for the cost
+# measurement (dev/prep/mkmaze.py arms); the census argues against it (see above).
+PREP_REST = False
+PREP_REST_HP = 0.9
+PREP_MIN_DEPTH = 24
+PREP_REST_MAX_TURNS = 150
+# EXCAL_ERRAND (off): EXCALIBUR for (almost) every lawful hero. Causal harness test R501 (cand-l6c pin, castle-kf-instr-x4 real landing,
+# 384 paired kit-games, the kit's long sword replaced by the blessed rustproof +1 Excalibur): pass30 8.3% vs 2.6% (+28/-6, p < 0.001,
+# kit-clustered +5.7 pts [+3.1, +8.3]; throne room 59 -> 88, crush_over 99 -> 122, no effect on the landing itself); on the
+# crusher-square suite 26 vs 15 of 192 (p 0.05). 11.9% of real castle arrivals carry it (45 of 379), 21% a rusty sword. fountain.c
+# dipfountain: a lawful XL >= 5 hero dipping the single long sword makes Excalibur 1 dip in 6; a non-Excalibur dip rusts the sword
+# (blessed ones resist 1 in 4), half of the dips end there, the rest roll rnd(30) (21 water demon, 22 water nymph, 23 2-6 water
+# moccasins, 1 in 30 each) and the fountain dries up with 1/3: ~55% Excalibur per fountain, ~3.3 dips; 4 fountains (the Oracle's
+# Delphi) 96%. The tour dips only on the level it explores at XL >= 7 and the dive phase (DIVE_XL 7) starts at once, so the sword
+# is dipped in ~12% of the games (PREP_EXCAL_DIVE dips at fountains of the CURRENT level: 54% in R178, progress -0.037 under cand-g).
+# This flag adds the missing leg to the dive phase: while diving at XL >= EXCAL_ERRAND_XL, a lawful hero with a single un-named long
+# sword and a KNOWN fountain on a main-dungeon level of Dlvl <= EXCAL_ERRAND_MAX_DEPTH walks there by the known stairs (the grind
+# explored Dlvl 1-4 fully: 1 - 0.45^4 = 96% of heroes know one) and dips (prep_fountain_dip, the digging tool in hand first) until
+# the sword is Excalibur or no known fountain is left; HP >= EXCAL_ERRAND_HP, the prayer safe (gap >= EXCAL_ERRAND_GAP), no hostile
+# within PREP_EXCAL_CALM, waiting at most EXCAL_ERRAND_WAIT turns for HP and prayer; at most EXCAL_ERRAND_TURNS turns and
+# EXCAL_ERRAND_MAX_DIPS dips in all.
+EXCAL_ERRAND = False
+EXCAL_ERRAND_XL = 7
+EXCAL_ERRAND_MAX_DEPTH = 6
+EXCAL_ERRAND_HP = 0.9
+EXCAL_ERRAND_GAP = 500
+EXCAL_ERRAND_WAIT = 600
+EXCAL_ERRAND_TURNS = 2500
+EXCAL_ERRAND_MAX_DIPS = 18
+EXCAL_ERRAND_DIST = 120
+# --- excalibur lane (phase 2, 2026-10-02; lane 20): the errand's follow-ups, all OFF ---
+# EXCAL_DEEP_DIST (0 = off): with EXCAL_ERRAND on, the dive's own dips (_prep_fountain_target) walk up to EXCAL_ERRAND_DIST = 120 steps to a
+# fountain on EVERY level; below EXCAL_ERRAND_MAX_DEPTH this keeps the walk to that many steps (PREP_EXCAL_DIST is 30): a 120-step walk
+# at Dlvl 10-20 buys one more fountain for a long exposure (collect R513: 62 of 219 flag-only dips were at Dlvl 10+, where a released
+# demon has no wish chance: rnd(100) > 80 + depth).
+EXCAL_DEEP_DIST = 0
+# EXCAL_DAGGER: a tool-less hero holds her dagger instead of bare fists while the sword is in the fountain (prep_fountain_dip wields
+# the digging tool, or nothing, so that a dip's silent curse cannot weld the sword).
+EXCAL_DAGGER = False
+# EXCAL_HAND_FIX: for an errand hero (EXCAL_ERRAND on, a tonal instrument in the pack) the hand that replaces the long sword during a dip is the dagger or
+# bare hands when the digging tool is a two-handed mattock and a shield is worn. Inventory.wield refuses that wield, prep_fountain_dip and the
+# tour's dip_for_excalibur then set _prep_dip_block_until = now + 500 and the errand found 'no calm moment' for 60 turns and ended with 0 dips
+# (jf1450 s7: a dwarvish mattock + a small shield; about 1 hero in 8 carries a mattock, a third of the tool carriers).
+EXCAL_HAND_FIX = False
+# EXCAL_ERRAND_INSTR: the errand (and the dive's dips while EXCAL_ERRAND is on) only for a hero whose pack holds a tonal instrument (known
+# or a candidate: opp_items.is_tonal).  Why: Excalibur's measured value is the crusher's walk-in (R501, instrument kits: pass30 8.3% vs 2.6%,
+# throne room 59 -> 88 of 384); a kit without an instrument has no crusher and its route (teleport control + cursed scrolls, polymorph
+# control, a lift) does not use a sword, so the same errand costs it 100-600 turns, food and the ~3-4% of dips that release a demon or
+# snakes, which for a hero holding a strong route item is a real loss of its value.  ~10% of heroes carry an instrument at the dive start.
+EXCAL_ERRAND_INSTR = False
+# EXCAL_ERRAND_FIGHT: dig_first (DIG_ESCAPE) preempts the whole plan at the FIRST monster in view while the hero carries a digging tool and
+# digs a hole out ("finishing the hole ends most fights"); on the errand's shallow levels that abandons the errand (the stairs back up are
+# unknown from the level below: 'no known path') for a newt.  37% of dive-start heroes carry a tool (32 of 86 cand-l6c control games).
+# With the flag an ordinary fight there (_prep_calm: HP >= 40%, fewer than 3 real hostiles, no boss kind, no lone @ / minotaur above her
+# level, difficulty <= XL + 2) is left to fight2 while the errand is due.
+EXCAL_ERRAND_FIGHT = False
+# EXCAL_CALM_FIX: the errand's two 'a monster is near' guards ignore slow / sessile monsters (speed <= 3) farther than 2 squares and use the real
+# distance: excal_errand_step read `m[0] <= 4` on the BFS distance of get_visible_monsters (-1 for a monster whose own square the BFS cannot
+# enter: every sessile mold or jelly) and handed the plan back to its other tasks whenever one was in view (jf1100 s3: a brown mold sent the hero
+# back and forth between the up stairs and the digging-tool pile for 300 turns); _prep_fountain_target skipped the dip for any monster within 7.
+EXCAL_CALM_FIX = False
+EXCAL_GUARD_TURNS = 40   # EXCAL_CALM_FIX: at most this many turns per hero spent waiting for a close hostile to come to fight2
+# EXCAL_CALM_RADIUS (0 = PREP_EXCAL_CALM, 7): with EXCAL_CALM_FIX the errand hero skips a dip only for a hostile within this many squares. A
+# sleeping or stuck monster 5-7 squares from the fountain held one steady-errand hero for its whole idle budget (jf1450 s7: 'no calm moment in 60
+# turns', 0 dips, a floating eye and an 'h' near the fountain); at Dlvl 1-4 a hostile that is awake reaches the fountain in >= 4 turns, and the
+# next step sees it.
+EXCAL_CALM_RADIUS = 0
+# EXCAL_WAIT_FIX: the wait for HP / prayer on the fountain level (EXCAL_ERRAND_WAIT turns, search(20) on an Elbereth) stops when the hero is Hungry
+# and, once it is over, the dip goes ahead from EXCAL_ERRAND_HP_MIN of max HP instead of EXCAL_ERRAND_HP (jf1100 s2: HP 56/81 after a snakes event,
+# 580 turns of waiting made the hero Weak, the hunger prayer made the prayer unsafe again). Neither gate may be given up cheaply: harness, XL-7
+# dive-mode hero, the event next to her, 16 seeds a cell, deaths: water moccasins 0 at full HP, 4 at 70% HP; water demon 1 (an arrow) at full HP,
+# 2 at 70%; without the prayer (timeout 700) a released demon killed 2 and the snake stream 2 of 16.
+EXCAL_WAIT_FIX = False
+EXCAL_ERRAND_HP_MIN = 0.85
+# EXCAL_STEADY: the errand keeps the plan while it is live. excal_errand_step returned False (= hand the plan to its other tasks) whenever the dip had
+# no target for a moment -- a monster within 7, a demon vigil, a fountain the BFS cannot reach -- and the tool hunt ('fetch digging tool') walked
+# the hero off the level to the stairs while the errand walked it back: jf1450 s5 hopped Dlvl 1 <-> 2 once a turn for 400 turns, s9 stood on an
+# Elbereth waiting for the prayer until rothes made dig_first dig the errand away. With the flag: a level whose fountains are all unreachable is
+# dropped for EXCAL_BLOCK_TURNS (the current level too), a walk that does not leave a level in EXCAL_LEVEL_TURNS drops its target, and a calm
+# moment is waited for at most EXCAL_IDLE_TURNS turns (search(1) each) before the errand ends for good.
+EXCAL_STEADY = False
+EXCAL_IDLE_TURNS = 60
+EXCAL_LEVEL_TURNS = 400
+EXCAL_BLOCK_TURNS = 3000
+# EXCAL_PACKAGE (off): the whole Excalibur package as ONE switch (a JF_CFG {"EXCAL_PACKAGE": true} or editing this line), derived at the end of the file:
+# PREP_EXCAL_DIVE for every hero (the dive's opportunistic dips) and, for a hero whose pack holds a tonal instrument, the errand to the known
+# fountains of Dlvl <= EXCAL_ERRAND_MAX_DEPTH at the dive start with its fixes: EXCAL_ERRAND, _INSTR, _FIGHT, EXCAL_DAGGER, EXCAL_DEEP_DIST 30,
+# EXCAL_CALM_FIX + EXCAL_CALM_RADIUS 4, EXCAL_WAIT_FIX + EXCAL_ERRAND_WAIT 300, EXCAL_STEADY. It overrides the individual switches.
+EXCAL_PACKAGE = True
+
+#
+# --- medusa-b lane (lane 11, 2026-10-02): Medusa-1/2/4 on-level deaths --------------------------------------------------------
+# Base 008ef20, gate cand-l5: M1 38/42 and M4 35/43 pass, M2 46/46 (the other 28 of the level's 40 deaths are Medusa-3's, lane 6).
+# Real-kit harness (dev/medb: the 161 cand-k Medusa-arrival kits dropped on 200 M4 / 193 M1 catalog seeds of secrets jf1100-1103,
+# base 008ef20): M1 171/193 = 89%, M4 160/200 = 80% (the gate's rates). 31 of M4's 40 failures start on ONE landing area, the
+# south-east islet (medusa_hop comp 19: 16 land squares, every one with >= 1 moat neighbour, 33% of M4's landings): 34/65 = 52% pass,
+# half of the failures 'drowned in deep water' after 4-9 floods of the dig lottery, the rest the snake swarm (94% of the hits come
+# while no intact Elbereth stands under us: engraving, walking, right after a pit -- unearth_objs deletes the engraving -- or a flood).
+# Hut 62/63, comp 9 58/61. Filler mazes below Medusa: 142/146 = 97% (the gate's 'died below Medusa' are the castle landing).
+# Medusa-1/2 failures are random strong monsters (Elvenking, elf-lord, soldiers, trolls: 10 MONSTER:random per level at difficulty
+# (depth + XL) / 2) that reach a 61-100 HP hero within 2-23 turns of the landing; nothing in the dive logic changes those.
+# CANDIDATE (all five MEDB flags below, with MEDB_HOP_LATE_K 3), Medusa-4 real-kit harness against the base 008ef20, paired: dev
+# secrets jf1100-1103 (200 games) 164 vs 160 passes, deaths 32 vs 37; held-out jf1110/1111 (93) 81-82 vs 78, deaths 11-12 vs 15;
+# Medusa-1 held-out 74 vs 74, Medusa-2 96 vs 97 (neutral). Falls into water per game 3.4 vs 3.5 (hfalls.py: the rust/blank-scroll
+# cost of a fall is not raised), exception types unchanged. See the ledger posts of medusa-b for the numbers and confidence intervals.
+#
+# MEDB_HOP_LATE (off; needs MEDUSA_HOP): the hop chain of a wet islet is judged on the squares that are LEFT, not on the original map
+# (medusa_hop's kmin is the islet's driest square before any flood): once the driest square still unflooded has MEDB_HOP_LATE_K or
+# more moat neighbours (a pick hole there floods with 1 - 1/(k+1)^2 >= 89% per try, and each flood eats a square of the islet), hop
+# along a chain costing up to MEDB_HOP_LATE_COST expected tries instead of digging on to the drowning.
+MEDB_HOP_LATE = False
+MEDB_HOP_LATE_K = 3      # K=2 was worse than the base on the comp-19 landings (29/63 vs 35/63); K=3: 38/63
+MEDB_HOP_LATE_COST = 7.0
+# MEDB_HOP_STAIRS (off; needs MEDUSA_HOP): stranded on wet land (no dry square) with the level's '<' on a land component ONE channel
+# away (Medusa-4: the south-east islet and the small islet south-west of it, 9% of that islet's landings), hop over to it -- the
+# existing reroll then climbs and digs a fresh hole above (a random landing again, 62% on the hut or the big islet, which pass 95%+).
+# Why: on Medusa-4's south-east islet the base passes 15/18 = 83% when the '<' lies on the islet itself (the reroll works) but only
+# 1/6 when it lies on the next islet (a 2-try hop away), 12/20 on comp 9 and 6/21 on the hut (12-14 expected tries away: out of reach).
+# MEDB_HOP_STAIRS_COST: the most expected tries of the chain. Once across, the hero stays for the climb (no hop onward: the reserve
+# hop took the first version back and forth across the channel). Result on the 63 comp-19 landings (arm a16, with MEDB_KNOBS): 40
+# passes against the base's 35 (+6 -0) and the knobs alone 37 (+4 -1); the 4 games gained are the '<'-on-comp-22 ones.
+MEDB_HOP_STAIRS = False
+MEDB_HOP_STAIRS_COST = 2.5
+# MEDB_PIT_QUIET (off): power_route's quiet-moment actions (identify reads, ring tests, altar and TC steps: _ready) wait while we
+# stand in the pit of a dig under way. In a pit our sight ends at the 8 neighbours (vision.c), so '_hostiles_within(6)' sees nothing
+# while a pack closes in; 35 identify reads in the 393 base Medusa-1/4 harness games, each 1-3 moves of a ~14-move window.
+MEDB_PIT_QUIET = False
+# MEDB_KNOBS (off): on Medusa-1/2/4 (never Medusa-3: lane 6's) switch three existing dive_logic constants on for the level:
+# MEDUSA_DIG_ORDER (the flood-only expectimax picks the next square to dig on a wet islet), MEDUSA_BLIND_DIG (blind with nothing
+# in view: dig on instead of holding) and MEDUSA_REROLL_WET = 1 (a wet islet whose '<' is reachable: climb and fall again as soon as
+# every square has a moat neighbour, not only at two). Each was neutral alone on the old bot (R138, R312); together (arm a10) on
+# the 63 comp-19 landings of the real-kit suite 37/63 against the base's 35/63. Also: a land component that has a dry square by the
+# fixed map (Medusa-4's hut, whose inside the shore does not show) is never climbed away from -- with REROLL_WET = 1 the bot had
+# misjudged the hut as 'too wet' (jf1100 s68).
+MEDB_KNOBS = False
+# MEDB_SCARE_MELEE (off): CASTLE_SCARE's drop of every unknown scroll fires on Medusa's level (depth >= CASTLE_SCARE_DEPTH 25, i.e.
+# Medusa at 25+) for any 'Elbereth-ignorer' within the radius -- cobras, nagas and the other RANGED_MONSTERS included, which only
+# ignore Elbereth at range. There it costs a move and the pack's scrolls for good (never picked up again) against monsters the dig's
+# Elbereth stops in melee: 15 of 200 base Medusa-4 games and 14 of 193 Medusa-1 games dropped, 10 [] / 6 cobra / 2 hatchling / red naga
+# among them. With the flag, on Medusa's level only a melee ignorer (@, minotaur: _melee_ignores_elbereth) triggers the drop.
+MEDB_SCARE_MELEE = False
+# MEDB_M3_LOOK (off; needs MEDUSA_REENTRY): Medusa-3's '<' lies at a random ROOM square of medusa.des' STAIR:(32,01,39,07) box -- 14 of
+# its 15 squares on the island every fall lands on -- but the island's trees block the line of sight, and in 47 of the 212 real-kit
+# games (22%) the layer's first plan found 'no < known' and left the island to the dive (walk, dig, flood) until the '<' showed up by
+# chance (pass 11/19 when that took over 60 turns, 6/7 within 10). With the flag the layer walks to the nearest square next to a
+# box square it has not seen yet (a lit level shows the neighbours; at most MEDB_M3_LOOK_STEPS steps a landing), so the '<' is
+# found at once and the climb starts as it does on the other 78%.
+MEDB_M3_LOOK = False
+MEDB_M3_LOOK_STEPS = 10
+#
+# --- elves lane (lane 24, dive survival above Medusa): dev/elves/ -------------------------------------------------------
+# DIVE_SLEEPERS (off): a dive landing (or any dive step) that prints a special-room entry message -- "Welcome to David's treasure
+# zoo!", "You enter an opulent throne room!", "You enter a military barracks!", a giant beehive, a disgusting nest (cockatrices),
+# an anthole, a leprechaun hall, a morgue's "uncanny feeling" -- is inside a room whose monsters are ALL asleep (mkroom.c fill_zoo
+# makes every one with MM_ASLEEP and msleeping = 1), and a Valkyrie has intrinsic Stealth, so monmove.c disturb() (needs !Stealth)
+# never wakes them and hack.c check_special_room's wake-up is under !Stealth too. The bot attacked them: an @ next to us is
+# 'fought, not dug away from' (dive_logic._dig_escape_action: onscary ignores Elbereth for S_HUMAN, so a soldier, sergeant,
+# lieutenant, the Elvenking of a court or an elf of a zoo counted as an awake @), the first action was 'wield the long sword' and
+# the first swing woke the room. 27k dive landings of 237 dev-seed runs (dev/elves/spec_rooms.py): barracks 12 landings, the hero
+# attacked in 10 and 6 died on that level (sergeants, lieutenants, soldiers, all 6 after attacking); court 49 landings (3 attacks,
+# 1 death: the Elvenking), zoo 23 (2 attacks, 1 death: an elf-lord); beehive 24, leprechaun hall 32, morgue 14, anthole 8, nest 3 and
+# the 46 + 21 court/zoo landings where it did not attack: 0 deaths in 148. With the flag a special-room message arms the level for
+# DIVE_SLEEPERS_TURNS turns: the monsters in view then are the sleepers, and a sleeper that stays on its square is no longer a
+# reason for dig_first to hand the turn to fight2 (the dig goes on, in the pit too); one that moves, or whose kind an attack
+# message names, is awake and the normal rules apply. Harness (dev/elves/mksleep.py: 31 real dig kits falling onto Dlvl 14 beside 2
+# sleeping soldiers, a sergeant and a lieutenant): next level reached 8/31 -> 29/31, deaths 21 -> 2.
+DIVE_SLEEPERS = True
+DIVE_SLEEPERS_TURNS = 80
+
+# --- castle forensics lane (lane 19 "forensics-castle", phase 2, 2026-10-02): bugs found by reading castle-phase games ---
+# All OFF in the commit that adds them (flag-off replays the base byte for byte). Evidence is in the ledger (I332 and the bug posts).
+# CHEST_OPEN_FIX (off; castle_front.FrontDoor._chest_step, the leg the Crusher walks in 98 percent of the castle walk-ins): a locked tower
+# chest (mksobj locks a chest 4 times in 5) was opened by #force with whatever is wielded and nothing else. lock.c forcelock: a blade
+# breaks 1 time in 125-143 per failed turn (rn2(1000 - spe) > 992) unless it is an artifact (obj_resists 99), a long sword pries 24
+# percent a turn, so ~3 percent of forced chests cost the sword; then 'You can't force anything when not wielding a weapon.' came 24
+# times and the Crusher stopped ('could not get the wand out of the chest') with a lock pick / key in the pack (kf-instr-x4-l6c jf96-s14~s3:
+# the chest of the wand of wishing, 63/95 HP, a lock pick in the pack; 22 such stops in the castle corpus). castle_inner._unlock_chest and
+# castle_treasury._open already do it in the right order. On: a key / lock pick / credit card first (apply, quiet), then the best
+# unwielded blade is wielded, then #force, a blunt weapon bashes, and as the last resort the chest is kicked from a neighbouring square.
+CHEST_OPEN_FIX = False
+# CRUSH_GO_FIX (off; castle_front.FrontDoor._go / castle_crusher): the 'unreachable' count of a target was cumulative over the whole game
+# and, because a refused boulder push takes no game time, 21 failures can come inside ONE turn: kf-instr-x4-l6c jf90-s11~s2 (full HP 104, 69
+# crush kills) stopped the crusher for good with '(4, 7) unreachable' at T15340 (a boulder on the crusher square, a fire giant on the other
+# one) and played on without a plan; 150 'unreachable' stops in the castle corpus (48 mid-crush, 36 at the walk-in's first step). On: the
+# count rises once per game turn, restarts when a path exists, and the stop needs CRUSH_GO_TURNS turns of it; a boulder that cannot be
+# pushed is dug through / fractured (castle_logic._smash_boulder) instead of pushed again.
+CRUSH_GO_FIX = True
+CRUSH_GO_TURNS = 30
+# CRUSH_BRIDGE_GONE (off; castle_crusher): the drawbridge is destroyed by a monster's wand of striking ('The drawbridge collapses into the
+# moat!', dbridge.c destroy_drawbridge, muse.c mbhit WAN_STRIKING; 62 of the 67 'passtune no longer moves the bridge' stops) in a message
+# that is not a toggle's own, so the Crusher played the dead bridge 12 more times (a turn each, next to the garrison) before it stopped.
+# On: any game message that says the bridge is gone ends the crusher at once (the castle logic and the drown-crawl lottery take over).
+CRUSH_BRIDGE_GONE = False
+# POLY_ESCAPE_STRICT (off; castle_power.deep_poly_escape_strategy, CASTLE_POLY): the deep escape zapped a known wand of polymorph at the
+# hero whenever HP < 60 percent and ANYTHING was adjacent -- a scorpion and a hill orc at 46/78 HP in kf-instr-x4-l6c jf93-s1~s3, then
+# again at 21/39 as a bone devil: a centipede that 'collapses under its load', dead in 27 turns. A new form breaks the body armour and
+# cloak (AC -3 -> 10 in jf79-s4~s1, F380: AC <= -2 triples the crusher), drops the weapon and the digging tool, and a crusher-armed kit
+# has the better route. 13 of 448 instrument games zap themselves (7 kits hold a known polymorph wand), 0 of them pass. On: the zap needs
+# HP below POLY_ESCAPE_HP of the maximum and an Elbereth-ignoring monster that outclasses us (mino_guard's big list) next to us, and
+# never in a kit that can play the drawbridge (the crusher's own instrument is the better route).
+POLY_ESCAPE_STRICT = False
+POLY_ESCAPE_HP = 0.35
+# CRUSH_PLAY_SAFE (off; castle_crusher._play, ledger F362 class): the apply of a drawbridge play is an atom block, and the preempting
+# layers above the Crusher (MinoGuard in 84 of 117 cases, KnownItemsGuard, the debug wrapper) fire in its end-of-block update, so the
+# code that followed it was skipped: _toggle never noted the bridge's new state (the next toggle then acts on a wrong belief) and
+# _mastermind never learned the feedback or the winning tune (PTRACE census of kf-instr-x4-l6c: 117 toggle cuts + 14 Mastermind cuts in
+# 59 of 448 games; jf85-s12~s2 / jf87-s9 / jf95-s8 replayed the winning tune, got 'inconsistent feedback' and found it 2 plays later,
+# with a minotaur next to them). On: the result is kept in the exception path and booked at the next toggle / play.
+CRUSH_PLAY_SAFE = True
+# CRUSH_LURE_MOBILE (off; castle_crusher._lure): the walk-in turns back to the crusher square when 2+ crushable hostiles are in view
+# inside the castle ('they follow us over the span'), but the crowd counted monsters that never move -- a spotted jelly (mmove 0) and an
+# unseen marker in the antechamber sent strength-w1-instr h15.jf96-s13~s2 (castle 29, HP 160/160, 54 crush kills) back to the square
+# 3 times and each return restarts the 100-turn quiet wait, until PASSTUNE_MAX_STEPS (3000) ended the crusher 1480 turns later at the
+# same square with the full-HP hero alive (12 of 3108 pooled games reach PASSTUNE_LURES = 12; the sweep's _train_worthy already
+# excludes mmove <= 0 for the same reason). On: a monster with mmove 0 (and a lizard) is no part of the lure crowd.
+CRUSH_LURE_MOBILE = False
+# CRUSH_BUDGET_GO (off; castle_crusher._crush_phase): PASSTUNE_MAX_STEPS (3000 crusher-phase steps) ended the crusher with _stop -- the
+# hero stood at the crusher square with the bridge down and no plan: 13 distinct kits of the castle corpus (all at 70-100 percent HP,
+# 1200-3300 turns after crush_over, in the lure / quiet-wait cycle) died there within ~100 turns, among them a 160/160-HP XL-11 hero at
+# castle 29 (strength-w1-instr h15.jf96-s13~s2). On: when the budget runs out with the tune known and HP >= PASSTUNE_RESUME_HP the lure
+# cycle is over (PASSTUNE_LURES used up) and the walk-in starts for good; the budget counts again from zero for the walk-in.
+CRUSH_BUDGET_GO = False
+# CRUSH_WIPE_COMMIT (off; castle_front.FrontDoor._attack, castle_crusher._contact / _attack_at): LIVELOCK in the walk-in. After 10 waits
+# on Elbereth a respecter that blocks the way is fought, and FrontDoor._attack first WIPES our own Elbereth (engrave 'x': a game turn;
+# mon.c setmangry: a blow from the engraving would cost 5 alignment) -- the monster hits during that turn, the next step's _contact()
+# sees 'hurt us' and writes the Elbereth AGAIN, and so on: the hero never strikes. kf-instr-x4 pooled over ten runs: 45 episodes of
+# >= 3 wipes in 23 games (11 distinct kit/salt pairs; in the l6c tree 3 of 448 games): jf88-s14~s1 red naga 33 cycles 167 -> 2 HP, jf86-s13
+# orc mummy 12 cycles 88 -> 4, jf83-s2~s2 fire giant 5 cycles 77 -> 5, jf92-s9~s2 ogre king 86 -> 1, jf79-s4 ettin mummy 93 -> 19.
+# On: for CRUSH_COMMIT_TURNS game turns after the wipe (refreshed by each blow at a respecter) and while HP >= CRUSH_COMMIT_HP of the
+# maximum, _contact() does not write the engraving again and a blocker is not waited out again; not for a xorn and not above level 10.
+CRUSH_WIPE_COMMIT = False
+CRUSH_COMMIT_TURNS = 6
+CRUSH_COMMIT_HP = 0.5
+# CRUSH_WATER_GUARD (off; castle_crusher.Crusher._open, castle_crusher.note_message): THE HERO WALKS INTO THE MOAT, OVER AND OVER. Once a
+# tune is known Crusher._open() returns the BELIEF self.bridge_open (the map keeps a lowered bridge in memory), so a bridge that is up
+# while the bot believes it down sends the walk-in onto the span: 'You fall into the water! You sink like a rock. Your scroll fades.
+# Your long sword rusts! ... You try to crawl out of the water. Pheew!' and again the next step -- kf-instr-x4-l6c: 13 of 448 games
+# fell in, 1266 falls, six of them 25-367 times (jf95-s8~s3 367 falls in 350 turns: every scroll blanked, every potion diluted, the iron
+# armour rusted away, then sharks). In all nine large cases the game's last bridge message before the first fall was 'a drawbridge
+# going up' that the Crusher never booked (the atom block of the play was cut by MinoGuard: B327; CRUSH_PLAY_SAFE books those), the
+# bot's last record said 'bridge down'. On: a fall at the west bank (x <= 6, y 5..11) resets the belief (bridge_open = False): the
+# crush loop plays the tune again and the message of that play puts the belief right, whatever desynchronised it.
+CRUSH_WATER_GUARD = False
+# CASTLE_HUNGER_GAP (0 = off; agent.SAFE_HUNGER_PRAYER_GAP / _faint_prayer_gap / threat_prayer_due on the castle level): the gap since
+# the last prayer from which a Weak / Fainting hero at the castle prays for hunger (HUNGER_DEEP_GAP 850; DIVE_THREAT_GAP 800 with a
+# hostile near, which is always at the castle). kf-instr-x4-l6c: 21 of 448 games fainted at the castle, 12 died within 6 turns of a
+# faint, the last prayer usually an HP prayer a few hundred turns old (jf90-s3~s1: gap 555 at the first faint, eight faints, dead at
+# gap 679). Prayer success in major trouble is P(rnz(350) <= gap + 200): about 0.77 at 400, 0.88 at 500, 0.89 at 600, 0.92 at 850; a
+# failure costs Luck -3 and the next prayer. Castle level only (the dive keeps its gaps). The value is set from f19-ab2 arms h.g6 / h.g4.
+CASTLE_HUNGER_GAP = 0
+
+# --- survival lane (21): pre-castle deaths from hunger, fainting and failed prayers (F432, F437) ---
+# SURV_LOG (off, log only): 'SURV hunger old->new ...' at every hunger-state change that involves Hungry or worse (the edible food
+# carried, the gap since the last prayer, prayer_failed, diving/rescue, the nearest hostiles, HP, the engraving below us), 'SURV pray
+# ...' when a prayer starts and 'SURV eat ...' per meal (surv_log.py). Reads only: never steps, never draws a random number; runs with
+# it on replay the flag-off games byte-identically.
+SURV_LOG = False
+# SURV_EAT (off): the hungry hero's meals run ABOVE fight2, the Elbereth holds and the guards (agent.eat_first / surv_eat_ok): a fresh
+# edible corpse underfoot from Hungry on (the existing eat_corpses_from_ground), the carried food from Weak on (eat_deep's choice of
+# food; the tour keeps its rule that a safe prayer is the meal), whenever no hostile that would interrupt a meal stands next to us
+# (on an intact Elbereth with only scared monsters adjacent it still eats). Why: faint_guard stands down while food is carried and
+# fight2 -- a leprechaun's or a floating eye's dance lasts 50-400 turns -- never lets the low-priority eater run, so heroes went
+# Hungry, Weak and Fainting with rations in the pack and a ripe corpse underfoot (F432: 38 of 69 early faint deaths carried food;
+# jf606 s10, idt-fid2-jf350 s0). Castle camps keep eat_deep (HUNGER_DEEP).
+SURV_EAT = False
+# SURV_THREAT (off): agent._hunger_threat -- the 'hunger-threat' prayer that comes from gap THREAT_PRAYER_GAP (1000, a prayer fails 5.4% there;
+# a failure ends the game) while Fainting, or Weak within THREAT_WEAK_MARGIN of it, with a monster near -- decides by what the monsters
+# near could do to a helpless hero (surv_threat.potential_damage: monst.c dice, speed / 12 moves a turn, mattacku to-hit against a helpless
+# hero, over SURV_FAINT_TURNS = one faint), not by their names and the hero's HP < 75% (446 of those prayers in the cand-l5 corpus: 30%
+# for a leprechaun, iguana, gecko, newt, garter snake or cave spider that cannot kill 60 HP; 3.4% of them failed). A threat when that
+# damage is at least SURV_THREAT_FRAC of the HP we have, or SURV_THREAT_IGN_FRAC for monsters Elbereth cannot hold off (@, minotaurs,
+# dragons, ranged); those that respect an intact Elbereth under us count SURV_THREAT_ELB_FACTOR of it (a dust engraving scuffs 1 turn in
+# 40 + 3 Dex, and a faint lasts ~18).
+SURV_THREAT = False
+SURV_THREAT_FRAC = 0.5
+SURV_THREAT_IGN_FRAC = 0.3
+SURV_FAINT_TURNS = 18
+SURV_THREAT_ELB_FACTOR = 0.12
+# SURV_RESERVE (off): spend PRAYERS in the cheap phase and RATIONS in the expensive one. A tour hero at Weak with a ration in the pack and a
+# prayer gap of 900-1700 eats (eat_from_inventory: the prayer waits for SAFE_HUNGER_PRAYER_GAP = TOUR_WEAK_PRAYER_GAP 1700): 39 such meals
+# in the 15 jf1500 control games (2.6 per game), each one stretching a cycle whose prayer would fail 1-2.5% to a gap that fails 0.5%, while
+# the dive and the Mines trip later pray at gaps of 850-1000 (7-9% failures; 185 of the 302 short-gap prayers of the 180 cand-l6c control games
+# are pre-castle, 103 at Dlvl <= 4) and 16% of the castle arrivals pray for hunger on the way down (all of them arrive with an unsafe prayer,
+# P(heard) < 0.8: 25% of arrivals). Carried food at the first Mines level: 0 for 32% of cand-l6c games who then reach the castle band 27%
+# (n=33) vs ~60% with food; 52% vs 64% in the 513-game cand-l5 corpus (carried < 800 vs >= 800). Marginal value (rnz(350) exact): praying at
+# gap g and keeping the ration costs f(g) now and saves f(~850) - f(~1650) = 6% in the dive; eating now saves f(g) - f(g + 800): break-even
+# gap ~950. With SURV_RESERVE a tour hero (not diving, god not angry) carrying less than SURV_RESERVE_FOOD (1200 = at most one ration) nutrition
+# prays at Weak from gap SURV_RESERVE_GAP (1200: 2.5% fail, 97.7% heard) instead of 1700. The pack limit is ONE ration (1200 nutrition = 'a ration and a bit'): a hero
+# with two keeps eating one of them as before (the other is its reserve); the dive's ~1 expensive hunger cycle per game is what one saved ration pays.
+SURV_RESERVE = False
+SURV_RESERVE_GAP = 1200
+SURV_RESERVE_FOOD = 1200
+# SURV_DIVE_GATE (off; objective B, surv_gate.py): a hero carrying less than SURV_GATE_FOOD nutrition that is Hungry or worse at its FIRST dig
+# (main dungeon, tool in hand, depth <= SURV_GATE_MAX_DEPTH, not a rescue) holds on Elbereth until its hunger prayer is made and then until
+# that prayer is SURV_GATE_GAP turns old; a hero that merely prayed less than SURV_GATE_GAP turns ago waits for the age; at most
+# SURV_GATE_MAX turns; Weak or worse with a prayer younger than SURV_GATE_UNSAFE_GAP (600) is not held. Why: 25% of the castle
+# arrivals carry an unsafe prayer (P(heard) < 0.8) and 13 of those 16 prayed for HUNGER on the way down with nothing to eat (cand-l6c control,
+# 64 arrivals; jf1500 control 4 of 10): the dive takes 190-330 turns from the first dig to the castle, the DIVE_PRAYER_GAP 800 gate parks the
+# first dig just where a food-less hero is Hungry, and a pick-axe that arrives mid-phase is not gated at all. An unsafe prayer at the
+# castle costs the walk-in 4.3 points of pass30 (prep R524).
+SURV_DIVE_GATE = False
+SURV_GATE_GAP = 300
+SURV_GATE_FOOD = 400
+SURV_GATE_MAX = 900
+SURV_GATE_MAX_DEPTH = 14
+SURV_GATE_UNSAFE_GAP = 600      # Weak or worse with a prayer younger than this (>250 turns from the dive's 850 rule): nothing to wait for
+SURV_GATE_ESCAPE_HP = 0.6      # a hold ends its protection of the wait when HP falls below this share: dig_first escapes again
+# PET_SWAP_GUARD (off; pet_guard.py, forensics F456): do not walk into the pet while standing on a trap that would kill it. Swapping puts the pet on the
+# hero's old square (hack.c domove); a pet killed there by a trap or water costs 'You feel guilty about losing your pet like this.' with
+# probability 3/4: u.ugangr + 1, alignment -15, and every prayer for the rest of the game fails (4 of 879 games, 3 of the 4 first-prayer failures; all
+# three replays: a falling rock trap or a pit the hero had just triggered or climbed out of, a kitten or little dog at its side). The guard spends
+# up to PET_SWAP_WAITS search turns per square instead of the swap. (F454, Friday the 13th = Luck -1 from the seed, cannot be guarded: the game start
+# messages never reach the bot -- the first observation has an empty message and empty top rows -- and no in-game observation shows Luck.)
+PET_SWAP_GUARD = False
+PET_SWAP_WAITS = 6
+# SURV_LIFT_EAT (off; agent._lift_blocks_meal): HUNGER_DEEP's castle eater (eat_deep) does not eat while levitating (a potion's lift is a crossing's
+# few turns). A LASTING lift (a known ring of levitation or boots on us) rests in the west courtyard before the crossing until HP is back to 85% --
+# 300+ turns at XL 8 -- and the hero floated there Hungry, Weak, Fainting with 3 food rations in the pack until a shark ate it (survival A1 jf1500 s6,
+# T12444-12875: 'a cursed ring of levitation', prayed off but still worn). With the flag a lasting lift eats on castle land that is not the
+# moat's edge. 1 game in 60 here; cmp-main lost 6 of 37 arrivals fainted at the castle with food in the pack before HUNGER_DEEP.
+SURV_LIFT_EAT = True
+# LEV_GUARD (off; dive_logic._lev_guard_step, ledger F471): a levitating hero off Medusa's level and the castle takes its levitation ring off (an
+# uncursed one) or waits the potion out, instead of digging 20 times ('You can't reach the floor.': the level is marked undiggable) and then asserting
+# on every '>' ('You are floating high above the stairs.', 5759 AssertionErrors without a game turn, survival A1 jf1505 s13: MEDUSA_LIFT put the ring on
+# at Medusa's arrival, RETREAT went back up the stairs, nothing took the ring off). At most LEV_GUARD_MAX turns per level, then the old behaviour.
+LEV_GUARD = True
+LEV_GUARD_MAX = 300
+# --- load lane (27): pack weight, the squeeze limit and the stairs / trap doors behind it (F455, B345) ---
+# hack.c test_move/cant_squeeze_thru: a diagonal step between two rock squares needs inv_weight() + weight_cap() <= 600 ('You are carrying too much
+# to get through.', no game time passes). The pack is > 600 in 71% of the castle arrivals (median 718; worn plate/splint/banded 350-450 + a digging tool
+# 100-120 alone are > 550) and 13% of full games meet the refusal. The BFS honours the limit; two direct last steps do not: _take_stairs' step from a
+# neighbour onto a staircase and descend()'s step onto a trap door (dive_logic.step_onto). Replays: coll-l6c-jf1100 s6 held 6,500 turns (27% of the game)
+# at a Mines '<' behind a diagonal between two wall squares (a spare mithril coat 150, a crystal ball 150, a spare helm 40 of the 892 carried; the
+# mattock's RETURN_DIG never started and SQUEEZE_OUT skips a hero with a digging tool); a3-base-jf1305 s12 (XL 10, AC -5, Excalibur, teleport control)
+# stepped NW onto a Dlvl-12 trap door 6,400 times at one turn counter, then 1,675 refusals over 1,537 turns until a cockatrice petrified it (pack 716: a
+# 100-weight tinning kit; 600 needed dropping it plus one potion). Each flag is independent and OFF.
+# SQ_STEP_GUARD: the last step onto a '>'/'<' staircase or a trap door/hole is not taken when it is a diagonal between two rock squares (wall, stone or
+# never seen) and the pack estimate is > 600 (or the game refused this very step at this weight): the target is then not reachable from that neighbour
+# (_neighbour_distance_step), so down_targets() / _take_stairs go elsewhere instead of re-trying a step that costs no game time and never succeeds.
+SQ_STEP_GUARD = True
+SQ_STEP_MARGIN = 40         # the pre-emptive part acts on an estimate this far above 600 (borderline packs: try the step once, a refusal is remembered)
+# SQ_CUT_RECOVER: a known way down (descend(): no reachable '>' or trap door) or up (return_to_main_dungeon: no reachable '<') that the squeeze limit alone
+# cuts off (bfs(force_squeeze=True) reaches it) for SQ_CUT_TURNS (exploring may still find a detour): drop the DEAD LOAD (sq_load.py: a second suit/helm/
+# boots/shield the best set does not use, a crystal ball, tinning kit, beartrap, spellbooks) if that alone gets the pack to <= SQ_CUT_CAP (SQ_DEAD_DROP);
+# after SQ_CUT_CAP_TURNS drop to the squeeze cap with the ItemPriority order (agent.unsqueeze's drop; essentials worn + wielded + digging tool <= 540),
+# also for a hero that carries a digging tool (SQUEEZE_OUT skips it: RETURN_DIG tunnelling is meant to deal with it but did not in F455).
+SQ_CUT_RECOVER = False
+SQ_CUT_TURNS = 150
+SQ_CUT_CAP_TURNS = 600
+# a hero with a digging tool has RETURN_DIG (tunnels after RETURN_DIG_TURNS 1000 turns cut off and took 25-70 turns in the 90-pair arm's controls
+# jf1802 s5, jf1803 s13, jf1805 s8, where the first version's cap drop at ~650 turns pre-empted it and lost 14 potions/scrolls): its drop comes later
+SQ_CUT_TOOL_TURNS = 2000
+SQ_CUT_CAP = 590            # the estimate takes the heaviest candidate of an unknown look; the game refuses above 600
+# SQ_BFS_WEIGHT: agent.bfs() reads the weight of the last COMPLETE inventory update while an update is under way (or the list was cleared by a
+# panic) and does not cache that BFS. InventoryItems.update() sums total_weight item by item and, at a bag, calls get_visible_monsters() -- a BFS --
+# from inside the loop: with a partial sum <= 600 the BFS allowed every diagonal squeeze and was cached for the step (step_count), so later
+# bfs() calls of the same step planned squeezes hack.c refuses ('You are carrying too much to get through.') and RETURN_DIG saw its cut-off '<'
+# reachable and reset its 1000-turn timer. Replay of coll-l6c-jf1100 s6 (F455): at 26 steps in T16250-T18645 the cached BFS reached the '<'
+# (dis 16-45) while a fresh BFS of the same step with the same pack (861) said -1; RETURN_DIG never tunnelled in 5,900 turns. 18% of the castle
+# arrivals carry an 'empty bag named #0' (the trigger), 13% of games meet the refusal.
+SQ_BFS_WEIGHT = False
+# SQ_FRESH_BFS: the narrow form of the same fix -- only RETURN_DIG's cut-off test, _take_stairs and the squeeze-cut recovery compute their BFS without the
+# per-step cache (dive_logic._fresh_bfs), so a BFS cached while InventoryItems.update() was summing the pack cannot reset RETURN_DIG's timer or plan a
+# squeeze onto the stairs. Every other bfs() user keeps the old behaviour (SQ_BFS_WEIGHT changed 3 of 90 games' trajectories at once: the cached
+# polluted BFS also drives path choices, sometimes for the better when the estimate over-counts unknown weights).
+SQ_FRESH_BFS = True
+# SQ_DEAD_DROP: the dead-load remedy alone (also usable without SQ_CUT_RECOVER): when every known way off the level is cut off by the squeeze limit for
+# SQ_CUT_TURNS and dropping ONLY the dead load gets the pack to <= SQ_CUT_CAP, drop it (it is what makes the step possible); nothing else is dropped.
+SQ_DEAD_DROP = True
+# SQ_OUT_TOOL: agent._squeeze_out_due (Gnomish Mines, a staircase or squeeze-only region cut off by the weight) also fires for a hero that carries a
+# digging tool once the visit has lasted SQ_OUT_TOOL_TURNS (RETURN_DIG gets its RETURN_DIG_TURNS first); without it a tool holder never drops.
+SQ_OUT_TOOL = False
+SQ_OUT_TOOL_TURNS = 3000
+# EVIDENCE (ledger F467, B341, R561, R573, R588; dev/load/): real castle arrivals (1,561): Burdened 0.4%, pack > 600 in 71%, dead load mean 32 / median 0.
+# 2,054 full games since 10-02: a refusal message in 13.0%, a dense stall (>= 3 refusals within 150 turns) in 13 games = 0.025% of all turns, 56% of it in
+# the two loops above. Pinned-tree replays of the stuck games with the FINAL code and SQ_STEP_GUARD + SQ_FRESH_BFS + SQ_DEAD_DROP: a3-base-jf1305 s12
+# refusals 1,675 -> 0 and Dlvl 12 -> 28; coll-l6c-jf1100 s6 (F455) 46 -> 0, 24,394 -> 18,532 turns, RETURN_DIG tunnels after 1,070 turns, nothing dropped;
+# instr-base-jf844 s1 8 -> 2 (dense 755 -> 0); med-cand-jf761 s3 8 -> 0; sv-a1-jf1500-a s3 6 -> 0; two games of other refusal classes stay (a travel-style
+# step with a 692 pack; a BFS-planned squeeze that SQ_BFS_WEIGHT alone clears). Flag-off identity: msgs byte-identical on 60 of 60 games (jf1800, jf1801; four
+# tree versions, the final one 15 of 15 on jf1801, which has 4 games with refusals). Paired full games jf1800-jf1809 (150): the narrow combination is
+# byte-identical to the control in every game where the wider ones differed (9 games re-run), i.e. no flag acts outside a stall; the wide combination with
+# SQ_BFS_WEIGHT changes 9 of 150 trajectories (progress 0.4100 -> 0.4036, castle arrivals 95 -> 93: no decision possible). The cap drop (SQ_CUT_RECOVER) is
+# NOT recommended: it traded potions/scrolls for turns and the first version pre-empted a working RETURN_DIG in 3 of 90 games. SQ_OUT_TOOL untested alone.
+# Recommended ON: SQ_STEP_GUARD, SQ_FRESH_BFS, SQ_DEAD_DROP. SQ_BFS_WEIGHT is the general form of SQ_FRESH_BFS: keep OFF until a larger paired sample.
+#
+# --- medusa-c lane (phase 2, 2026-10-07; lane 32): the deaths left on Medusa's level (dev/medc2; ledger F489) ---
+# Census of 1035 dev-seed full games (cand-l7+ era, cap-30 layer on): 616 met Medusa, 78 died there (~20 per 270 games): Medusa-3 40
+# (21 on the island, 18 on the level ABOVE during the climb cycle), Medusa-4 22 (15 drowned), Medusa-1/2 16 (random strong monsters).
+# MEDC_ABOVE_GO (off; medusa_reentry._above_plan/_go_plan): on the level above Medusa-3 (after a climb) a hostile within 3 squares no
+# longer hands the move to fight2/dig_first/the Elbereth rest when the hole we know is within MEDC_ABOVE_GO_STEPS steps: the layer steps into
+# it / plunges ('>' on it) at once, blind or not, with HP >= MEDC_ABOVE_GO_HP of max for a dangerous hostile (unseen, level >= 3, an @ or
+# minotaur -- they ignore Elbereth --, or HP lost in the last 3 turns) and >= MEDC_ABOVE_GO_PEST_HP for a pest. Why (census F489, 162
+# Medusa-3 games, 594 climbs): (1) 112 of the 473 later climbs met a hostile within 3 squares at the '>', the layer yielded, and the dive dug
+# a FRESH hole right there ('digging out'): a pit that holds the hero 2-5 turns, ~8 exposed turns, and no skip chance (a fresh hole falls
+# exactly one level, dig.c digactualhole; known-hole entries skipped Medusa 87 of 360 = 24%, fresh digs 0 of 178); (2) 18 of the 40 Medusa-3
+# deaths were on the level above (3.0% a climb), 12 of the 18 within 12 turns of arriving beside an awake strong monster (elf-lord, giant
+# mummy, ogre lord, zruty, captain ...): jf1651 s3 stood ON the hole ('the hole did not trigger (we stand on it); the next step plunges')
+# with an elf-lord 3 squares off and walked away to dig elsewhere (-36 HP in two turns); jf1804 s5 wielded its sword and fought an elf-lord
+# next to the known hole, 62/64 HP -> dead in 4 turns. The entry costs one action and is the plan anyway (1 in 4 skips Medusa's level, else
+# a fresh landing on the island). EVIDENCE (real-kit Medusa-3 harness, dev/medc2, pin ctl9 = main 2699c62 + the cand-l9 values, kits = 610
+# real arrival kits of the cand-l7+ dev games, pass = the level below within 6000 turns): dev secrets jf1950-1953, 192 specs: 160 against
+# 144 passes, +8.3 points (95% CI +3.7..+13.0), gained 19 lost 3, exact sign p 0.001; HELD-OUT jf1960/jf1961, 92 specs: 73 against 63,
+# +10.9 points (CI +3.8..+17.9), gained 11 lost 1, p 0.006 (the flag acts only after a climb: only the games whose control game climbed were
+# replayed, the others are identical by construction). Fresh digs on later climbs 28% -> 5%, known-hole skips 23% -> 25%, falls into
+# water a game 0.86 -> 0.73. Costs: the passes it adds arrive below with a little less HP (HP fraction at the pass mean 0.94 -> 0.92 / 0.90,
+# p10 0.85 -> 0.69), a landing at < 60% HP dies 14-22% of the time against 1.4-2.9% at >= 80%.
+MEDC_ABOVE_GO = True
+MEDC_ABOVE_GO_HP = 0.25
+MEDC_ABOVE_GO_PEST_HP = 0.5
+MEDC_ABOVE_GO_STEPS = 3
+# MEDC_M3_WAND_LAST (off; medusa_reentry._medusa_plan/_standoff_plan): on Medusa-3 a hero with a digging TOOL does not hand the island to
+# the dive's wand zaps ('REENTRY idle: a known digging wand / a lift'): the climb cycle runs first and the wand is the dive's last resort
+# (the cycle's climbs used up, no '<' known, ...). Why: a wand zap holes the floor with 1/(k+1) at k wet neighbours (every island square has
+# k >= 1, the best four k = 1: 50%), each flood sinks the square, soaks the pack and shrinks the island (jf1501 s7: 8 zaps, 7 floods, then
+# drowned); census Medusa-3 games with a known wand of digging pass 19/29 = 66% against 103/133 = 77% without (no difference on Medusa-1/2/4).
+# EVIDENCE (harness, 96 Medusa-3 specs whose kit holds a known wand of digging and a pick-axe/mattock, dev secrets jf1950/jf1951, on top of
+# MEDC_ABOVE_GO): 87/96 = 90.6% against 75/96 = 78.1%, +12.5 points (CI +2.4..+22.6), gained 19 lost 7, p 0.029; falls into water a game
+# 0.33 against 1.78 (-81%: ~2.7 AC of rust kept per wand holder, armour3 F418) and the wand keeps its charges for the mazes below (WAND_RESERVE).
+# HELD-OUT (92 such specs, jf1960/jf1961): 85/92 = 92.4% against 72/92 = 78.3%, +14.1 points (CI +3.9..+24.4), gained 19 lost 6, p 0.015; falls
+# 0.33 against 1.67. Pooled 172 against 147 of 188, gained 38 lost 13, p 0.0006. The census (real games) premise: 19/29 = 66% against 77%.
+MEDC_M3_WAND_LAST = True
+# BOTH FLAGS TOGETHER (the recommended cfg: {"MEDC_ABOVE_GO": true, "MEDC_M3_WAND_LAST": true}), plain real-kit Medusa-3 mix (pass = the level
+# below reached within 6000 turns): dev 166/192 = 86.5% against 144/192 = 75.0% (+11.5 points, CI +5.9..+17.0, gained 27 lost 5), held-out 73/92 = 79.3% against 63/92 =
+# 68.5% (+10.9, CI +2.1..+19.6, gained 14 lost 4, p 0.031); falls into water a game 0.86 -> 0.51. END TO END, real full games with the pinned clock
+# (68 census seeds, both arms, 54 met Medusa-3 in both): 42 against 35 passed (gained 8 lost 1, p 0.039), 37 against 31 reached the Castle (gained 8
+# lost 2, p 0.11). Full games jf1950 seeds 0-14: flags off AND on byte-identical to the control (turns, steps, depth, cause); +30 games jf1951/jf1952
+# and the 136 end-to-end games: no exception from the new code. Ledger R595 / R600 / R602.
+# MEDC_REACH_WALK (off; medusa_reentry._relaxed_reach): the layer's reachability test of the '<' (agent.bfs) said 'REENTRY idle: the < is out of
+# reach' with the '<' next to us (jf1951 s46: '<' one square east) or a few steps away over known floor (jf1953 s159, jf1950 s173): the '<'
+# we fell past is known from the stair memory only (terrain -1, not walkable: the BFS cannot end on it) and agent.bfs refuses diagonal
+# steps through squares of unknown terrain, which the island's squares (first seen under a raven) often are. The walk itself (_walk_step)
+# uses its own BFS (eight neighbours over level.walkable) and does not care. With the flag a failed agent.bfs falls back to that rule
+# for the plan and for the standoff's window distance. (Not the cause of the other half of the out-of-reach idles: a flooded neck square.)
+MEDC_REACH_WALK = False
+# HELD-OUT of MEDC_REACH_WALK (the 31 idle-prone held-out specs, jf1960/1961): 22/31 against 22/31, gained 1 lost 1; pooled with dev 94 specs,
+# gained 4 lost 1, exact p 0.375: sound mechanics, no confirmed gain -- it stays OFF unless a merger wants the marginal fix.
+# (Tried and dropped, not in the tree: MEDC_IDLE_HOLD, an uncapped body loop -- see dive_logic.reentry_strategy and ledger R599.)
+
 _raw = os.environ.get('JF_CFG')
 if _raw:
     for _name, _value in json.loads(_raw).items():
@@ -2819,3 +3646,11 @@ if TOUR_FIXES is not None:
     EARLY_FIXES = LATE_FIXES = bool(TOUR_FIXES)
 if LATE_FIXES:
     HAZARD_FIXES = True
+
+if EXCAL_PACKAGE:
+    PREP_EXCAL_DIVE = True
+    EXCAL_ERRAND = EXCAL_ERRAND_INSTR = EXCAL_ERRAND_FIGHT = EXCAL_DAGGER = EXCAL_HAND_FIX = True
+    EXCAL_CALM_FIX = EXCAL_WAIT_FIX = EXCAL_STEADY = True
+    EXCAL_DEEP_DIST = 30
+    EXCAL_CALM_RADIUS = 4
+    EXCAL_ERRAND_WAIT = 300

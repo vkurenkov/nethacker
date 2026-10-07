@@ -28,8 +28,13 @@ Keys:
   tc_intrinsic      the hero has teleport control as an intrinsic AND knows it (a tengu corpse eaten before the bot
                     started: 'You feel in control of yourself.'); spec "intrinsics": ["teleport_control"] gives the
                     property itself (t-route harness kits)
+  trap_here         the setup left the hero standing on a deadly trap square she has seen (PET_SWAP_GUARD harness)
   idle_turns        the dive plan does nothing for this many turns (fight2, Elbereth rests and the guards still act): how
                     much of a landing's death is the plan's own doing (dev measurement only)
+  demon_vigil       (excalibur lane) true or N turns: the water-demon vigil is on from the first action, as after a real
+                    'You unleash a water demon!' (a ^G demon shows no such message, so the vigil never started)
+  sleep_room        (DIVE_SLEEPERS tests) the start level counts as a special room entered at the first update, as if
+                    "You enter a military barracks!" had been printed (the harness cannot print room entry messages)
 """
 import json
 import os
@@ -98,9 +103,16 @@ def apply(agent):
             # note_message learns it from the eating message, which a harness setup never shows the bot
             from . import power_route
             power_route.state(agent).tc_intrinsic = True
+        if STATE.get('trap_here'):
+            # PET_SWAP_GUARD harness: a wizard-mode wish made a trap under the hero; the bot never saw the message that names it
+            from . import pet_guard
+            pet_guard._state(agent)['pending_here'] = True
         if STATE.get('idle_turns'):
             # dev only (dive_logic.plan_step): the dive plan idles this many turns, the safety layers still act
             dive._scenario_idle = int(STATE['idle_turns'])
+        if STATE.get('sleep_room'):
+            # dev only (DIVE_SLEEPERS): the start level is a special room entered at the first update
+            dive._sleep_force = True
         if STATE.get('price_known'):
             # price-id: the price groups a real game would have learned in shops before the castle
             # ({"cyan potion": 200, ...}; price_id.scenario_apply)
@@ -118,6 +130,14 @@ def apply(agent):
                 crusher.locked_out = bool(cs.get('locked_out', True))
                 crusher.tries['lockout'] = 1 if crusher.locked_out else 0
                 crusher.garrison_known_dead = bool(cs.get('crush_over', True) or crusher.locked_out)
+        if STATE.get('demon_vigil'):
+            from . import jf_config
+            n = STATE['demon_vigil']
+            n = jf_config.DEMON_VIGIL_TURNS if n is True else int(n)
+            try:
+                dive._demon_vigil_until = int(agent.blstats.time) + n
+            except Exception:
+                dive._demon_vigil_until = 10 ** 9
         agent.log(f'SCENARIO start: {STATE} -> diving={dive.diving} mines_done={dive.mines_done} '
                   f'milestone={gl.milestone.name}')
     except Exception as e:   # a typo in a dev scenario must not kill the agent thread

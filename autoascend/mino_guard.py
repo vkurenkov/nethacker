@@ -107,6 +107,7 @@ class MinoGuard:
         self._near_prev = {}       # HORN_SCARE: level key -> (step, nearest awake minotaur now, at the step before)
         self._hp_prev = None       # HORN_SCARE: (step, our HP now, at the step before)
         self._pile_proven = None   # LANDING_MINO_CASTLE: (level key, (y, x)) of a pile a minotaur fled from
+        self._near_hist = {}       # HORN_REBLOW: level key -> [(game turn, nearest awake minotaur's distance)] (last 8 turns)
 
     # ------------------------------------------------------------------ state
 
@@ -255,8 +256,8 @@ class MinoGuard:
             y, x = int(y), int(x)
             if (y, x) == (int(bl.y), int(bl.x)):
                 continue
-            if jf_config.LANDING_MINO_CASTLE and int(agent.glyphs[y, x]) == _MINO_PET:
-                continue   # one our scroll of taming tamed (smoke ld-smk3 cm-jf41-s9~3 read on at its pet)
+            if (jf_config.LANDING_MINO_CASTLE or jf_config.LANDING_MAGIC) and int(agent.glyphs[y, x]) == _MINO_PET:
+                continue   # one our scroll of taming / magic harp tamed (smoke ld-smk3 cm-jf41-s9~3 read on at its pet)
             out.append((max(abs(y - int(bl.y)), abs(x - int(bl.x))), y, x, _MINO_PERMONST))
         out.sort(key=lambda m: m[0])
         return out
@@ -492,6 +493,14 @@ class MinoGuard:
             hp = self._hp_prev
             if hp is None or hp[0] != agent.step_count:
                 self._hp_prev = (agent.step_count, int(bl.hitpoints), hp[1] if hp is not None else None)
+        if jf_config.HORN_REBLOW:
+            # (one value per game turn: the latest; entries older than 8 turns go)
+            hist = self._near_hist.setdefault(key, [])
+            if hist and hist[-1][0] == bl.time:
+                hist[-1] = (bl.time, near)
+            else:
+                hist.append((bl.time, near))
+                del hist[:-8]
         if near > MINO_RANGE:
             return
         if self._prayer_first():
@@ -534,6 +543,10 @@ class MinoGuard:
             # move at full HP: harness oi-smk mino-horn s0 was back after 10 turns)
             ent = self._near_prev.get(key)
             approaching = near <= 1 and ent is not None and ent[2] is not None and ent[2] >= 2
+            if jf_config.HORN_REBLOW and not approaching:
+                # a minotaur that regained courage (a scare with no timer ends 1 move in 25 at full HP: monmove.c dochug) comes in: it is closer
+                # than a turn or two ago -- blow before it is next to us (it hit for 35-56 first, the guard waiting out HORN_REFRESH)
+                approaching = self._closer(key, near)
             recent = [t for t in self._blows.get(key, []) if bl.time - t <= 2]
             d2 = self._dist2(awake[0])
             scare = next((it for it, r2 in kit.get('scare', []) if d2 < r2), None)
@@ -557,9 +570,27 @@ class MinoGuard:
                     yield ('dig', None, f'the minotaur flees (at {near})')
                 if not (near <= 1 and acted):
                     return
-        # 2. a known wand at it in line: teleportation, polymorph, sleep (we keep our square and its pit)
+        # 1c. LANDING_MAGIC (landing-b lane): a KNOWN magic instrument -- a flute puts every minotaur within XL*5 (dist2) to sleep for
+        # d(10,10) turns (MR 0: never resists), a harp tames the adjacent ones, a frost / fire horn fires a 6-11 d6 ray along the line
+        magic = self._instruments() if jf_config.LANDING_MAGIC else {}
         lines = [(self._line(m), m) for m in awake]
         lines = [(ln, m) for ln, m in lines if ln is not None]
+        if magic:
+            xl = int(bl.experience_level)
+            d2 = self._dist2(awake[0])
+            recent = [t for t in self._blows.get(key, []) if bl.time - t <= 3]
+            if len(recent) < 2:
+                if magic.get('sleep') and d2 < 5 * xl:
+                    yield ('magic', (magic['sleep'][0], None, 'sleep'), f'magic flute, minotaur at {near} (d2 {d2} < {5 * xl})')
+                if magic.get('charm') and d2 <= (xl - 1) // 3 + 1:
+                    yield ('magic', (magic['charm'][0], None, 'charm'), f'magic harp, minotaur at {near}')
+                if lines:
+                    (direction, dist, (sy, sx)), m = lines[0]
+                    if magic.get('frost'):
+                        yield ('magic', (magic['frost'][0], direction, 'frost'), f'frost horn at {dist}')
+                    if magic.get('fire') and (dist <= 1 or self._free_run(sy, sx) >= 13):
+                        yield ('magic', (magic['fire'][0], direction, 'fire'), f'fire horn at {dist}')
+        # 2. a known wand at it in line: teleportation, polymorph, sleep (we keep our square and its pit)
         if lines:
             (direction, dist, (sy, sx)), m = lines[0]
             wand, name = self._wand(('teleportation', 'polymorph', 'sleep'))
@@ -715,6 +746,13 @@ class MinoGuard:
                     best = (key, (y, x))
         return None if best is None else best[1]
 
+    def _closer(self, key, near):
+        """HORN_REBLOW: the nearest awake minotaur, within HORN_REBLOW_NEAR squares, is closer than at some observation of the last 3 game turns."""
+        if near > jf_config.HORN_REBLOW_NEAR:
+            return False
+        t = self.agent.blstats.time
+        return any(t0 < t and t - t0 <= 3 and n0 > near for t0, n0 in self._near_hist.get(key, []))
+
     def _dist2(self, m):
         bl = self.agent.blstats
         return (int(m[1]) - int(bl.y)) ** 2 + (int(m[2]) - int(bl.x)) ** 2
@@ -824,6 +862,23 @@ class MinoGuard:
             if any(snd in res['msg'] for snd in opp_items.SCARE_SOUNDS):
                 # MR 0: every minotaur within range flees (an already fleeing one prints nothing)
                 self._fled[key] = agent.blstats.time
+            self._note()
+            return
+        if kind == 'magic':
+            item, ray, what = arg
+            agent.log(f'MINO blowing {item.text!r} ({what}: {why}), {hp}')
+            self._blows.setdefault(key, []).append(bl.time)
+            res = opp_items.play(agent, item, ray)
+            msg = res['msg'] or ''
+            worked = ('soft music' in msg) if what == 'sleep' else ('attractive music' in msg) if what == 'charm' \
+                else bool(res['direction'])
+            agent.log(f'MINO {what} -> {"worked" if worked else "NO EFFECT (out of charges?)"}: {msg[:140]!r}')
+            if not worked:
+                opp_items.state(agent).empty.add(item.text)   # plays as its mundane twin from now on: not again
+            elif what == 'sleep':
+                for m in self._minos():
+                    if self._dist2(m) < 5 * int(bl.experience_level):
+                        self._asleep[(key, (m[1], m[2]))] = agent.blstats.time
             self._note()
             return
         if kind == 'step_away':

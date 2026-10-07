@@ -27,7 +27,7 @@ import re
 import nle.nethack as nh
 from nle.nethack import actions as A
 
-from . import jf_config
+from . import jf_config, utils
 from . import objects as O
 from .strategy import Strategy
 
@@ -460,7 +460,7 @@ def teleport_route_strategy(agent, top=False):
                 if 'What do you want to put on?' not in agent.single_message:
                     return
                 yield letter
-                if 'Which ring-finger' in agent.single_message:
+                if utils.asks_ring_hand(agent.single_message):
                     # T_ROUTE_FIRE: the LEFT finger -- a welded one-handed weapon (cursed pick-axe) is wielded in the right hand
                     # and do_wear.c refuses 'You cannot free your weapon hand' for the right finger only
                     yield 'l' if jf_config.T_ROUTE_FIRE else 'r'

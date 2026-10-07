@@ -1211,13 +1211,16 @@ V2_VAL_TELE2_TC = 0.62        # ... with a TC ring in the pack (it need not be i
 V2_VAL_TC_ALONE = 0.025       # a ring of teleport control, no known cursed scroll (the TC route reads unknown scrolls: T_BLIND_READ)
 V2_VAL_LEV29 = 0.060          # a levitation ring on a castle at Dlvl 29: 4/84 now, 8/88 before B308; lamp arm 6/55
 V2_VAL_LEV_OTHER = 0.003      # ... castles 25-28 (the Valley is not Dlvl 30): 1/360 (R323)
-# ARMOR II: the kit already holds a horn (the crusher route is there) -- armour class multiplies it (identified-horn arm: AC <= -2 12/144 =
-# 8.3%, -1..1 5.0%, 2..4 2.2%, >= 5 0%; metrics' causal test, every instrument kit forced to AC -4: 12 -> 25 of 448): a gray dragon scale
-# mail (AC 9 + the wished enchantment, magic resistance) worn by ARMOR_UP's wear pass. Absolute P(pass) of such a kit with the mail on;
-# only offered when WISH_V2_GDSM and ARMOR_UP are both on (without ARMOR_UP the bot never puts a carried piece on: jf79-s1 AC 1 and jf79-s3
-# AC 10 unchanged after 400 turns); V2_VAL_GDSM is an estimate until the igdsm arm (ledger I326) is in.
+# ARMOR II: a gray dragon scale mail for a kit that already holds a horn (the crusher route is there; armour class multiplies a route).
+# MEASURED (ledger R453, castle-kf-instr-x4, 448 instrument kits, ARMOR_UP on in every arm, paired by kit and salt): control 18/448 = 4.0%,
+# worn mail (AC -5.5 at +100 turns) 27/448 = 6.0% (+18/-9, sign p 0.12) -- but on the kits that already hold a horn-like instrument (n=136)
+# 13 -> 12 (+5/-6) and on the other instrument kits (n=312) 5 -> 15 (+13/-3, p 0.021). So for the kits this candidate is offered to the
+# wish is worth about nothing (the placeholder 0.083 came from the observational AC gradient, which the arm did not confirm); speed boots
+# (-1.2 AC) do as well as the mail on the other kits and 13 -> 17 on horn kits. On REAL kits (no instrument) neither makes a route:
+# speed boots 2/448 = 0.4%, GDSM 0/112. The mail is only worn at all with ARMOR_UP on (jf79-s1 AC 1 and jf79-s3 AC 10 unchanged after 400
+# turns without it). The candidate stays behind WISH_V2_GDSM (off) with a value below the others so that it never wins.
 V2_GDSM_TEXT = 'blessed greased +3 gray dragon scale mail'
-V2_VAL_GDSM = 0.083
+V2_VAL_GDSM = 0.0
 
 
 def _horn_state(agent, items):
