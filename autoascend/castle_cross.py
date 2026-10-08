@@ -127,6 +127,13 @@ def _west_phase(castle):
     mx, my = castle._pos()
     if mx >= 57:
         return False
+    if jf_config.LIFT_EAST_WAND or jf_config.CFP_INSIDE_OFF:
+        # LIFT_EAST_WAND / CFP_INSIDE_OFF: a hero inside the castle shell (the east leg's throne room, hallways, towers) is not on 'the west side': the rush put the
+        # ring back on in the north hallway (strong east-start seeds 3, 10, 11, 16, 19, 20, 28: 'CFP arrival lift: trying ring' at (17,3)), the chest
+        # look said 'You cannot reach the floor', and the tower holding the wand was marked empty
+        from .castle_inner import INSIDE
+        if (mx, my) in INSIDE:
+            return False
     return (mx, my) not in OUTSIDE or (mx, my) in WEST_COURTYARD
 
 

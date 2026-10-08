@@ -3279,6 +3279,11 @@ EXCAL_STEADY = False
 EXCAL_IDLE_TURNS = 60
 EXCAL_LEVEL_TURNS = 400
 EXCAL_BLOCK_TURNS = 3000
+# EXCAL_PATH_GUARD (off; ledger B342/F487): the errand's stair hop called agent.go_to on the staircase that get_path_to_level returned even when
+# that staircase is not reachable from where the hero stands (it fell into an unexplored part of the level). go_to asserts bfs()[y, x] != -1,
+# so the AssertionError repeated every step (lane 20's exc-horn-fpkg-jf1451-s12: 360 tracebacks under EXCAL_PACKAGE; lane 28's copy of the
+# code: 15 of 180 games, one hero died in the loop). With the flag an unreachable staircase drops the target for EXCAL_BLOCK_TURNS instead.
+EXCAL_PATH_GUARD = True
 # EXCAL_PACKAGE (off): the whole Excalibur package as ONE switch (a JF_CFG {"EXCAL_PACKAGE": true} or editing this line), derived at the end of the file:
 # PREP_EXCAL_DIVE for every hero (the dive's opportunistic dips) and, for a hero whose pack holds a tonal instrument, the errand to the known
 # fountains of Dlvl <= EXCAL_ERRAND_MAX_DEPTH at the dive start with its fixes: EXCAL_ERRAND, _INSTR, _FIGHT, EXCAL_DAGGER, EXCAL_DEEP_DIST 30,
@@ -3632,6 +3637,166 @@ MEDC_REACH_WALK = False
 # HELD-OUT of MEDC_REACH_WALK (the 31 idle-prone held-out specs, jf1960/1961): 22/31 against 22/31, gained 1 lost 1; pooled with dev 94 specs,
 # gained 4 lost 1, exact p 0.375: sound mechanics, no confirmed gain -- it stays OFF unless a merger wants the marginal fix.
 # (Tried and dropped, not in the tree: MEDC_IDLE_HOLD, an uncapped body loop -- see dive_logic.reentry_strategy and ledger R599.)
+
+# --- backdoor lane (34, phase 3, 2026-10-07/08): PURE DEFECT FIXES found on the way (each OFF; none needs the east leg) ---
+# RING_REMOVE_FIX (off; castle_logic._remove_ring): the failure test was `'cursed' not in agent.message`, which also matches the success message
+# 'You were wearing an uncursed ring of levitation (on left hand). You float gently to the floor.' -- every removal of a KNOWN UNCURSED ring counted as a failed one
+# (tries['remove_fail']), and after two of them _stop_levitating gave the removal up and 'prayed off a cursed levitation item' (a wasted prayer; then '>' and searches,
+# hovering for good over a rest stop or the trap door). Cure: a refusal is the game's own 'You can't.  It is cursed.' (do_wear.c cursed()). Evidence: 4 of 448 control ring
+# games (bd-ctl-lev: jf82-s11~s1, jf88-s7~s1, jf92-s8~s3, jf94-s9~s1: the second rest stop prayed at 30/75 HP and hovered there until a shark came), all four lost.
+RING_REMOVE_FIX = True
+# CFP_INSIDE_OFF (off; castle_cross._west_phase): castle_cross.rush_strategy (CFP_RUSH) treats every castle square that is not on the moat ring as 'the west side', so a
+# hero INSIDE the castle shell (castle_inner.INSIDE: the antechamber, hall, throne room, hallways, towers, the east hall) with a lift in the pack was floated or tested
+# again: 'CFP arrival lift: trying ring' in the north hallway at (17,3), 'You cannot reach the floor' at the tower chest, 'no chest below us', the wand's tower marked
+# empty, M:stop 'no tower chest found' (strong east-start: 7 of the 12 chest arrivals of one 30-seed run). In real crusher walk-ins (cand-l9, 1664 harness games) a lift
+# test fired inside the shell in 15 of the 394 games that got in (6 of the 107 chest arrivals; unknown rings, none was levitation, all six still got the wand).
+CFP_INSIDE_OFF = True
+# INNER_WELD_PRAY (off; castle_inner._chest_step): a wielded weapon cursed by a court caster (curse items) and welded beside a shield leaves no free hand: the chest
+# look fails with 'Without a free hand, you cannot loot anything.' (13 times), the tower is marked 'empty' and the hero tours the other three, then M:stop 'no tower
+# chest found' -- with the wand of wishing a few squares behind it. Backdoor lane, strong east-start (24 games at castles 25-28): 3 of the 8 chest arrivals. pray.c
+# in_trouble(): welded(uwep) && !freehand() is TROUBLE_UNUSEABLE_HANDS (major), fix_worst_trouble uncurses the weapon; castle_front._chest_step already prays here.
+# On: pray once when agent.is_safe_to_pray(), else wait (searching) for it, at most 80 looks.
+INNER_WELD_PRAY = True
+# INNER_BOULDER_LEV (off; castle_inner._boulder_fix): a LEVITATING hero cannot push a boulder (hack.c moverock: "You don't have enough leverage to push the boulder", no game
+# time passes), so the two push attempts of _boulder_fix before it zaps striking or digs with the pick-axe only spin the step counter; skip them while levitating.
+INNER_BOULDER_LEV = True
+
+# --- backdoor lane (34): the castle's back door and the cursed lift (each OFF) ---
+# LIFT_DOOR_DIG (off; castle_logic._door_step): the locked back door (56,08) is dug through with the pick-axe / mattock (every real kit has one: 99%) before
+# anything is kicked: dig.c dig() breaks a closed or locked door at effort > 100 ('You break through the door.'; a dwarf's effort doubles: 3-4 turns), and
+# castle.des' NON_DIGGABLE flags only walls (sp_lev.c set_wall_property: IS_STWALL / trees). Done afloat on a lasting lift (no landing, no relift) and
+# silently: a kick is 'WHAMM!' with wake_nearby() (dokick.c; radius^2 = XL*20) that wakes the two giant eels beside (57,08) (80% of them are generated
+# asleep: makemon, and a Stealth Valkyrie does not wake them herself), 46% a kick (rnl(35) < (STR + DEX + CON) / 3), and the lift must come off and go on.
+# MEASURED (ledger R620; real castle kits started on the east bank with the ring on, 447 paired games): Valley 79.6% -> 84.6% (+30/-8, p 0.0005), castle 29
+# pass30 78.4% -> 86.4% (+7/-0, p 0.016); the control opened the door by key 142 times, wand 121, landing and kicking 101; with the flag kicking 1.
+LIFT_DOOR_DIG = True
+# LIFT_PRAY_ODDS (off; castle_logic._stop_levitating / _lift_pray_verdict, rnz.py): a hero stuck afloat on a CURSED levitation ring or boots (pray.c
+# TROUBLE_CURSED_LEVITATION, major trouble: heard when the prayer timeout is <= 200) prayed only when agent.is_safe_to_pray(500), i.e. 500 turns after the
+# last prayer; the exact chance is P(rnz(350) <= gap + 200): .22 at gap 0, .44 at 100, .56 at 200, .66 at 300, .77 at 400, .875 at 500, .95 at 1000. With
+# the flag the hero prays at once when that is >= LIFT_PRAY_P, else waits over the trap door (no water beside it) at most LIFT_PRAY_WAIT turns and then
+# prays whatever the odds (a hero that stays stuck passes nothing): jf84-s13~s1 (known cursed boots, a hunger prayer 80 turns earlier) hovered on the trap
+# door until it starved 2800 turns later. Kits with cursed boots are rare (0 of 112 real kits; lane 33: no supply).
+LIFT_PRAY_ODDS = False
+LIFT_PRAY_P = 0.85
+LIFT_PRAY_WAIT = 300
+
+# --- strength lane (phase 3, lane 36, 2026-10-07/08) ---
+# GRIND_XL (0 = off; the value is an experience level): the grind ends at this XL instead of 7, for a hero with a digging tool too
+# (dive_logic.DIVE_XL = DIG_DIVE_XL = GRIND_XL, applied once at import; JF_CFG {"GRIND_XL": 9} or {"DIVE_XL": 9, "DIG_DIVE_XL": 9} are the same thing).
+# WHY: hero strength multiplies every castle route that exists. Harness ladder on the 112 real castle kits + an instrument (castle-kf-instr-x4, 448 games a rung,
+# s27 tree, real landing), pass30: as carried 6.0% [4.2, 8.6] | XL10 + AC<=-4 12.3% (x2.04) | XL12 + AC<=-6 + Excalibur 19.6% (x3.26) | XL14 + AC<=-8 + Excalibur +
+# Very_fast 36.3% (x6.5) | + reflection 46.8% | the ceiling (HPmax x1.5, AC-12, MR, regeneration) 45.5%; lift kits (castle-k-real-x4-lev, 112 a rung): crossing 13% ->
+# 30% -> 58% -> 77% -> 88%. The cost of the XL: exper.c newuexp (XL8 1280, XL9 2560, XL10 5120 exp) at ~120 exp per 1000 turns on Dlvl 1-4.
+# EVIDENCE (full games, pinned clock, PREP_LOG, 6 dev secrets jf2150-jf2155 x 15 seeds = 90 PAIRS, s27 tree, control = flag off): the grind ends at turn 18.9k instead of
+# 10.1k at XL 8.66 instead of 6.87 (XL9 reached by 60 of 90 at turn 19.7k, XL10 by 13); deaths before the dive 23 against 5 (the extra grind kills 0.025 games per 1000
+# turns: water demon / moccasin from Excalibur dips 2, soldier ants 3, rothes 2, giant ants 2, wands 2, a kitten ...), deaths between the dive start and the castle 19 of
+# 67 against 46 of 85, castle arrivals alive 49 against 40 of 90 (paired +21 / -12, exact sign p 0.16: NOT significant, the gain may be luck; the loss the model
+# expected, x0.58-0.78, is excluded), arrival XL 8.84 against 7.38, HPmax 91.1 against 77.7, AC -0.6 against +0.7, Excalibur in 71% against 48%, mean progress 0.3764
+# against 0.3799 (paired -0.0034, t -0.13), realized passes 3 against 1. Ledger: strength36 results (runs l36-ctl-jf2150..2155 / l36-xl9-jf2150..2155, dev/strength/
+# arrivals.py, grindstat.py). Not gated on the reserved seeds: main decides.
+GRIND_XL = 8
+
+
+# --- backdoor lane (phase 3, 2026-10-07): the castle's back entry with a lasting lift -- on to the tower wand, not only the trap door ---
+# LIFT_EAST_WAND (off; castle_inner._east_leg, castle_logic._door_step): a hero afloat on a LASTING lift (a ring of levitation, or levitation boots that
+# come off) that has opened the back door (56,08) and stands over the first trap door (55,08) at a castle on Dlvl 25-28 does NOT come down onto it (the
+# Valley drop: 7 of 7 such arrivals died there, F500) but floats on west along the one-wide east hall (39..55,08; trap doors at 55, 52, 48, 44, 40 are
+# harmless to a levitator: trap.c fall_through 'You don't fall in') to (39,08), digs the locked SECRET door (38,08) from the east (dig.c: an SDOOR is not
+# W_NONDIGGABLE even though castle.des marks the whole map non-diggable; 'You break through a secret door!'), lands there (ring off: a levitator
+# can't open the chest) and hands the walk to castle_inner's existing wand leg: throne room -> locked north door (32,04) -> hallway row 3 -> NE tower
+# door (55,03) -> chest (58,02). The hallways and ALL FOUR towers are reachable only through the throne room (castle.des: the back-door corridor is a
+# sealed pocket, the east towers have no door to the east bank, the map is NON_DIGGABLE), so this is the same walk the drawbridge route makes, started
+# from the east end of the throne room. Castle 29: the trap door stays the pass (LIFT_EAST_DROP: drop at once). Needs a digging tool or wand of digging.
+LIFT_EAST_WAND = False
+# LIFT_EAST_SIEVE (off, with LIFT_EAST_WAND): after the secret door is open the hero floats back east to (41,08), lands, writes Elbereth and waits while
+# the court comes down the corridor: a monster that chases us west-to-east steps on the trap door (40,08) and falls to the Valley (mon.c m_move ->
+# mintrap -> trap.c mlevel_tele_trap: Is_stronghold -> valley_level; only flyers, floaters and huge monsters (giants) are exempt, and a monster that has
+# not met a trap door never avoids one: mtrapseen). The hero goes in when nothing hostile has been seen for LIFT_EAST_SIEVE_QUIET turns (after
+# LIFT_EAST_SIEVE_MIN, at most LIFT_EAST_SIEVE_MAX).
+LIFT_EAST_SIEVE = False
+LIFT_EAST_SIEVE_MIN = 20
+LIFT_EAST_SIEVE_QUIET = 12
+LIFT_EAST_SIEVE_MAX = 80
+# LIFT_EAST_REST_HP (off = 0.0, with LIFT_EAST_WAND): the hero lands on (54,08), the first safe square west of the trap doors, writes Elbereth and rests there
+# to this share of max HP before it digs the secret door (at most LIFT_EAST_REST_MAX turns): the hall is a sealed pocket but for the wall-walkers (xorn,
+# earth elemental), which respect Elbereth; the throne room is entered at what the rest bought, not at what the crossing left.
+LIFT_EAST_REST_HP = 0.0
+LIFT_EAST_REST_MAX = 300
+
+# LIFT_EAST_FIGHT (off, with LIFT_EAST_WAND; castle_inner): the east hall as a chokepoint a healthy hero fights in. Backdoor lane, strong east-start (24 games at
+# castles 25-28, castle-strong-east: XL 14, HP 140, AC -12, Excalibur): the Elbereth-first sieve sat its 80 turns with the huge monsters the trap door does not take
+# (storm / fire giants, elementals, nagas) and the xorns fleeing and coming back, never 'quiet', then stepped into the broken doorway (38,08) -- three room squares reach
+# it -- and lost 100+ HP in ten turns. With the flag: (1) a respecter next to us is attacked while HP >= LIFT_EAST_FIGHT_HP (Elbereth below it); (2) the sieve is quiet
+# when nothing hostile is in the hall (x 38..50) or within 2 squares (the throne room's own monsters are not counted); (3) after the sieve the hero holds (39,08) for
+# at most LIFT_EAST_HOLD turns until nothing hostile is within 3 squares of the doorway; (4) a non-wall-walker standing on (38,08) means the door is open already.
+LIFT_EAST_FIGHT = False
+LIFT_EAST_FIGHT_HP = 0.55
+LIFT_EAST_HOLD = 60
+# LIFT_EAST_MIN_HPMAX / LIFT_EAST_MAX_AC (with LIFT_EAST_WAND): the strength gate. A threshold left at its default (0 / 99) is no condition; with both set the hero qualifies by
+# EITHER one (HPmax >= LIFT_EAST_MIN_HPMAX or AC <= LIFT_EAST_MAX_AC), otherwise it drops through the trap door as before. Measured on the east bank (ring on, castles 25-28; leg
+# arm wJ against the Valley walk; pass30 = Dlvl 30 reached): real weak kits (XL 7-9, HP 60-100, AC ~1) wand 0 of 334 and pass30 3 -> 0 of 359 (R616: they lose the Valley walk's 1%);
+# mid hero (XL 9, HP 90, AC -4) wand 1 of 76, pass30 0 -> 1; HP-only (XL 14, HP 140, AC -4) wand 11 of 76, pass30 3 -> 11 (+10/-2, +10.5 pt [+2.6, +19.7]); AC-only
+# (XL 9, HP 90, AC -12: gray dragon scale mail = magic resistance, speed boots) wand 18 of 76, pass30 5 -> 18 (+17/-4, +17.1 pt [+5.3, +27.6]); strong (XL 14, HP 140, AC -12, Excalibur) wand 98 of 213,
+# pass30 69 -> 99 (+68/-38, +14.1 pt [+4.7, +23.5]). Suggested when the leg is on: LIFT_EAST_MIN_HPMAX = 120, LIFT_EAST_MAX_AC = -8. Defaults: no gate.
+LIFT_EAST_MIN_HPMAX = 0
+LIFT_EAST_MAX_AC = 99
+# LIFT_EAST_LICH_ABORT (off, with LIFT_EAST_WAND): a master lich or arch-lich in view during the leg (before the hero is past the secret door) gives the leg up: down through the
+# nearest trap door, as the control does. Strong east-start, castles 25-28, arm G (24 games): every one of the 7 games that met a master lich / arch-lich failed (summoned nasties:
+# dragons, aleax, couatl, guardian naga; mcastu.c MGC_SUMMON_MONS needs a caster of level >= 16), 12 of the 17 without one reached the wand; the control passed 1 of those 7
+# through the Valley. Lane 31 (R575/H366): lich castles (19% of all) convert 0.6% on every route.
+LIFT_EAST_LICH_ABORT = False
+# LIFT_EAST_DROP_HP (off = 0.0, with LIFT_EAST_WAND): before the hero is past the secret door, HP below this share of max with a hostile next to us gives the leg up: down
+# through the nearest trap door and on with the Valley walk (the strong control passes 34% of castles 25-28 that way) instead of dying in the hall.
+LIFT_EAST_DROP_HP = 0.0
+
+# --- safegrind lane (phase 3, lane 38, 2026-10-08): a GRIND_XL grind that rarely dies (each flag OFF) ---
+# WHY (cand-l12 gate R626, 540 reserved games; lane 36's dev pairs jf2150-jf2155): GRIND_XL=9 makes arrivals stronger (XL 9.0 against 7.5, HPmax 93 against 79, AC -0.5 against +0.9, Excalibur 67%
+# against 52%; G14 +84%) but the longer grind KILLS 14% of the games before the dive (progress -0.055, t -4.76; 63% of those deaths Weak or Fainting). ANATOMY of the 18 EXTRA grind deaths of the 90 paired
+# dev games (23 in the XL9 arm against 5 in the control, 5 of them the same in both; dev/safegrind/anatomy.py, phases.py, hazard.py): XL9 is NEVER reached in the first-level farm (0 of 60): the farm
+# ends at XL 8 (dive_logic.first_level_done) and the tour (AutoAscend's milestones: FIND_GNOMISH_MINES -> FIND_MINETOWN -> FIND_SOKOBAN -> ...) provides XL 9, in 4.5k turns on average after XL 8.
+# Deaths per 1000 turns by phase: farm at XL7-8 0.016 (6 deaths in 377k turns), FIND_GNOMISH_MINES 0.048 (4 in 84k), FIND_MINETOWN 0.010 (2 in 202k), FIND_SOKOBAN 0.141 (6 in 43k: the trip down to
+# Dlvl 6-9 for the Oracle's level at XL 8, food-less and Weak); Hungry with no food in the pack 0.078 against 0.020 when fed (5 of 18 deaths in 9% of the turns). By cause: Weak or Fainting 8 (every one
+# food-less: a prayer cycle of 1300 turns leaves the hero Weak or Fainting for ~400 turns, TOUR_WEAK_PRAYER_GAP 1700), fountain dips 3 (2 water demons, water moccasins: fountain.c dipfountain, a failed dip
+# rusts the sword and 1 in 15 releases a demon or snakes), soldier ants 3 + Uruk-hai 2 (poison: 1 in 30 of the poisoned hits kills outright, mhitu.c AD_DRST / poisoned()), nymph thefts 3, a floating eye hit 1.
+# SAFE_GRIND (needs GRIND_XL; changes only the extra grind = the turns from the first moment at XL >= SAFE_GRIND_BASE_XL, the XL the control dives at, to GRIND_XL, before the dive begins):
+#   * SAFE_GRIND_NO_DIP: no fountain dips (global_logic._safe_to_dip). The dive's own dips (PREP_EXCAL_DIVE / EXCAL_ERRAND, dive_logic.prep_fountain_dip) are untouched and come right after the grind.
+#   * SAFE_GRIND_HUNGER (a Hunger state, 0 = off): the grind ends (the dive begins) once the hero is at least that hungry (2 = Hungry) with fewer than SAFE_GRIND_FOOD nutrition of food carried.
+#   * SAFE_GRIND_STOP_MILESTONE (a global_logic.Milestone number, 0 = off): the grind ends when the tour is at that milestone up to SOLVE_SOKOBAN (4 = FIND_SOKOBAN, the trip down to the Oracle's level;
+#     a dwarf's tour with SKIP_SOKOBAN goes on to Mines' End instead and is not stopped there).
+#   * SAFE_GRIND_TURNS (0 = off): the grind ends this many game turns after it began.
+# The dive starts the way should_dive starts it for the control: the same gates apply in the first-level milestone (fed_for_dive, prayer_ready_for_dive, hp_ready_for_dive), a tour-milestone stop goes at once.
+# MEASURED (ledger F514, R629, R630, R633, R634 and the lane's final post; cand-l10 overlay = the s27 tree's behaviour on this tree, pinned clock, PREP_LOG; flag-off identity: 10 of 10 full games byte-identical
+# message logs against lane 36's control, DECODE_REPLACE on 4 of 4; paired by (secret, seed); dev block jf2150-2155 = lane 36's control and XL9 runs, held-out jf2156-2158 + jf2160-2162, 90 pairs each, pooled 180):
+#   arm (JF_CFG on top of the overlay)       pre-dive deaths  castle arrivals  arrival XL / HPmax  progress (paired vs control)  G14 (paired vs control)       dev | held-out
+#   control                                       12 of 180       92 (51%)         7.28 / 76.2        0.3871                        0.0048
+#   A   GRIND_XL 9 + SAFE_GRIND (defaults)        18             102 (57%)         7.84 / 80.3        0.4155 (+0.028, t 1.5)        0.0098 (+0.0050, t 1.5)       +0.0097 | +0.0002
+#   Ah0 A with SAFE_GRIND_HUNGER 0                34              97 (54%)         8.38 / 86.0        0.3757 (-0.011, t -0.6)       0.0103 (+0.0055, t 1.7)       +0.0114 | -0.0005
+#   X8  GRIND_XL 8 + SAFE_GRIND                   15             106 (59%)         7.66 / 79.6        0.4281 (+0.041, t 2.3)        0.0061 (+0.0012, t 0.6)       +0.0021 | +0.0004
+#   X8h0 X8 with SAFE_GRIND_HUNGER 0              24             101 (56%)         7.96 / 82.7        0.4093 (+0.022, t 1.2)        0.0058 (+0.0010, t 0.5)       +0.0044 | -0.0025
+#   the XL9 arm (dev block only, 90)              23 of 90        51 of 90 (57%)    8.84 / 91.1        0.3764 (-0.003, t -0.1)       0.0181 (+0.0141, t 1.9);  the 540-game reserved gate R626: G14 +84%, progress -0.055
+#   T7 (tour from XL 7, SAFE_GRIND_TOUR_XL 7, 60 games): 14 pre-dive deaths of 60 -- worse than the tour at XL 8; not recommended. SAFE_GRIND_PRAYER_ALL: dev run only partly done, no result.
+# So SAFE_GRIND removes most of the XL9 grind's deaths (18 of 180 against 34 for Ah0, 23 of 90 for the XL9 arm) and keeps progress at or above the control's, at the price of most of the strength gain (the Hungry stop ends the grind at
+# XL 7 in 61% of the games); its G14 gain over the control is +0.005 pooled (about +100%, t 1.5) but +0.0002 on the held-out block alone, so it is unproven. The no-dips rule moves the dips to the dive start
+# (dip games 49 / 48 / 59 / 64 of 90 in the control / A / X8 / XL9 arm) rather than removing them.
+SAFE_GRIND = True
+SAFE_GRIND_BASE_XL = 7
+SAFE_GRIND_NO_DIP = True
+SAFE_GRIND_HUNGER = 2
+SAFE_GRIND_FOOD = 300
+SAFE_GRIND_STOP_MILESTONE = 4
+SAFE_GRIND_TURNS = 10000
+#   * SAFE_GRIND_TOUR_XL (0 = off, XL 8 as before): the first-level farm hands over to the Mines tour at this XL (dive_logic.first_level_done); the farm's XP rate at XL 7 is 0.13 exp per turn against
+#     0.28 in the tour, so the tour at XL 7 shortens the grind to XL 9 if the Mines are as safe at XL 7 as at XL 8
+SAFE_GRIND_TOUR_XL = 0
+#   * SAFE_GRIND_PRAYER_ALL (off): DIVE_PRAYER_GAP's wait (the dive starts >= DIVE_PRAYER_GAP = 800 turns after the last prayer, at most DIVE_PRAYER_MAX_WAIT turns of waiting, in the first-level
+#     milestone) applies to every hero, not only a digger (DIVE_PRAYER_TOOL_ONLY). Dev pairs (arms ctl, xl9, A, X8; 318 dives): dives that began within 400 turns of a prayer reached Dlvl 25
+#     in 55% of 55 against 74% of 127 dives that began 400-1200 turns after one (dev/safegrind/prayergap.py); the control starts 33% of its dives within 800 turns of a prayer, A and X8 14-17%
+#     (their Hungry stop falls ~850 turns after the last hunger prayer)
+SAFE_GRIND_PRAYER_ALL = False
+# DECODE_REPLACE (off): agent.get_message_and_popup decodes the message and the tty lines with errors='replace' (and inventory_items' item-name decode, the one other strict decode of game text). One gate
+# game (cand-l12, 540 reserved) raised UnicodeDecodeError in get_message_and_popup on a byte that is not UTF-8 (a naming prompt) and ended with a bot exception, which scores 0 in the arena. Valid UTF-8
+# decodes the same (dev/safegrind/test_decode.py; the games' message logs are byte-identical with the flag on), off, decode() is the strict default as before.
+DECODE_REPLACE = True
 
 _raw = os.environ.get('JF_CFG')
 if _raw:

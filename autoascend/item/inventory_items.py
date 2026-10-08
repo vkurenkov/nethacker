@@ -81,7 +81,8 @@ class InventoryItems:
                     self.agent.last_observation['inv_oclasses'],
                     self.agent.last_observation['inv_glyphs'],
                     self.agent.last_observation['inv_letters']):
-                item_name = bytes(item_name).decode().strip('\0')
+                # DECODE_REPLACE (safegrind lane 38): a byte that is not UTF-8 in an item's name decodes to U+FFFD instead of raising
+                item_name = bytes(item_name).decode(errors='replace' if jf_config.DECODE_REPLACE else 'strict').strip('\0')
                 letter = chr(letter)
                 if not item_name:
                     continue

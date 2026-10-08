@@ -363,7 +363,10 @@ class Agent:
         """ Uses MORE action to get full popup and/or message.
         """
 
-        message = bytes(obs['message']).decode().replace('\0', ' ').replace('\n', '').strip()
+        # DECODE_REPLACE (safegrind lane 38): a byte that is not UTF-8 (one gate game raised UnicodeDecodeError here, in a naming prompt) decodes
+        # to U+FFFD instead of ending the episode; valid UTF-8 decodes the same, and with the flag off decode() is the strict default as before
+        dec_errors = 'replace' if jf_config.DECODE_REPLACE else 'strict'
+        message = bytes(obs['message']).decode(errors=dec_errors).replace('\0', ' ').replace('\n', '').strip()
         if message.endswith('--More--'):
             # FIXME: It seems like in this case the environment doesn't expect additional input,
             #        but I'm not 100% sure, so it's too risky to change it, because it could stall everything.
@@ -373,7 +376,7 @@ class Agent:
         # assert '\n' not in message and '\r' not in message
         popup = []
 
-        lines = [bytes(line).decode().replace('\0', ' ').replace('\n', '') for line in obs['tty_chars']]
+        lines = [bytes(line).decode(errors=dec_errors).replace('\0', ' ').replace('\n', '') for line in obs['tty_chars']]
         marker_pos, marker_type = self._find_marker(lines)
 
         if marker_pos is None:

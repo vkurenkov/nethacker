@@ -740,6 +740,9 @@ def _apply_dev_overrides():
 
 
 _apply_dev_overrides()
+if jf_config.GRIND_XL:
+    # strength lane 36 (jf_config.GRIND_XL, off): the grind ends at this XL, tool holders too (same as DIVE_XL / DIG_DIVE_XL in JF_CFG)
+    DIVE_XL = DIG_DIVE_XL = max(int(DIVE_XL), int(DIG_DIVE_XL), int(jf_config.GRIND_XL))
 if HUNT_V2:
     DWARF_PILES = DIGGER_FIRST = ALIGN_BUDGET = FAST_BRANCH = APPROACH_DWARVES = MINETOWN_GUARD = WAND_WAITS = \
         MINES_UNSTUCK = True
@@ -989,6 +992,7 @@ class DiveLogic:
         self._shop_dig_logged = None    # SHOP_DIG: (level key, reason) last logged for not digging (logged once)
         self._shop_since = None         # SHOP_DIG: (level key, turn) we were first seen inside a shop there
         self._fed_wait_logged = False
+        self._sg_t0 = None              # SAFE_GRIND: turn the extra grind began (first moment at XL >= SAFE_GRIND_BASE_XL)
         self._prep_gate_done = False    # PREP_GATE: the first-dig hold is over (released, capped, or the first dig was elsewhere)
         self._prep_gate_start = None    # ... turn the hold began
         self._prep_gate_meals = 0       # ... prep meals eaten
@@ -1484,6 +1488,8 @@ class DiveLogic:
         planned = bool(EARLY_DIVE_XL) and gl.milestone == Milestone.BE_ON_FIRST_LEVEL and xl >= EARLY_DIVE_XL \
             and not agent.prayer_failed
         xl_trigger = xl >= DIVE_XL or (xl >= self._min_xl(DIG_DIVE_XL) and self.digging_tool() is not None)
+        if jf_config.SAFE_GRIND and jf_config.GRIND_XL and not xl_trigger and self._safe_grind_stop(xl):
+            xl_trigger = True   # SAFE_GRIND: the extra grind ends early (hunger, the tour's Sokoban trip, the turn cap)
         if jf_config.SOKOBAN_TRIP and self._sokoban_trip(xl_trigger, rescue or late_rescue):
             return False
         if xl_trigger and gl.milestone == Milestone.BE_ON_FIRST_LEVEL and not self.fed_for_dive():
@@ -1511,6 +1517,35 @@ class DiveLogic:
                 # the main dungeon -- 7 of 33 such dives never got a digging tool
                 self.mines_done = gl.milestone > Milestone.FIND_GNOMISH_MINES and not planned
         return self.diving
+
+    def _safe_grind_stop(self, xl):
+        """SAFE_GRIND (jf_config, safegrind lane 38): True when the GRIND_XL extra grind -- the turns from the first moment at XL >= SAFE_GRIND_BASE_XL
+        (the XL the control dives at) while XL < GRIND_XL -- must end now: the hero is Hungry (SAFE_GRIND_HUNGER) with less than SAFE_GRIND_FOOD nutrition
+        carried (Weak and Fainting heroes with no food were 8 of the 18 extra grind deaths: a hunger prayer cycle leaves them Weak or Fainting for ~400
+        turns), the tour has reached SAFE_GRIND_STOP_MILESTONE (4 = FIND_SOKOBAN: the trip down to Dlvl 6-9 at XL 8, 0.141 deaths per 1000 turns against
+        0.010-0.016 in the farm and in the Mines), or SAFE_GRIND_TURNS turns have passed. The reason is logged once; the caller starts the dive."""
+        cfg = jf_config
+        if xl < cfg.SAFE_GRIND_BASE_XL or xl >= cfg.GRIND_XL:
+            return False
+        agent = self.agent
+        bl = agent.blstats
+        gl = agent.global_logic
+        if self._sg_t0 is None:
+            self._sg_t0 = bl.time
+            agent.log(f'SAFE_GRIND: the extra grind begins at XL {xl}, turn {bl.time}, milestone {gl.milestone.name}')
+        reason = None
+        from .global_logic import Milestone
+        if cfg.SAFE_GRIND_STOP_MILESTONE and cfg.SAFE_GRIND_STOP_MILESTONE <= int(gl.milestone) <= int(Milestone.SOLVE_SOKOBAN):
+            reason = f'the tour reached {gl.milestone.name}'   # (with SKIP_SOKOBAN the tour goes on to FIND_MINES_END instead: no stop there)
+        elif cfg.SAFE_GRIND_HUNGER and bl.hunger_state >= cfg.SAFE_GRIND_HUNGER and \
+                agent.carried_food_nutrition() < cfg.SAFE_GRIND_FOOD:
+            reason = f'hunger {bl.hunger_state} with {agent.carried_food_nutrition()} nutrition carried'
+        elif cfg.SAFE_GRIND_TURNS and bl.time - self._sg_t0 > cfg.SAFE_GRIND_TURNS:
+            reason = f'{bl.time - self._sg_t0} turns of extra grind'
+        if reason is not None:
+            agent.log(f'SAFE_GRIND stop at XL {xl}, turn {bl.time} ({bl.time - self._sg_t0} turns of extra grind), milestone {gl.milestone.name}: {reason}')
+            return True
+        return False
 
     def _sokoban_trip(self, xl_trigger, rescue):
         """SOKOBAN_TRIP (power-route): when the grind would hand over to the dive, first the tour's Sokoban milestones
@@ -3917,6 +3952,12 @@ class DiveLogic:
             (y, x), _, direction = path[0]
             self._task(f'excalibur errand to {target}')
             if (bl.y, bl.x) != (y, x):
+                if cfg.EXCAL_PATH_GUARD and agent.bfs()[y, x] == -1:
+                    # B342: the known path's staircase is not reachable from here; go_to would assert on every step
+                    self._excal_blocked[target] = bl.time + cfg.EXCAL_BLOCK_TURNS
+                    agent.log(f'EXCAL_ERRAND: the stairs at {(y, x)} toward {target} are unreachable from here; '
+                              f'target dropped for {cfg.EXCAL_BLOCK_TURNS} turns')
+                    return False
                 agent.go_to(y, x)
                 return True
             agent.move(direction)
@@ -6239,8 +6280,10 @@ class DiveLogic:
     def first_level_done(self):
         """The tour's Dlvl 1 grind ends at XL 8 (DT6A), or earlier for a tool run."""
         xl = self.agent.blstats.experience_level
+        # SAFE_GRIND_TOUR_XL (safegrind lane 38; needs SAFE_GRIND and GRIND_XL): the farm hands over to the Mines tour at this XL instead of XL 8
+        farm_xl = jf_config.SAFE_GRIND_TOUR_XL if (jf_config.SAFE_GRIND and jf_config.GRIND_XL and jf_config.SAFE_GRIND_TOUR_XL) else 8
         # DIVE_FED / DIVE_PRAYER_GAP hold the grind (the milestone would otherwise move on to the Mines tour)
-        return (xl >= 8 or (TOOL_RUN_XL is not None and xl >= TOOL_RUN_XL)) and self.fed_for_dive() and \
+        return (xl >= farm_xl or (TOOL_RUN_XL is not None and xl >= TOOL_RUN_XL)) and self.fed_for_dive() and \
             self.prayer_ready_for_dive() and self.hp_ready_for_dive()
 
     def hp_ready_for_dive(self):
@@ -6269,7 +6312,9 @@ class DiveLogic:
         """DIVE_PRAYER_GAP: at least that many turns since the last prayer (see the flag). Logs the wait."""
         if not DIVE_PRAYER_GAP:
             return True
-        if DIVE_PRAYER_TOOL_ONLY and self.digging_tool() is None:
+        # SAFE_GRIND_PRAYER_ALL (safegrind lane 38; needs SAFE_GRIND and GRIND_XL): every hero, not only a tool holder, starts the dive with the prayer ready
+        if DIVE_PRAYER_TOOL_ONLY and self.digging_tool() is None and \
+                not (jf_config.SAFE_GRIND and jf_config.GRIND_XL and jf_config.SAFE_GRIND_PRAYER_ALL):
             return True
         agent = self.agent
         bl = agent.blstats

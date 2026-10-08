@@ -596,7 +596,10 @@ class CastlePassage:
 
         with agent.atom_operation():
             agent.step(A.Command.REMOVE, gen())
-        ok = 'cursed' not in agent.message
+        if jf_config.RING_REMOVE_FIX:
+            ok = "You can't" not in agent.message   # (do_wear.c cursed(): "You can't.  It is cursed."; 'cursed' also matches 'uncursed')
+        else:
+            ok = 'cursed' not in agent.message
         self._log(f'remove {ring.text!r}: {agent.message!r}')
         agent.inventory.items.update(force=True)
         return ok
@@ -655,6 +658,25 @@ class CastlePassage:
             agent.inventory.empty_wands.add(wand.text)
         agent.inventory.items.update(force=True)
 
+    def _lift_pray_verdict(self):
+        """LIFT_PRAY_ODDS: 'now' | 'wait' | 'never' for a prayer that frees a cursed levitation ring / boots (pray.c TROUBLE_CURSED_LEVITATION is
+        major trouble: heard when the prayer timeout is <= 200; after a good prayer it is rnz(350) minus the turns since: rnz.p_heard)."""
+        from . import rnz
+        agent = self.agent
+        tries = self._tries
+        now = agent.blstats.time
+        if not agent.is_safe_to_pray(0):      # (holds, wish timeout, a failed prayer: everything but the plain 500-turn gap)
+            return 'never'
+        last = agent.last_prayer_turn
+        p = 1.0 if last is None else rnz.p_heard(max(0, now - last))
+        tries['pray_p'] = p
+        t0 = tries.setdefault('pray_t0', now)
+        if p >= jf_config.LIFT_PRAY_P or now - t0 >= jf_config.LIFT_PRAY_WAIT:
+            return 'now'
+        if self._pos() == TRAPDOOR:
+            return 'wait'      # (the hall's trap door has no water beside it; the courtyard's door square has two eels)
+        return 'now'
+
     def _stop_levitating(self):
         """Come down (over the trap door this drops us through it: trap.c float_down -> dotrap)."""
         agent = self.agent
@@ -676,8 +698,21 @@ class CastlePassage:
             if not agent.inventory.takeoff(boots):
                 tries['boots_fail'] = tries.get('boots_fail', 0) + 1
             return
-        if (rings or boots is not None) and not agent.prayer_failed and agent.is_safe_to_pray(500) and \
-                not tries.get('prayed'):
+        if jf_config.LIFT_PRAY_ODDS and (rings or boots is not None) and not agent.prayer_failed and not tries.get('prayed'):
+            # LIFT_PRAY_ODDS: pray when the exact odds are good (rnz.p_heard), wait for them over the trap door (no water beside it)
+            # for LIFT_PRAY_WAIT turns, then pray anyway: stuck up there nothing else frees us
+            verdict = self._lift_pray_verdict()
+            if verdict == 'now':
+                tries['prayed'] = 1
+                self._log('praying off a cursed levitation item (odds %.2f)' % tries.get('pray_p', -1))
+                agent.pray()
+                return
+            if verdict == 'wait':
+                self._set_state('cursed lift: waiting for better prayer odds')
+                agent.search(3)
+                return
+        if not jf_config.LIFT_PRAY_ODDS and (rings or boots is not None) and not agent.prayer_failed and \
+                agent.is_safe_to_pray(500) and not tries.get('prayed'):
             # levitation stuck on by a cursed ring/boots is major trouble (pray.c TROUBLE_LEVITATION)
             tries['prayed'] = 1
             self._log('praying off a cursed levitation item')
@@ -2064,6 +2099,15 @@ class CastlePassage:
             self._step_to(*DOOR)
             return
         if pos == DOOR:
+            if jf_config.LIFT_EAST_WAND and not self.levitating() and self.dive.inner.east_planned() and \
+                    self._tries.get('east_relift', 0) < 6:
+                # LIFT_EAST_WAND: the lift taken off to kick the door goes back on before the first trap door: the east leg
+                # (castle_inner) floats on west instead of falling into the Valley
+                item = self.dive.inner._lasting_lift_item()
+                if item is not None:
+                    self._tries['east_relift'] = self._tries.get('east_relift', 0) + 1
+                    self._try('ring' if item.category == nh.RING_CLASS else 'boots', item)
+                    return
             self._set_state('stepping onto the trap door')
             self._step_to(*TRAPDOOR)
             return
@@ -2116,6 +2160,24 @@ class CastlePassage:
                     agent.direction('w')
             self._log(f'unlock: {agent.message!r}')
             return
+        if jf_config.LIFT_DOOR_DIG and not (self.levitating() and self._timed_levitation()) and tries.get('door_dig', 0) < 8:
+            # LIFT_DOOR_DIG: a pick-axe / mattock digs through a locked door (dig.c dig(): closed_door -> 'You break through the door.', effort > 100:
+            # 3-4 turns for a dwarf) silently and afloat -- the doors of castle.des are not W_NONDIGGABLE (only walls are) -- instead of landing to
+            # kick it (dokick.c: 'WHAMM!' wake_nearby() wakes the two eels beside this square, 46% a kick, the lift off and on again)
+            dig = self.dive.digging_tool()
+            if dig is not None and not self.dive.inner._shield_blocks(dig):
+                tries['door_dig'] = tries.get('door_dig', 0) + 1
+                self._set_state('digging through the locked back door')
+                with agent.atom_operation():
+                    dig = agent.inventory.move_to_inventory(dig)
+                    agent.step(A.Command.APPLY)
+                    agent.type_text(agent.inventory.items.get_letter(dig))
+                    if 'In what direction do you want to dig?' in agent.single_message:
+                        agent.direction('w')
+                    elif agent.single_message.startswith('In what direction'):
+                        agent.step(A.Command.ESC)
+                self._log(f'door dig: {agent.message!r}')
+                return
         if self.levitating():
             # no kicking while levitating (dokick.c: no leverage): come down first -- a potion's
             # levitation is waited out one square back, out of the eels' reach

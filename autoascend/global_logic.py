@@ -752,6 +752,11 @@ class GlobalLogic:
     def _safe_to_dip(self):
         # SAFE_DIPS (full HP + prayer ready, astra) changes the tour; off until tested on its own
         bl = self.agent.blstats
+        # SAFE_GRIND_NO_DIP (safegrind lane 38): no dips in the GRIND_XL extra grind (3 of the 18 extra grind deaths of the XL9 arm were a water demon or water
+        # moccasins released by a dip); the dive's own dips (prep_fountain_dip) come right after it
+        if jf_config.SAFE_GRIND and jf_config.SAFE_GRIND_NO_DIP and jf_config.GRIND_XL and not self.dive.diving and \
+                jf_config.SAFE_GRIND_BASE_XL <= bl.experience_level < jf_config.GRIND_XL:
+            return False
         # NO_DIP_WITH_TOOL: a fountain dip curses the sword 1 time in 30, silently (fountain.c case 16), and a
         # welded weapon can't be swapped for the pick-axe: eg-glh-public seed 6 carried its pick from T6556, dipped
         # 8 times at XL 7, and dove at XL 8 with 'a cursed thoroughly rusty +1 long sword (weapon in hand)' --

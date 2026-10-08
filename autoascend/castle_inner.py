@@ -130,6 +130,7 @@ class CastleInner:
         self.excal = None             # CASTLE_INNER_EXCAL: Excalibur in the pack, decided on the first look
         self.crowd_until = -1         # CASTLE_INNER_CROWD: turn until which we hold the corridor we retreated into
         self.last_horn = -100         # CASTLE_INNER_HORN: the turn of the last blow
+        self.east = {}                # LIFT_EAST_WAND: the east-hall leg (phase, clocks); empty until it is decided
 
     # ------------------------------------------------------------------ plumbing
 
@@ -208,7 +209,10 @@ class CastleInner:
         from the throne room, never from here (see the flag's comment in jf_config)."""
         try:
             castle = self.dive.castle
-            return self._pos() == (55, 8) and castle.committed() and castle.levitating()
+            if not (self._pos() == (55, 8) and castle.committed() and castle.levitating()):
+                return False
+            # LIFT_EAST_WAND: at a castle that is not on 29, a lasting lift floats on into the east hall instead (the leg below)
+            return not self._east_wanted()
         except Exception:
             return False
 
@@ -303,6 +307,8 @@ class CastleInner:
 
     def _can_write(self):
         agent = self.agent
+        if jf_config.LIFT_EAST_WAND and self.dive.castle.levitating():
+            return False    # (engrave.c: 'You can't reach the floor' -- a hovering hero in the east hall lands first)
         return agent.can_engrave() and not agent.character.prop.blind and self._pos() not in NO_WRITE
 
     def _step_off(self, mons, why):
@@ -690,12 +696,22 @@ class CastleInner:
         ign = [m for m in seen if m.ign]
         res = [m for m in seen if not m.ign]
         hpf = self._hpf()
+        if jf_config.LIFT_EAST_FIGHT and res and not ign and self.east.get('phase') in ('walk', 'dig', 'sieve', 'enter') and \
+                hpf >= jf_config.LIFT_EAST_FIGHT_HP and not self._on_scare():
+            # LIFT_EAST_FIGHT: in the one-wide east hall they come one at a time (the huge ones the trap door does not take, the wall-walkers): a
+            # healthy hero kills them where they stand instead of writing Elbereth and letting them flee to come back (strong seeds 6, 16, 20: the
+            # sieve sat 80 turns on Elbereth with the same giants and xorns returning, then walked into the doorway with all of them alive)
+            target = min(res, key=lambda m: (m.lvl, m.dist))
+            return self._attack(target, ' (east hall chokepoint)')
         if self._elb_on():
             # a wall-walker (xorn, earth elemental) or another heavy hitter next to us: write Elbereth at once, before it
             # gets its blows (it has just spent its move arriving), and let it go: it flees for rnd(10) turns and a walking
             # hero (speed 15 against the xorn's 9) is not caught again. Fighting a xorn costs ~35-60 HP (AC -2, ~36 HP,
             # 3 claws and a 4d6 bite), more than the 28% of garbled engravings (a round of blows) will ever cost.
             danger = [m for m in res if m.ww or m.lvl >= 8]
+            if danger and self._east_afloat_leg() and self.east.get('phase') in ('walk', 'dig') and \
+                    self._pos() not in TRAPDOORS and not any(m.ign for m in seen):
+                return self._east_land('%s arrived while afloat' % [m.name for m in danger])
             if danger and not self._engraved() and self._can_write() and now - self.last_engrave >= 3 and \
                     self.tries['elb'] < 80:
                 self.tries['elb'] += 1
@@ -768,6 +784,8 @@ class CastleInner:
             return self._tower_phase(mons)
         if self._resting(pos, mons):
             return self._rest(mons)
+        if jf_config.LIFT_EAST_WAND and (pos in EAST_HALL or pos == SECRET_E) and self._east_wanted():
+            return self._east_leg(pos, mons)
         if int(self.agent.blstats.depth) >= 29 and jf_config.PASSTUNE_C29_TRAPDOOR and \
                 (pos in THRONE or pos in EAST_HALL or pos == SECRET_E):
             return self._trapdoor_step(mons)
@@ -1045,6 +1063,12 @@ class CastleInner:
 
     def _rest(self, mons):
         self.tries['rest'] += 1
+        if self._east_afloat_leg():
+            # (LIFT_EAST_WAND) a rest in the east hall is on foot on a square that is not a trap door, so that Elbereth can be written
+            pos = self._pos()
+            if pos in TRAPDOORS:
+                return self._walk_to((pos[0] - 1, 8))
+            return self._east_land('resting')
         if self._pos() in NO_WRITE and self.tries['stepoff'] < 40 and self._step_off(mons, 'no Elbereth can be written here'):
             self.tries['stepoff'] += 1
             return True
@@ -1200,7 +1224,7 @@ class CastleInner:
         key = ('boulder', nxt)
         self.tries[key] += 1
         n = self.tries[key]
-        if n <= 2:
+        if n <= 2 and not ((jf_config.LIFT_EAST_WAND or jf_config.INNER_BOULDER_LEV) and self.dive.castle.levitating()):
             return self._walk_to(nxt)
         wand = self._usable('striking')
         if wand is not None and self.tries[('bzap', nxt)] < 2:
@@ -1360,6 +1384,22 @@ class CastleInner:
         try:
             inv.check_container_content(chest)
         except (AgentPanic, AssertionError) as e:
+            if jf_config.INNER_WELD_PRAY and ('free hand' in str(e) or agent.hands_welded()):
+                # INNER_WELD_PRAY: a court caster cursed the wielded weapon (mcastu.c MGC_CURSE_ITEMS -> rndcurse): welded beside a shield it leaves no
+                # free hand ('Without a free hand, you cannot loot anything.'). pray.c TROUBLE_UNUSEABLE_HANDS is major trouble and the prayer
+                # uncurses the weapon; castle_front's chest step does this, this one marked the wand's tower 'empty' after 13 failed looks
+                # (backdoor lane, strong east-start seeds 1, 21 and 3: all four towers visited, 'no tower chest found').
+                self.tries['weld'] += 1
+                if agent.is_safe_to_pray() and not agent.prayer_failed and self.tries['weld_prayed'] < 1:
+                    self.tries['weld_prayed'] += 1
+                    self._log(f'hands welded on the chest ({e}): praying')
+                    self._mile('weld_pray')
+                    agent.pray()
+                    return True
+                if self.tries['weld'] < 80:
+                    self._log(f'hands welded on the chest ({e}): waiting for a safe prayer')
+                    agent.search()
+                    return True
             self.chest_fail += 1
             self._log(f'chest check failed: {e}')
             return True
@@ -1468,6 +1508,309 @@ class CastleInner:
         self._mile('wish', f'{(agent.message or "")[:120]!r}')
         inv.items.update(force=True)
         return True
+
+    # ---- LIFT_EAST_WAND (backdoor lane): the east hall, the secret door (38,08) dug from the east, then the wand leg
+
+    EAST_DIG = (39, 8)        # the east hall's west end: the square beside the secret door, west of the last trap door (40,08)
+    SIEVE_SQ = (41, 8)        # between the trap doors (40,08) and (44,08): whatever chases us down the hall falls at (40,08)
+
+    def _east_afloat_leg(self):
+        """The east leg is under way and we are hovering."""
+        return jf_config.LIFT_EAST_WAND and self.east.get('phase') in ('walk', 'dig', 'sieve', 'enter') and \
+            self.dive.castle.levitating()
+
+    def _lasting_lift_item(self):
+        """The ring or boots that float us (and come off again): the one that made us float, else a known levitation ring /
+        levitation boots in the pack. None if there is none."""
+        c = self.dive.castle
+        src = c._lev_source
+        items = c._items()
+        if src is not None and src[0] in ('ring', 'boots'):
+            for it in items:
+                if it.glyphs and it.glyphs[0] == src[1] and (it.category == nh.RING_CLASS or it.is_armor()):
+                    return it
+        for it in items:
+            if it.is_unambiguous() and ((it.category == nh.RING_CLASS and it.object.name == 'levitation') or
+                                        (it.is_armor() and it.object.name == 'levitation boots')):
+                return it
+        return None
+
+    def _east_why_not(self, need_afloat):
+        """None if the east leg is on the cards, else why not. need_afloat: we must be hovering now (False: asked before the
+        back door, with the lift taken off to kick it)."""
+        agent = self.agent
+        c = self.dive.castle
+        if not jf_config.LIFT_EAST_WAND:
+            return 'flag off'
+        if int(agent.blstats.depth) >= 29:
+            return 'castle 29: the trap door is the pass'
+        if need_afloat and not c.levitating():
+            return 'not afloat'
+        if c._timed_levitation() and (need_afloat or c._lev_source is None or c._lev_source[0] == 'potion'):
+            return 'a timed lift (a potion): it cannot be taken off and may run out'
+        if self._lasting_lift_item() is None:
+            return 'no lift item to take off'
+        if self.dive.digging_tool() is None and self._usable('digging') is None:
+            return 'nothing to dig the secret door with'
+        if agent.character.prop.polymorph:
+            return 'polymorphed'
+        bl = agent.blstats
+        # the strength gate: a threshold left at its default (HPmax 0, AC 99) is not a condition; with both set the hero qualifies by EITHER one
+        # (HP-only and AC-only heroes both beat the Valley walk, ledger: castle-hp-east +10.5 pt, castle-ac-east +17.1 pt)
+        conds = []
+        if jf_config.LIFT_EAST_MIN_HPMAX > 0:
+            conds.append(bl.max_hitpoints >= jf_config.LIFT_EAST_MIN_HPMAX)
+        if jf_config.LIFT_EAST_MAX_AC < 99:
+            conds.append(bl.armor_class <= jf_config.LIFT_EAST_MAX_AC)
+        if conds and not any(conds):
+            return f'too weak for the court (HPmax {bl.max_hitpoints}, AC {bl.armor_class}): the trap door'
+        return None
+
+    def east_planned(self):
+        """castle_logic._door_step: would the east leg run if we floated onto (55,08)? Then a lift taken off to kick the door
+        goes back on before the trap door."""
+        try:
+            return self.east.get('no') is None and self.east.get('phase') in (None, 'walk') and \
+                self._east_why_not(False) is None
+        except Exception:
+            return False
+
+    def _east_wanted(self):
+        """The leg is decided once, on the first look at (55,08) afloat: True while it runs (including the drop of an abort)."""
+        if not jf_config.LIFT_EAST_WAND:
+            return False
+        e = self.east
+        if e.get('no') is not None:
+            return False
+        if e.get('phase') is not None:
+            return e['phase'] in ('walk', 'dig', 'sieve', 'enter', 'abort')
+        why = self._east_why_not(True)
+        if why is not None:
+            e['no'] = why
+            self._log(f'east leg not taken: {why}')
+            return False
+        e['phase'] = 'walk'
+        e['t0'] = self.agent.blstats.time
+        self._mile('east_start', f'hp {self._hpf():.2f} at {self._pos()}')
+        return True
+
+    def _east_phase(self, phase, why=''):
+        self.east['phase'] = phase
+        self.east['t_' + phase] = self.agent.blstats.time
+        self._log(f'east leg: {phase} {why}'.rstrip())
+
+    def _east_abort(self, why):
+        self._mile('east_abort', why)
+        self._east_phase('abort', why)
+        return True
+
+    def _east_land(self, why=''):
+        """Take the lift off (the east hall's squares west of the trap doors are safe to stand on)."""
+        self._set_state(f'east leg: landing ({why})')
+        self.dive.castle._stop_levitating()
+        return True
+
+    def _east_lift_on(self):
+        item = self._lasting_lift_item()
+        if item is None or self.tries['east_lift_on'] >= 14:
+            return self._east_abort('cannot put the lift on again')
+        self.tries['east_lift_on'] += 1
+        kind = 'ring' if item.category == nh.RING_CLASS else 'boots'
+        self._set_state(f'east leg: {kind} on again before the trap door')
+        self.dive.castle._try(kind, item)
+        return True
+
+    def _east_gate(self):
+        """The westernmost trap door still in the east hall. A giant's thrown boulder plugs one ('The boulder plugs a trap door.': jf79-s8~s2,
+        the first sieve game, at (40,08) 55 turns after the secret door opened); a plugged square shows as plain floor once we are next to
+        it. The sieve only works for a hero standing east of the gate."""
+        gone = self.east.setdefault('gone', set())
+        agent = self.agent
+        pos = self._pos()
+        for sq in sorted(TRAPDOORS):
+            if sq in gone:
+                continue
+            if max(abs(sq[0] - pos[0]), abs(sq[1] - pos[1])) <= 1:
+                y, x = to_bot(*sq)
+                if int(agent.glyphs[y, x]) in (SS.S_room, SS.S_darkroom):
+                    gone.add(sq)
+                    self._log(f'east leg: the trap door {sq} is gone (plugged)')
+                    continue
+            return sq
+        return None
+
+    def _east_step(self, nxt, mons, drop=False):
+        """One step along the east hall. A trap door ahead needs the lift on (unless we mean to fall: drop)."""
+        c = self.dive.castle
+        occupant = next((m for m in mons if m.p == nxt), None)
+        if occupant is not None:
+            if occupant.peaceful:
+                return self._search(1, f'waiting for the peaceful {occupant.name} at {nxt}')
+            return self._attack(occupant, ' (blocks the east hall)')
+        if self._boulder(nxt):
+            # a giant's thrown boulder in the hall: a levitating hero cannot push it (hack.c moverock: 'You don't have enough leverage'), which
+            # looped 330-420 times without a game turn in 5 of 52 strong seeds until 'step budget spent' -- break it (striking / pick-axe)
+            return self._boulder_fix(nxt)
+        if nxt in TRAPDOORS and nxt not in self.east.get('gone', ()) and not drop and not c.levitating():
+            return self._east_lift_on()
+        self._set_state(f'east leg: to {nxt}')
+        return self._walk_to(nxt)
+
+    def _east_dig_secret(self, pos, mons):
+        """The locked secret door (38,08) from (39,08): the pick-axe / mattock (dig.c: 'You break through a secret door!', a few
+        turns, silent), a wand of digging; nothing else opens a door nobody has found. None: nothing left to try."""
+        agent = self.agent
+        if SECRET_E in self.broken or self._is_open_door(SECRET_E):
+            self.sdoor_found.add(SECRET_E)
+            self.broken.add(SECRET_E)
+            return None
+        if jf_config.LIFT_EAST_FIGHT:
+            # a monster that cannot walk through walls stands ON the secret door: it is open already (the first dig was cut short
+            # by its arrival; strong seed 16 then bashed a storm giant with the pick-axe four times: 'You begin bashing monsters')
+            occ = next((m for m in mons if m.p == SECRET_E and not m.ww and not m.peaceful), None)
+            if occ is not None:
+                self.broken.add(SECRET_E)
+                self.sdoor_found.add(SECRET_E)
+                self._mile('east_open', f'a {occ.name} stands in the doorway at turn {agent.blstats.time}')
+                return None
+        dig = self.dive.digging_tool()
+        if dig is not None and self.tries['esdig'] < 10 and not self._shield_blocks(dig):
+            self.tries['esdig'] += 1
+            self._set_state(f'east leg: digging through the secret door {SECRET_E} from the east')
+            with agent.atom_operation():
+                dig = agent.inventory.move_to_inventory(dig)
+                agent.step(A.Command.APPLY)
+                agent.type_text(agent.inventory.items.get_letter(dig))
+                if 'In what direction do you want to dig?' in agent.single_message:
+                    agent.direction('w')
+                elif agent.single_message.startswith('In what direction'):
+                    agent.step(A.Command.ESC)
+            msg = agent.message or ''
+            self._log(f'east secret door dig: {msg[:120]!r}')
+            if 'secret door' in msg or 'break through' in msg or (jf_config.LIFT_EAST_FIGHT and 'bashing monsters' in msg):
+                self.broken.add(SECRET_E)
+                self.sdoor_found.add(SECRET_E)
+                self._mile('east_open', f'at turn {agent.blstats.time}')
+            return True
+        wand = self._usable('digging')
+        if wand is not None and self.tries['esdig_wand'] < 2:
+            self.tries['esdig_wand'] += 1
+            self._set_state('east leg: zapping digging west at the secret door')
+            agent.zap(wand, 'w')
+            self.broken.add(SECRET_E)
+            self.sdoor_found.add(SECRET_E)
+            self._mile('east_open', f'wand at turn {agent.blstats.time}')
+            return True
+        return None
+
+    def _east_leg(self, pos, mons):
+        """The leg's phases: walk (float west along the hall to (39,08)) -> dig (the secret door) -> [sieve (back to (41,08), land,
+        Elbereth, let the court fall through the trap door (40,08))] -> enter (to (39,08), lift off) -> done: castle_inner's own leg
+        takes the hero on through the throne room. abort: down through the nearest trap door."""
+        e = self.east
+        c = self.dive.castle
+        agent = self.agent
+        now = agent.blstats.time
+        lev = c.levitating()
+        hpf = self._hpf()
+        phase = e['phase']
+        if phase != 'abort' and now - e['t0'] > 700:
+            return self._east_abort('the leg ran 700 turns')
+        if phase != 'abort' and jf_config.LIFT_EAST_DROP_HP and hpf < jf_config.LIFT_EAST_DROP_HP and \
+                any(m.adj and not m.peaceful for m in mons):
+            return self._east_abort(f'hp {hpf:.2f} with something next to us: the trap door')
+        if phase != 'abort' and jf_config.LIFT_EAST_LICH_ABORT:
+            lich = next((m for m in mons if m.name in ('master lich', 'arch-lich') and not m.peaceful), None)
+            if lich is not None:
+                return self._east_abort(f'a {lich.name} (covetous: it summons nasties, lane 31: lich castles convert 0.6%)')
+        if phase == 'abort':
+            if pos in TRAPDOORS:
+                if lev:
+                    return self._east_land('abort: down through the trap door')
+                return self._search(1, 'on the trap door (the plunge fires above us)')
+            target = min(TRAPDOORS, key=lambda t: abs(t[0] - pos[0]))
+            return self._east_step((pos[0] + (1 if target[0] > pos[0] else -1), 8), mons, drop=True)
+        if phase == 'walk':
+            if pos[0] <= self.EAST_DIG[0]:
+                self._east_phase('dig')
+                phase = 'dig'
+            else:
+                rest_hp = jf_config.LIFT_EAST_REST_HP
+                if rest_hp and pos == (54, 8) and hpf < rest_hp and now - e.setdefault('t_rest0', now) < jf_config.LIFT_EAST_REST_MAX:
+                    if lev:
+                        return self._east_land('a rest before the dig')
+                    if not self._engraved() and self._can_write() and self.tries['east_rest_elb'] < 30:
+                        self.tries['east_rest_elb'] += 1
+                        return self._engrave('a rest before the dig')
+                    return self._search(3, 'east leg: resting before the dig')
+                return self._east_step((pos[0] - 1, 8), mons)
+        if phase == 'dig':
+            if pos[0] > self.EAST_DIG[0]:
+                return self._east_step((pos[0] - 1, 8), mons)
+            r = self._east_dig_secret(pos, mons)
+            if r is not None:
+                return r
+            if SECRET_E in self.broken:
+                self._east_phase('sieve' if jf_config.LIFT_EAST_SIEVE else 'enter', 'secret door open')
+                phase = e['phase']
+            else:
+                return self._east_abort('the secret door stayed shut')
+        if phase == 'sieve':
+            gate = self._east_gate()
+            if gate is None:
+                self._east_phase('enter', 'no trap door left to filter the court')
+                phase = 'enter'
+            else:
+                sq = (gate[0] + 1, 8)
+                if pos != sq:
+                    nxt = (pos[0] + (1 if pos[0] < sq[0] else -1), 8)
+                    return self._east_step(nxt, mons)
+        if phase == 'sieve':
+            if lev:
+                return self._east_land('the sieve square')
+            if jf_config.LIFT_EAST_FIGHT:
+                hostile = [m for m in mons if not m.peaceful and (m.dist <= 2 or (m.p[1] == 8 and 38 <= m.p[0] <= 50 and not m.unseen))]
+            else:
+                hostile = [m for m in mons if not m.peaceful and not m.unseen and m.dist <= 12]
+            if hostile:
+                e['last_hostile'] = now
+            waited = now - e['t_sieve']
+            quiet = now - e.get('last_hostile', e['t_sieve'])
+            if (waited >= jf_config.LIFT_EAST_SIEVE_MIN and quiet >= jf_config.LIFT_EAST_SIEVE_QUIET and hpf >= 0.8) or \
+                    waited >= jf_config.LIFT_EAST_SIEVE_MAX:
+                self._mile('east_sieve_done', f'after {waited} turns, quiet {quiet}, hp {hpf:.2f}')
+                self._east_phase('enter', f'sieve over after {waited} turns')
+                phase = 'enter'
+            else:
+                if jf_config.LIFT_EAST_FIGHT and hpf >= jf_config.LIFT_EAST_FIGHT_HP and hostile:
+                    return self._search(1, 'east leg: the sieve, hostiles near (fighting at the chokepoint)')
+                if not self._engraved() and self._can_write() and self.tries['east_elbereth'] < 40:
+                    self.tries['east_elbereth'] += 1
+                    return self._engrave('the east hall sieve')
+                return self._search(2, 'east leg: the sieve (the court falls through (40,08))')
+        if phase == 'enter':
+            if pos[0] > self.EAST_DIG[0]:
+                return self._east_step((pos[0] - 1, 8), mons)
+            if lev:
+                return self._east_land('the secret door square')
+            if jf_config.LIFT_EAST_FIGHT:
+                # LIFT_EAST_FIGHT: hold (39,08): the doorway (38,08) is open to three squares of the room ((37,7), (37,8), (37,9): a broken door allows
+                # diagonals) -- strong seeds 6, 16, 20 lost 100+ HP in 10 turns standing in it -- but at (39,08) one monster at a time can reach us
+                e.setdefault('t_hold0', now)
+                near = [m for m in mons if not m.peaceful and not m.unseen and (m.dist <= 3 or (m.p[1] == 8 and 36 <= m.p[0] <= 40))]
+                if near:
+                    e['hold_last'] = now
+                quiet = now - e.get('hold_last', e['t_hold0'])
+                held = now - e['t_hold0']
+                if held < jf_config.LIFT_EAST_HOLD and (quiet < jf_config.LIFT_EAST_SIEVE_QUIET or hpf < 0.8):
+                    if hpf < 0.8 and not near and not self._engraved() and self._can_write() and self.tries['east_hold_elb'] < 20:
+                        self.tries['east_hold_elb'] += 1
+                        return self._engrave('the gate hold')
+                    return self._search(1, 'east leg: holding the gate (39,08)')
+            self._mile('east_in', f'hp {hpf:.2f} turn {now}')
+            self._east_phase('done')
+            return self._goto(self._goal(), mons)
+        return self._goto(self._goal(), mons)
 
     # ---- castle 29: the secret door and the trap doors
 
